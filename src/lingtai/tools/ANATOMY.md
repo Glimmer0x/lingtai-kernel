@@ -160,7 +160,7 @@ capability names and lazy adapters.
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
   (`src/lingtai/tools/knowledge/ANATOMY.md`).
-- `soul/` — the `soul` intrinsic family: six action-separated children
+- `soul/` — the official declared `soul` family (its injected module remains only for kernel hooks): six action-separated children
   (`inquiry`, `flow`, `config`, `voice`, `dismiss`, `manual`) behind one
   model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
 - `bash/` — public `shell` composition owner for run/poll/cancel/manual
@@ -254,7 +254,7 @@ Context, Daemon, Email, File, Plugin, and Notification are accepted vertical
 evidence. They bind respectively their narrow earned ports: `avatar_parent`,
 `context_runtime`, `daemon_runtime`, `email_runtime`, `file_io`,
 `prompt_section`/`plugin_catalog`, and `notification_state` (all also retain
-`workdir`). The remaining candidate targets are only `soul`, `vision`, `web`,
+`workdir`). The remaining candidate targets are only `vision`, `web`,
 `system`, and `task_card`; the list is not a generic dispatch or admission
 mechanism.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
@@ -289,7 +289,14 @@ prune, launch, config-write, or mount authority. Its validated skills are named
 only in the protected Plugin prompt field and never enter the vanilla skills
 catalog. `src/lingtai/tools/notification/__init__.py` is the eighth slice: its
 `DECLARATION` binds only `workdir`/`notification_state` and delegates Core policy
-through a callback-only adapter without exposing the Agent or Store. Every landed
+through a callback-only adapter without exposing the Agent or Store.
+`src/lingtai/tools/soul/__init__.py` is the tenth slice: its `DECLARATION`
+preserves the public `inquiry | flow | config | voice | dismiss | manual`
+family and binds the five operational children only to `workdir` plus the
+explicit `SoulRuntimePort`; Soul stays an injected intrinsic for kernel
+lifecycle hooks while its model-facing root mounts only through the registrar,
+and its package manual is the sole operational body installed at the historical
+`soul-manual` destination. Every landed
 family retains its public name, actions, inputs, and result shapes. Candidate-local families may still boot through legacy
 `setup(agent)` paths until their own vertical slice lands; that compatibility
 fact is not a generic registrar/bridge dispatch model.

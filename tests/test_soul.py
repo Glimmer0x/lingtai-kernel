@@ -335,42 +335,42 @@ class TestSoulFireAllowed:
     """_soul_fire_allowed compares by string value, not enum identity."""
 
     def test_allows_idle_state(self):
-        from lingtai.tools.soul.flow import _soul_fire_allowed
+        from lingtai.tools import soul
         from lingtai.kernel.state import AgentState
         agent = MagicMock()
         agent._state = AgentState.IDLE
-        assert _soul_fire_allowed(agent) is True
+        assert soul._soul_fire_allowed(agent) is True
 
     def test_rejects_active_state(self):
-        from lingtai.tools.soul.flow import _soul_fire_allowed
+        from lingtai.tools import soul
         from lingtai.kernel.state import AgentState
         agent = MagicMock()
         agent._state = AgentState.ACTIVE
-        assert _soul_fire_allowed(agent) is False
+        assert soul._soul_fire_allowed(agent) is False
 
     def test_allows_foreign_enum_with_idle_value(self):
         """Simulates stale-enum mismatch: a different Enum class whose
         .value is 'idle' should still be accepted."""
         import enum
-        from lingtai.tools.soul.flow import _soul_fire_allowed
+        from lingtai.tools import soul
 
         class ForeignState(enum.Enum):
             IDLE = "idle"
 
         agent = MagicMock()
         agent._state = ForeignState.IDLE
-        assert _soul_fire_allowed(agent) is True
+        assert soul._soul_fire_allowed(agent) is True
 
     def test_rejects_foreign_enum_with_active_value(self):
         import enum
-        from lingtai.tools.soul.flow import _soul_fire_allowed
+        from lingtai.tools import soul
 
         class ForeignState(enum.Enum):
             ACTIVE = "active"
 
         agent = MagicMock()
         agent._state = ForeignState.ACTIVE
-        assert _soul_fire_allowed(agent) is False
+        assert soul._soul_fire_allowed(agent) is False
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +496,7 @@ class TestConsultationFireOptIn:
     """_run_consultation_fire defensively no-ops when disabled."""
 
     def test_fire_noops_when_disabled(self, monkeypatch):
+        from lingtai.tools import soul
         from lingtai.tools.soul import flow
         from lingtai.kernel.state import AgentState
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
@@ -513,7 +514,7 @@ class TestConsultationFireOptIn:
         )
         monkeypatch.setattr(flow, "_append_soul_flow_record", MagicMock())
 
-        flow._run_consultation_fire(agent)
+        soul._run_consultation_fire(agent)
 
         publish.assert_not_called()
         assert any(ev == "soul_flow_disabled" for ev, _ in logs)
@@ -523,6 +524,7 @@ class TestConsultationFireOptIn:
     def test_fire_runs_when_enabled(self, monkeypatch):
         """Sanity: with env enabled the fire proceeds past the env gate to
         the existing state/lock gates (reaches soul_fire_gate_check)."""
+        from lingtai.tools import soul
         from lingtai.tools.soul import flow
         from lingtai.kernel.state import AgentState
         monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
@@ -534,7 +536,7 @@ class TestConsultationFireOptIn:
         agent._log.side_effect = lambda ev, **kw: logs.append((ev, kw))
         monkeypatch.setattr(flow, "_append_soul_flow_record", MagicMock())
 
-        flow._run_consultation_fire(agent)
+        soul._run_consultation_fire(agent)
 
         # Reached the gate check (env gate passed) but stopped on state.
         assert any(ev == "soul_fire_gate_check" for ev, _ in logs)
@@ -604,6 +606,7 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     transitions the agent to STUCK mid-flight — the post-batch state
     check must discard the result.
     """
+    from lingtai.tools import soul
     from lingtai.tools.soul import flow
     from lingtai.kernel.llm.interface import TextBlock
     from lingtai.kernel.state import AgentState
@@ -623,8 +626,8 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
 
     monkeypatch.setattr(flow, "_append_soul_flow_record", MagicMock())
 
-    def fake_batch(_agent):
-        _agent._state = AgentState.STUCK
+    def fake_batch(_runtime):
+        agent._state = AgentState.STUCK
         return [{"source": "insights", "blocks": [TextBlock(text="late")]}]
 
     monkeypatch.setattr(
@@ -640,7 +643,7 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
         MagicMock(),
     )
 
-    flow._run_consultation_fire(agent)
+    soul._run_consultation_fire(agent)
 
     # Soul flow no longer enqueues a TC wake directly; filesystem
     # notification + heartbeat sync owns injection/wake-up. A mid-flight state

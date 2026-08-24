@@ -197,25 +197,23 @@ it restores avatar's pinned unknown-action error string in place of the generic
 mission brief) to the `spawn` handler out-of-band, since `ToolFamily` correctly
 passes no envelope field to any child.
 
-`soul/__init__.py` is the seventh consumer and the first *intrinsic* one. It
-exercises a different composition shape than `web`: soul is a module with a
-`handle(agent, args)` entry point rather than a per-Agent manager object, so it
-composes `get_schema()` from a module-level schema-only `ToolFamily` (which also
-fails loudly at import time on a duplicate/reserved-name collision) and builds
-a legacy agent-bound compatibility `ToolFamily` in `handle()`, while official registrar dispatch binds a runtime-bound host family once, both from the one canonical
-`_CHILD_SPECS` registry of (name, schema, handler-factory).
-Soul goes one step further than `web`'s dual listing: `_build_children(agent)`
-is the single place children are enumerated, called with `None` for the
-schema-only family and with the live agent per dispatch, so the drift class
-where a child is schema-advertised but dispatch-rejected cannot occur. Its
-`manual` child comes from `build_manual_child(agent, "soul-manual")`,
-registered directly and unwrapped, and `handle()` flattens that canonical
-result back to soul's pre-migration flat `status`/`manual`/`manual_path` shape
-after dispatch. Soul additionally drops
-the kernel-injected `_tc_id` before the envelope's closed-root check — that key
-is transport metadata `base_agent._dispatch_tool` adds to every *intrinsic*'s
-args (capabilities like `web` never see it), so a family migrating an intrinsic
-must strip it rather than widen `_ROOT_FIELDS`.
+`soul/__init__.py` is a declared-host-plugin consumer and the first
+*intrinsic* one in this composition account. Production binding is through
+`_bind(host)`: the five operational children receive only the granted
+`host.soul_runtime` (`SoulRuntimePort`), while the reserved `manual` child gets
+the granted `host.workdir` through `build_manual_child(host.workdir,
+DECLARATION.manual)`. The declaration-owned action registry and schemas are the
+single source for the schema-only and bound families; duplicate or reserved
+child names fail loudly rather than being resolved by order.
+
+Whole-Agent `handle(agent, args)` and `_coerce_runtime()` remain compatibility
+bridges at Soul's package root for kernel lifecycle and legacy callers only;
+they are not the production composition model. After dispatch, Soul's
+`_adapt_manual_result` intentionally restores the historical flat
+`status`/`manual`/`manual_path` result, while the bound operational
+implementation continues to consume only `SoulRuntimePort`. Soul also drops
+the kernel-injected `_tc_id` at this root compatibility boundary; it must not
+widen the shared envelope or leak transport metadata into a child.
 
 `skills/__init__.py` ([`../skills/ANATOMY.md`](../skills/ANATOMY.md)) is the
 ninth consumer and uses the same division with no shared code beyond this

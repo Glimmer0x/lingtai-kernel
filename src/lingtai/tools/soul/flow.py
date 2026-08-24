@@ -12,6 +12,12 @@ The kernel calls into this module at lifecycle moments:
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import SoulRuntimePort
+
+
 import json
 import os
 import time
@@ -43,7 +49,7 @@ def _soul_flow_enabled() -> bool:
     return os.environ.get(SOUL_FLOW_ENABLED_ENV, "").strip().lower() in _SOUL_FLOW_TRUTHY
 
 
-def _start_soul_timer(agent) -> None:
+def _start_soul_timer(runtime: "SoulRuntimePort") -> None:
     """Start the soul cadence timer.
 
     No-op unless soul flow is opted in via ``LINGTAI_SOUL_FLOW_ENABLED``
@@ -55,27 +61,27 @@ def _start_soul_timer(agent) -> None:
     """
     import threading
 
-    if agent._shutdown.is_set():
+    if runtime.shutdown.is_set():
         return
     if not _soul_flow_enabled():
         # Opt-in gate: leave no armed timer so the fire path stays dead.
-        _cancel_soul_timer(agent)
+        _cancel_soul_timer(runtime)
         return
-    _cancel_soul_timer(agent)
-    agent._soul_timer = threading.Timer(agent._soul_delay, _soul_whisper, args=(agent,))
-    agent._soul_timer.daemon = True
-    agent._soul_timer.name = f"soul-{agent.agent_name or agent._working_dir.name}"
-    agent._soul_timer.start()
+    _cancel_soul_timer(runtime)
+    runtime.soul_timer = threading.Timer(runtime.soul_delay, _soul_whisper, args=(runtime,))
+    runtime.soul_timer.daemon = True
+    runtime.soul_timer.name = f"soul-{runtime.agent_name or runtime.working_dir.name}"
+    runtime.soul_timer.start()
 
 
-def _cancel_soul_timer(agent) -> None:
+def _cancel_soul_timer(runtime: "SoulRuntimePort") -> None:
     """Cancel any pending soul timer."""
-    if agent._soul_timer is not None:
-        agent._soul_timer.cancel()
-        agent._soul_timer = None
+    if runtime.soul_timer is not None:
+        runtime.soul_timer.cancel()
+        runtime.soul_timer = None
 
 
-def _soul_whisper(agent) -> None:
+def _soul_whisper(runtime: "SoulRuntimePort") -> None:
     """Cadence timer callback. Fires past-self consultation once.
 
     Only fires while IDLE.  Does NOT reschedule — the next IDLE
@@ -88,54 +94,51 @@ def _soul_whisper(agent) -> None:
     cycle instead of waiting indefinitely.
     """
     from lingtai.kernel.state import AgentState
-    from lingtai.kernel.notifications import (
-        _workdir_key,
-        attention_fingerprint,
-        is_channel_allowed,
-    )
+    from lingtai.kernel.notifications import attention_fingerprint, is_channel_allowed
 
-    agent._soul_timer = None
+    runtime.soul_timer = None
     try:
-        if agent._state == AgentState.IDLE:
+        if runtime.state == AgentState.IDLE:
             # Issue #47: Check for pending notifications before consultation
             # This ensures messages are seen within one soul delay cycle
             try:
-                store = agent._notification_store
+                store = runtime.notification_store
+                workdir_key = str(runtime.working_dir)
                 fp = attention_fingerprint(
                     store,
-                    lambda ch: is_channel_allowed(ch, workdir=_workdir_key(agent)),
-                    _workdir_key(agent),
+                    lambda ch: is_channel_allowed(ch, workdir=workdir_key),
+                    workdir_key,
                 )
-                if fp != agent._notification_fp:
+                if fp != runtime.notification_fingerprint:
                     notifications = store.snapshot(
-                        lambda ch: is_channel_allowed(ch, workdir=_workdir_key(agent))
+                        lambda ch: is_channel_allowed(ch, workdir=workdir_key)
                     )
                     if notifications:
-                        agent._log("soul_flow_notification_check",
+                        runtime.log("soul_flow_notification_check",
                                    sources=list(notifications.keys()))
                         # Force notification sync to surface any pending messages
-                        agent._sync_notifications()
+                        runtime.sync_notifications()
             except Exception as notif_err:
-                agent._log("soul_flow_notification_check_error",
+                runtime.log("soul_flow_notification_check_error",
                            error=str(notif_err))
 
             # Run the normal consultation fire
-            agent._run_consultation_fire()
+            runtime.run_consultation_fire()
         else:
-            agent._log("soul_whisper_skipped", reason=agent._state.value)
+            runtime.log("soul_whisper_skipped", reason=runtime.state.value)
     except Exception as e:
-        agent._log("soul_whisper_error", error=str(e))
+        runtime.log("soul_whisper_error", error=str(e))
     # No rescheduling — the next IDLE transition in _set_state will
     # start a fresh timer.  This ensures the delay is measured from
     # the moment the agent goes idle, not from the last fire.
 
 
-def _persist_soul_entry(agent, result: dict, mode: str = "flow", source: str = "agent") -> None:
+def _persist_soul_entry(runtime: "SoulRuntimePort", result: dict, mode: str = "flow", source: str = "agent") -> None:
     """Append a soul entry to the appropriate log file."""
     from datetime import datetime, timezone
 
     filename = f"soul_{mode}.jsonl"
-    soul_file = agent._working_dir / "logs" / filename
+    soul_file = runtime.working_dir / "logs" / filename
     soul_file.parent.mkdir(exist_ok=True)
     entry = json.dumps({
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -149,15 +152,15 @@ def _persist_soul_entry(agent, result: dict, mode: str = "flow", source: str = "
         f.write(entry + "\n")
 
 
-def _append_soul_flow_record(agent, record: dict) -> None:
+def _append_soul_flow_record(runtime: "SoulRuntimePort", record: dict) -> None:
     """Append one record to logs/soul_flow.jsonl."""
-    soul_file = agent._working_dir / "logs" / "soul_flow.jsonl"
+    soul_file = runtime.working_dir / "logs" / "soul_flow.jsonl"
     soul_file.parent.mkdir(exist_ok=True)
     with open(soul_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _flatten_v3_for_pair(agent, voice: dict) -> dict:
+def _flatten_v3_for_pair(runtime: "SoulRuntimePort", voice: dict) -> dict:
     """Bridge v3 consultation blocks to the legacy appendix renderer."""
     from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
 
@@ -188,7 +191,7 @@ def _flatten_v3_for_pair(agent, voice: dict) -> dict:
     }
 
 
-def _soul_fire_allowed(agent) -> bool:
+def _soul_fire_allowed(runtime: "SoulRuntimePort") -> bool:
     """True when soul-flow may inject results into the live agent.
 
     Soul flow only fires while IDLE — not during ACTIVE work.
@@ -197,7 +200,7 @@ def _soul_fire_allowed(agent) -> bool:
     than enum identity to guard against stale-enum-mismatch scenarios
     (e.g. installed package AgentState vs hot-reloaded runtime copy).
     """
-    state = agent._state
+    state = runtime.state
     state_val = state.value if hasattr(state, "value") else str(state)
     return state_val == "idle"
 
@@ -221,7 +224,7 @@ def _shape_soul_voices(voices_for_pair: list[dict]) -> list[dict]:
     return voices_data
 
 
-def _run_consultation_fire(agent) -> None:
+def _run_consultation_fire(runtime: "SoulRuntimePort") -> None:
     """Run one consultation batch and persist the result.
 
     Gates on ``agent._soul_fire_lock`` (try-acquire, non-blocking). If the
@@ -242,20 +245,20 @@ def _run_consultation_fire(agent) -> None:
     # where a giant delay_seconds muted the timer but a live voluntary path
     # (or stray thread) could still fire — see the dev-1 trajectory audit.
     if not _soul_flow_enabled():
-        agent._log("soul_flow_disabled", path="consultation_fire")
+        runtime.log("soul_flow_disabled", path="consultation_fire")
         return
 
-    state = agent._state
+    state = runtime.state
     state_val = state.value if hasattr(state, "value") else str(state)
-    agent._log("soul_fire_gate_check", state=state_val,
+    runtime.log("soul_fire_gate_check", state=state_val,
                state_type=type(state).__qualname__)
-    if not _soul_fire_allowed(agent):
-        agent._log("consultation_skipped_state", state=state_val)
+    if not _soul_fire_allowed(runtime):
+        runtime.log("consultation_skipped_state", state=state_val)
         return
 
-    lock = getattr(agent, "_soul_fire_lock", None)
+    lock = runtime.fire_lock
     if lock is not None and not lock.acquire(blocking=False):
-        agent._log("consultation_skipped_inflight")
+        runtime.log("consultation_skipped_inflight")
         return
 
     fire_id = f"fire_{int(time.time())}_{_secrets.token_hex(2)}"
@@ -266,17 +269,15 @@ def _run_consultation_fire(agent) -> None:
             _render_current_diary,
             _run_consultation_batch,
         )
-        from lingtai.kernel.notifications import submit as publish_notification, clear as clear_notification
-
-        diary = _render_current_diary(agent)
-        voices = _run_consultation_batch(agent)
+        diary = _render_current_diary(runtime)
+        voices = _run_consultation_batch(runtime)
 
         sources = [v.get("source", "unknown") for v in voices]
         outcome = "ok" if voices else "empty"
 
         # Fire record
         try:
-            _append_soul_flow_record(agent, {
+            _append_soul_flow_record(runtime, {
                 "kind": "fire",
                 "schema_version": 3,
                 "ts": ts,
@@ -287,7 +288,7 @@ def _run_consultation_fire(agent) -> None:
                 "outcome": outcome,
             })
         except Exception as e:
-            agent._log("soul_flow_persist_error", phase="fire",
+            runtime.log("soul_flow_persist_error", phase="fire",
                       fire_id=fire_id, error=str(e)[:200])
 
         # Per-voice records.
@@ -298,7 +299,7 @@ def _run_consultation_fire(agent) -> None:
                     b.to_dict() if hasattr(b, "to_dict") else b
                     for b in v.get("blocks", [])
                 ]
-                _append_soul_flow_record(agent, {
+                _append_soul_flow_record(runtime, {
                     "kind": "voice",
                     "schema_version": 3,
                     "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -307,7 +308,7 @@ def _run_consultation_fire(agent) -> None:
                     "blocks": blocks_serialized,
                 })
             except Exception as e:
-                agent._log(
+                runtime.log(
                     "soul_flow_persist_error",
                     phase="voice",
                     fire_id=fire_id,
@@ -318,11 +319,11 @@ def _run_consultation_fire(agent) -> None:
         if not voices:
             # Nothing to say this fire — clear the file if it exists so
             # the kernel's notification sync strips any prior wire pair.
-            clear_notification(agent, "soul")
-            agent._log("consultation_fire_empty", fire_id=fire_id)
+            runtime.clear_notification("soul")
+            runtime.log("consultation_fire_empty", fire_id=fire_id)
             return
 
-        voices_for_pair = [_flatten_v3_for_pair(agent, v) for v in voices]
+        voices_for_pair = [_flatten_v3_for_pair(runtime, v) for v in voices]
 
         # Publish the soul notification.  The kernel's sync mechanism
         # (heartbeat poll) detects the fingerprint change and
@@ -330,8 +331,8 @@ def _run_consultation_fire(agent) -> None:
         # tc_inbox enqueue, no MSG_TC_WAKE — the sync owns those
         # state transitions now.
         voices_data = _shape_soul_voices(voices_for_pair)
-        publish_notification(
-            agent, "soul",
+        runtime.publish_notification(
+            "soul",
             header="soul flow",
             icon="🌊",
             instructions=(
@@ -374,7 +375,7 @@ def _run_consultation_fire(agent) -> None:
             for v in voices_for_pair
             if v.get("voice")
         ]
-        agent._log(
+        runtime.log(
             "consultation_fire",
             fire_id=fire_id,
             count=len(voices),
@@ -387,15 +388,15 @@ def _run_consultation_fire(agent) -> None:
         # waiting for the next periodic tick.  Wake transitions
         # (ASLEEP→IDLE) are owned by the sync mechanism.
         try:
-            agent._wake_nap("soul_flow_fired")
+            runtime.wake_nap("soul_flow_fired")
         except Exception as e:
-            agent._log("soul_flow_wake_error",
+            runtime.log("soul_flow_wake_error",
                       fire_id=fire_id, error=str(e)[:200])
     except Exception as e:
-        agent._log("consultation_fire_error",
+        runtime.log("consultation_fire_error",
                   fire_id=fire_id, error=str(e)[:200])
         try:
-            _append_soul_flow_record(agent, {
+            _append_soul_flow_record(runtime, {
                 "kind": "fire",
                 "schema_version": 3,
                 "ts": ts,
@@ -417,15 +418,15 @@ def _run_consultation_fire(agent) -> None:
                 pass
 
 
-def _rehydrate_appendix_tracking(agent) -> None:
+def _rehydrate_appendix_tracking(runtime: "SoulRuntimePort") -> None:
     """Scan rehydrated chat history for an existing soul.flow synthetic
     pair and re-track its call_id, so the next consultation fire
     knows what to remove. Idempotent.
     """
-    if agent._chat is None:
+    if runtime.chat is None:
         return
     try:
-        iface = agent._chat.interface
+        iface = runtime.chat.interface
     except Exception:
         return
     from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
@@ -451,5 +452,5 @@ def _rehydrate_appendix_tracking(agent) -> None:
             continue
         if cblock.id != rblock.id:
             continue
-        agent._appendix_ids_by_source["soul.flow"] = cblock.id
+        runtime.appendix_ids_by_source["soul.flow"] = cblock.id
         return

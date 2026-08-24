@@ -294,13 +294,15 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing tool
 family shares. The accepted declared evidence is exactly `mcp`, `avatar`,
-`context`, `daemon`, `email`, `file`, `plugin`, and `notification`, in that
-order. `mcp` is the base reference; the remaining seven are accepted vertical
+`context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`, and
+`soul`, in that
+order. `mcp` is the base reference; the remaining nine are accepted vertical
 slices with their narrow earned ports. Email retains its call-time manager port,
 File retains `workdir`/`file_io`, Plugin retains its protected prompt section and
 read-only `plugin_catalog` projection, and always-on Notification retains
-`workdir`/`notification_state` with Core-bound callbacks. The remaining target
-register is only `soul`, `vision`, `web`, `system`, and `task_card`; it is not
+`workdir`/`notification_state` with Core-bound callbacks, and Soul retains
+`workdir` plus its explicit `soul_runtime` live-self port. The remaining target
+register is only `vision`, `web`, `system`, and `task_card`; it is not
 proof that their candidate slices merged and is never a generic dispatch or
 admission path. Every other registry family remains an explicit future migration
 unit and none ships as an MCP plugin package today.
@@ -426,13 +428,14 @@ register is family-generic rather than MCP-only.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
   `mcp` is the current base reference; Avatar, Context, Daemon, Email, File,
-  Plugin, and Shell are accepted vertical evidence here. The remaining target
-  register names only `notification`, `soul`, `vision`, `web`, `system`, and
+  Plugin, Notification, Shell, and Soul are accepted vertical evidence here.
+  The remaining target
+  register names only `vision`, `web`, `system`, and
   `task_card`; those
   names are targets, not a claim that candidate slices have merged.
   `mcp` is the current base reference; Avatar, Context, Daemon, Email, and
   Notification are accepted vertical evidence here. The remaining target register
-  names only `file`, `soul`, `vision`, `web`, `system`, and `task_card`; those
+  names only `vision`, `web`, `system`, and `task_card`; those
   names are targets, not a claim that their candidate slices have merged.
 
 **Authority: manager, declaration, host stay separate.**
@@ -597,14 +600,19 @@ non-goal for third-party-versus-third-party mounts.
 **Current evidence versus migration target.**
 
 - The selected form is generic. `mcp` is the base reference; Avatar, Context,
-  Daemon, Email, File, and Plugin are accepted vertical evidence. Email's declaration
+  Daemon, Email, File, Plugin, Notification, Shell, and Soul are accepted
+  vertical evidence. Soul's declaration binds only `workdir`/`soul_runtime`;
+  its focused suites (`tests/test_tool_family_soul_migration.py`,
+  `tests/test_soul_runtime_port_ab.py`) prove the explicit runtime port, exact
+  grant, preserved six-action surface, one mount, sole package manual body at
+  `soul-manual`, and marker-verified legacy redirect. Email's declaration
   binds only `workdir`/`email_runtime`; its focused suite proves the typed port,
   one mount/no capability row, canonical manual, and call-time replacement
   manager. File's declaration binds only `workdir`/`file_io`; its focused suites
   prove the typed adapter, exact grant, preserved operations, one mount, sole
   package body at `file-manual`, excluded redirect marker, and wheel/sdist source
-  route. The remaining target register names only `notification`, `soul`,
-  `vision`, `web`, `system`, and `task_card`. Avatar, Context, and Daemon retain
+  route. The remaining target register names only `vision`, `web`, `system`,
+  and `task_card`. Avatar, Context, and Daemon retain
   their independently accepted declarations and focused coverage. The shared
   test seam is `tests/_tool_plugin_helpers.py`; each other family still needs its
   own vertical evidence. `src/lingtai/kernel/tool_plugin/__init__.py` owns the
@@ -630,7 +638,7 @@ non-goal for third-party-versus-third-party mounts.
   `workdir`/`notification_state`; `tests/test_tool_plugin_declaration.py` and
   its Notification Core tests prove the one mount, canonical installed manual,
   placeholder check, and Core-backed dismiss behavior. The remaining target
-  register names only `file`, `soul`, `vision`, `web`, `system`, and `task_card`.
+  register names only `vision`, `web`, `system`, and `task_card`.
   Avatar, Context, and Daemon retain their independently accepted declarations
   and focused coverage. The shared test seam is
   `tests/_tool_plugin_helpers.py`;
@@ -662,8 +670,8 @@ non-goal for third-party-versus-third-party mounts.
   is cited only for the registration-versus-activation rule.
 
 Not evidenced, and therefore stated above only as a target: a declaration for
-any family beyond `mcp`, `avatar`, `context`, `daemon`, `email`, `file`, and
-`plugin`; any family registered through
+any family beyond `mcp`, `avatar`, `context`, `daemon`, `email`, `file`,
+`plugin`, `notification`, `shell`, and `soul`; any family registered through
 `src/lingtai/tools/registry.py` shipping as an MCP plugin package
 any family beyond `mcp`, `avatar`, `context`, `daemon`, `email`, and
 `notification`; any family registered through `src/lingtai/tools/registry.py`

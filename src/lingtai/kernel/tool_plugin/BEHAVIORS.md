@@ -18,6 +18,8 @@ related_files:
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -41,13 +43,11 @@ maintenance: |
   drift, extend the affected evidence with that family's own focused proof rather
   than leaving a stale pass. The shared C register is family-generic and distinguishes
   target reserved names from candidate merge evidence. `mcp` is the shared-C base
-  reference; Avatar, Context, Daemon, Email, File, and Plugin are current
+  reference; Avatar, Context, Daemon, Email, File, Plugin, Notification, Shell,
+  and Soul are current
   vertical evidence. Ports remain least-privilege and tool-specific, while registrar
   mounts are runtime-bound rather
   than per-call Agent dispatch.
-  reference; Avatar, Context, Daemon, Email, and Notification are current
-  vertical evidence. Ports remain least-privilege and tool-specific, while
-  registrar mounts are runtime-bound rather than per-call Agent dispatch.
 ---
 # Declared Host Tool Plugin Behavior Tests
 
@@ -297,7 +297,7 @@ writes.
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_all_eight_official_families_mount_exactly_once_together
+     tests/test_tool_plugin_declaration.py::test_all_ten_official_families_mount_exactly_once_together
    ```
 
    Expect `1 passed`: every name in `OFFICIAL_TOOL_PLUGIN_NAMES` is claimed by

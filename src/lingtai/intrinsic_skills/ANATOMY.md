@@ -91,6 +91,9 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `read-manual/`, and `soul-manual/`, each one `SKILL.md` documenting its
   namesake surface. The retained `file-manual/` source is excluded from install:
   File now owns the authoritative packaged manual under `tools/file/manual/`.
+  The retained `soul-manual/` source is a marker-verified redirect only:
+  package-owned `tools/soul/manual/` is the sole operational owner and is
+  installed at the historical `soul-manual` destination.
 
 ## Connections
 

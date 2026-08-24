@@ -41,13 +41,27 @@ _TOOL_MANUAL_DESTINATION_NAMES: dict[str, str] = {
     "web_search": "web",
     "context": "context-manual",
     "file": "file-manual",
+    "soul": "soul-manual",
 }
 
-# No-delete Context recut only: the retained standalone context-manual source is
-# a documented redirect to the canonical tools/context/manual package. It may
+# No-delete Context/Soul recuts only: each retained standalone manual source is
+# a documented redirect to its canonical tools/<owner>/manual package. It may
 # yield to that exact canonical source, and no other same-name collision may.
 _CANONICAL_TOOL_MANUAL_LEGACY_REDIRECTS: dict[str, str] = {
     "context": "context-manual",
+    "soul": "soul-manual",
+}
+
+# Additional exact frontmatter markers a retained redirect must carry before it
+# may yield to its canonical owner. Soul's redirect declares its identity,
+# target, and non-operational status explicitly; a missing or wrong marker is a
+# collision, never a silent scan-order selection.
+_CANONICAL_TOOL_MANUAL_REDIRECT_MARKERS: dict[str, tuple[str, ...]] = {
+    "soul": (
+        "redirect_marker: soul-manual-legacy-redirect-v1",
+        "redirect_target: src/lingtai/tools/soul/manual/SKILL.md",
+        "operational_content: false",
+    ),
 }
 
 
@@ -335,6 +349,15 @@ class Agent(BaseAgent):
                 with contextlib.suppress(Exception):
                     owned_event_journal.close()
             raise
+
+        # Soul remains an injected intrinsic for kernel lifecycle hooks, but its
+        # model-facing root is an official declared plugin. Remove only the
+        # temporary intrinsic dispatcher entry and mount the static declaration
+        # before capability setup; the module remains available to hook lookup.
+        if "soul" in self._intrinsics:
+            from lingtai.tools import soul as _soul
+            self.override_intrinsic("soul")
+            _soul.setup(self)
 
         # Persist LLM config for revive (self-sufficient agents contract)
         self._persist_llm_config()
@@ -715,18 +738,24 @@ class Agent(BaseAgent):
                 destination = intrinsic_dir / subdir / entry.name
                 owner = canonical_manual_owners.get((subdir, entry.name))
                 if destination.exists():
-                    # Context's old intrinsic tree remains in the source package
-                    # solely as a documented redirect. The exact allowlist and the
-                    # redirect marker make this exception auditable; a new,
-                    # unrelated same-name collision fails rather than silently
-                    # choosing installer order.
+                    # Context's and Soul's old intrinsic trees remain in the
+                    # source package solely as documented redirects. The exact
+                    # allowlist and the redirect markers make this exception
+                    # auditable; a new, unrelated same-name collision fails
+                    # rather than silently choosing installer order.
                     redirect_name = _CANONICAL_TOOL_MANUAL_LEGACY_REDIRECTS.get(owner)
-                    marker = f"legacy_redirect: src/lingtai/tools/{owner}/manual"
+                    markers = (
+                        f"legacy_redirect: src/lingtai/tools/{owner}/manual",
+                    ) + _CANONICAL_TOOL_MANUAL_REDIRECT_MARKERS.get(owner, ())
                     redirect_skill = entry / "SKILL.md"
+                    redirect_text = (
+                        redirect_skill.read_text(encoding="utf-8")
+                        if redirect_skill.is_file()
+                        else ""
+                    )
                     is_documented_redirect = (
                         redirect_name == entry.name
-                        and redirect_skill.is_file()
-                        and marker in redirect_skill.read_text(encoding="utf-8")
+                        and all(marker in redirect_text for marker in markers)
                     )
                     if is_documented_redirect:
                         continue
@@ -2140,6 +2169,13 @@ class Agent(BaseAgent):
         self._intrinsics.clear()
         self._intrinsic_modules.clear()
         self._wire_intrinsics()
+        # Refresh rebuilds the official surface from scratch. Soul's injected
+        # module remains for lifecycle hooks, while its public root is again
+        # mounted only through the static declaration/registrar route.
+        if "soul" in self._intrinsics:
+            from lingtai.tools import soul as _soul
+            self.override_intrinsic("soul")
+            _soul.setup(self)
 
         # Reset capability-owned flags (email.boot below resets to "email box"/"email")
         self._mailbox_name = "email box"

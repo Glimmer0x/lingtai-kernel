@@ -39,6 +39,9 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/manual/SKILL.md
+  - src/lingtai/tools/soul/ANATOMY.md
+  - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
@@ -53,6 +56,7 @@ related_files:
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py
+  - tests/test_soul_runtime_port_ab.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
@@ -90,11 +94,12 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the eleven kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+  - the twelve kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
     `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
     read-only `PluginCatalogPort` (with detached `PluginCatalogState`),
     `NotificationStatePort`, Shell's narrow durable `NotificationPort` and
-    setup-only `ConfigurationPort`, and host-only `ToolMountPort`, plus File's
+    setup-only `ConfigurationPort`, Soul's explicit live-self `SoulRuntimePort`,
+    and host-only `ToolMountPort`, plus File's
     structural `FileGrepMatch`/`FileTraversalStats` result Protocols;
     `email_runtime` is also grantable but its Protocol remains Email-owned;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
@@ -118,14 +123,16 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   outside the kernel package. It supplies callback-only adapters for File's
   concrete operations/facts, Plugin's detached read-only catalog projection,
   and Notification Core's dismissal, delay, hook, and logging operations,
-  alongside the existing MCP, Avatar, Context, Daemon, and Email adapters.
+  alongside the existing MCP, Avatar, Context, Daemon, and Email adapters,
+  plus `AgentSoulRuntimeAdapter`/`agent_soul_runtime` for Soul's explicit
+  live-self runtime operations.
   No adapter exposes an Agent or generic dispatcher; `agent_host_ports` and
   `register_agent_tool_plugins` construct the private registrar mount seam.
 - `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
   Its static declaration binds the per-host family and protected prompt
   section; Avatar, Context, Daemon, Email, File, Plugin, and Notification
   are separately accepted vertical slices. The later-family target register
-  remains limited to `soul`, `vision`, `web`, `system`, and `task_card`; it is
+  remains limited to `vision`, `web`, `system`, and `task_card`; it is
   not an admission path.
 - `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
   not a C candidate claim. Its static `DECLARATION` binds `AvatarManager` to
@@ -183,6 +190,18 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `StaticConfigurationAdapter` carries only copied setup values.
   `bash/__init__.py` `setup(agent, ...)` only supplies that configuration through
   `extra_ports_for` and calls the registrar.
+- `src/lingtai/tools/soul/__init__.py` is the tenth accepted vertical slice.
+  Its static `DECLARATION` preserves the public
+  `inquiry | flow | config | voice | dismiss | manual` family and binds the
+  five operational children only to the earned, explicit `soul_runtime` port;
+  the reserved manual child receives only the granted `workdir`.
+  `AgentSoulRuntimeAdapter` stores individual read closures and bound
+  operations — never the Agent — for Soul's real conversation, cadence,
+  consultation-lock, and notification semantics. Soul stays an injected
+  intrinsic for kernel lifecycle hooks while its model-facing root mounts only
+  through the registrar; the package manual is the sole operational body,
+  installed at the historical `soul-manual` destination, with the retained
+  intrinsic-skills source reduced to a marker-verified redirect.
 
 ## Connections
 
@@ -199,6 +218,11 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   lazy `_bind` sees a `ToolPluginHost`, never an Agent. The retained Shell
   manager receives only the granted workdir/notification ports, while copied
   setup values arrive through `ConfigurationPort`.
+- `lingtai.tools.soul` imports `lingtai.kernel.tool_plugin`; its `_bind` sees a
+  `ToolPluginHost`, never an Agent, and its five operational children receive
+  only the granted `SoulRuntimePort`. `Agent` re-mounts the declaration through
+  `override_intrinsic("soul")` plus `soul.setup(agent)` on construction and on
+  every refresh.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
   (`Adapter -> Port <- Core`) and reaches the Agent only through the public
   `working_dir`, `update_system_prompt`, and the read-only

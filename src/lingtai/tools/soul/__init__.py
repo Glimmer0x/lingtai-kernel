@@ -1,97 +1,69 @@
-"""Soul intrinsic — the agent's inner voice.
+"""Soul —official host plugin ——the agent's inner voice.
 
-Six actions (``inquiry``, ``flow``, ``config``, ``voice``, ``dismiss``,
-``manual``), each a canonical :class:`~lingtai.tools.tool_family.ChildTool`
-behind the one public ``soul`` family root. Per-action behavior, inputs, and
-result/error shapes live in ``CONTRACT.md``; the model-facing text lives in the
-schema descriptions below and in the ``soul-manual`` skill. Neither is restated
-here.
-
-Action separation is structural: :data:`_CHILD_SPECS` is the single registry of
-name, schema, and handler, so the model-facing schema and dispatch are
-generated from one source and cannot drift. The public tool name, action
-values, semantics, receipts, and errors are exactly what they were before the
-migration — only the argument *shape* moved from a flat root into ``action`` +
-per-action ``input``.
+Soul remains the agent's real self-state and soul-flow capability: its five
+operational actions keep their LTP-v2 schemas, result shapes, persistence,
+consultation, timer, and notification behavior. The only recut is the host
+boundary: a static :data:`DECLARATION` binds the family through the kernel's
+least-privilege ``SoulRuntimePort`` and ``WorkdirPort`` instead of accepting a
+whole Agent. The legacy intrinsic hook exports below remain compatibility
+bridges for kernel lifecycle calls; they adapt at that boundary and never form
+the model-facing tool surface.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
-# Re-export constants from config.py
 from lingtai.kernel.config import DEFAULT_SOUL_DELAY_SECONDS
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
+
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 from .config import (
-    SOUL_DELAY_MIN_SECONDS,
-    CONSULTATION_PAST_COUNT_MIN,
     CONSULTATION_PAST_COUNT_MAX,
+    CONSULTATION_PAST_COUNT_MIN,
+    SOUL_DELAY_MIN_SECONDS,
     SOUL_VOICE_BUILTINS,
     SOUL_VOICE_PROMPT_MAX,
-)
-
-# Re-export private helpers consumed by base_agent.py and tests
-from .config import (
+    _atomic_write_init,
+    _build_soul_system_prompt as _build_soul_system_prompt_impl,
     _handle_config,
     _handle_voice,
-    _persist_soul_config,
-    _persist_soul_voice,
-    _atomic_write_init,
-    _build_soul_system_prompt,
+    _persist_soul_config as _persist_soul_config_impl,
+    _persist_soul_voice as _persist_soul_voice_impl,
 )
-
-# Re-export consultation pipeline
 from .consultation import (
-    _build_consultation_tool_refusal,
     _CONSULTATION_MAX_ROUNDS,
     _DIARY_CUE_TOKEN_CAP,
-    _send_with_timeout,
-    _render_current_diary,
-    _write_soul_tokens,
-    _load_snapshot_interface,
+    _build_consultation_cue as _build_consultation_cue_impl,
+    _build_consultation_tool_refusal,
     _fit_interface_to_window,
     _kind_for_source,
-    _build_consultation_cue,
-    _run_consultation,
-    _list_snapshot_paths,
-    _run_consultation_batch,
-    build_consultation_pair,
+    _list_snapshot_paths as _list_snapshot_paths_impl,
+    _load_snapshot_interface,
+    _render_current_diary as _render_current_diary_impl,
+    _run_consultation as _run_consultation_impl,
+    _run_consultation_batch as _run_consultation_batch_impl,
+    _send_with_timeout as _send_with_timeout_impl,
+    _write_soul_tokens as _write_soul_tokens_impl,
+    build_consultation_pair as _build_consultation_pair_impl,
 )
-
-# Re-export inquiry
-from .inquiry import soul_inquiry, _run_inquiry
-
-# Re-export flow (soul cadence, fire, persistence, appendix tracking).
-# These functions are the soul intrinsic's kernel-facing hook surface: after the
-# tools consolidation the kernel resolves them through the injected intrinsic
-# registry (``BaseAgent._intrinsic_hook("soul", ...)``) instead of importing
-# them directly, since the kernel cannot import ``tools``.
 from .flow import (
-    _start_soul_timer,
-    _cancel_soul_timer,
-    _soul_whisper,
-    _persist_soul_entry,
-    _append_soul_flow_record,
-    _flatten_v3_for_pair,
-    _run_consultation_fire,
-    _rehydrate_appendix_tracking,
+    _append_soul_flow_record as _append_soul_flow_record_impl,
+    _cancel_soul_timer as _cancel_soul_timer_impl,
+    _flatten_v3_for_pair as _flatten_v3_for_pair_impl,
+    _persist_soul_entry as _persist_soul_entry_impl,
+    _rehydrate_appendix_tracking as _rehydrate_appendix_tracking_impl,
+    _run_consultation_fire as _run_consultation_fire_impl,
+    _soul_fire_allowed as _soul_fire_allowed_impl,
+    _soul_whisper as _soul_whisper_impl,
+    _start_soul_timer as _start_soul_timer_impl,
 )
+from .inquiry import _run_inquiry as _run_inquiry_impl
+from .inquiry import soul_inquiry as _soul_inquiry_impl
 
+if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import SoulRuntimePort, ToolPluginHost, WorkdirPort
 
-# ---------------------------------------------------------------------------
-# Canonical child input schemas — one strict, closed object per action.
-# ---------------------------------------------------------------------------
-#
-# Each action's own ``input`` is declared exactly once here. ``ToolFamily``
-# composes the model-facing schema and the dispatch allow-list from these same
-# objects, so the two can never drift: the child's canonical name IS the public
-# ``action`` value IS the dispatch key.
-#
-# The property descriptions are carried over verbatim from the pre-migration
-# flat schema; only their location changed (flat root -> the one action that
-# actually consumes them). That relocation is the whole point of the
-# migration: ``inquiry`` no longer advertises ``delay_seconds``, and ``config``
-# no longer advertises ``prompt``.
 
 _INQUIRY_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -163,64 +135,6 @@ _DISMISS_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# The one canonical child registry: name, canonical input schema, and the
-# factory producing that child's agent-bound handler. Declaring names, order,
-# schemas, and handlers in a single place is what makes schema-vs-dispatch
-# drift structurally impossible — there is no second list to forget to update,
-# so a child can never be schema-advertised but dispatch-rejected. Order here is
-# the model-facing ``action`` enum order and the ``input.oneOf`` branch order,
-# unchanged from the pre-migration flat schema.
-#
-# ``manual`` is absent: ``build_manual_child`` owns that child's schema and
-# handler, and :func:`_build_children` appends it last.
-_CHILD_SPECS: tuple[tuple[str, dict[str, Any], Any], ...] = (
-    ("inquiry", _INQUIRY_INPUT_SCHEMA,
-     lambda agent: lambda i: _handle_inquiry(agent, _strip_nulls(i))),
-    ("flow", _FLOW_INPUT_SCHEMA,
-     lambda agent: lambda _i: _handle_flow(agent)),
-    ("config", _CONFIG_INPUT_SCHEMA,
-     lambda agent: lambda i: _handle_config(agent, _strip_nulls(i))),
-    ("voice", _VOICE_INPUT_SCHEMA,
-     lambda agent: lambda i: _handle_voice(agent, _strip_nulls(i))),
-    ("dismiss", _DISMISS_INPUT_SCHEMA,
-     lambda agent: lambda _i: _handle_dismiss(agent)),
-)
-
-
-def _build_children(agent) -> list[ChildTool]:
-    """Build the six children from the one canonical registry.
-
-    ``agent`` may be ``None`` for the module-level schema-only family, whose
-    children are never dispatched — only their schemas are read.
-    """
-    return [
-        ChildTool(name, schema, make_handler(agent), title=f"{name} input")
-        for name, schema, make_handler in _CHILD_SPECS
-    ] + [build_manual_child(agent, "soul-manual")]
-
-
-# Composes the model-facing schema. Building it at import time is also the
-# registry's duplicate/reserved-name collision check: a collision raises
-# ``ToolFamilyError`` here rather than shipping silently. It never dispatches —
-# soul is an intrinsic *module*, not a per-Agent manager object, so there is no
-# instance to hang a family off; ``handle()`` binds one to the passed agent per
-# call from this same registry.
-_FAMILY = ToolFamily("soul", _build_children(None))
-
-
-def get_description(lang: str = "en") -> str:
-    return "Your inner voice. One tool, six actions, each with its own strict input object: soul(action=..., input={...}, reasoning='why'). flow is OPT-IN and DISABLED by default: it runs only when the operator sets env LINGTAI_SOUL_FLOW_ENABLED=1 (then refreshes). While disabled, soul(action='flow', input={}) returns status='disabled' (not an error — do not retry); inquiry/config/voice/dismiss still work. When enabled, flow fires periodic past-self consultation every soul_delay seconds while IDLE — M=1+K parallel LLM calls (1 stepped-back read of current chat + K past-snapshot voices) arrive as an involuntary soul(action='flow') pair. delay_seconds is only the cadence after opt-in, NOT an off switch, and no action in this family can enable flow. inquiry: ask a deep copy of yourself a question; answer returns in the tool result. config: tune flow knobs at runtime (delay_seconds, consultation_past_count) — does not enable flow. voice: read or choose how your own soul-flow voice sounds. dismiss: clear the current flow notification. manual: return the installed soul-manual skill without performing any soul operation. Results are small, so leave root summarize false (short-result profile); call manual with summarize=false so the exact procedure is not summarized away. See soul-manual for details."
-
-
-def get_schema(lang: str = "en") -> dict:
-    # Composed by the generic ToolFamily infra from each child's own canonical
-    # ``input_schema`` above, rather than hand-assembled: root ``action`` +
-    # per-action ``input`` + required ``reasoning`` + optional ``summarize``,
-    # with a root ``allOf`` correlating each ``action`` const to that exact
-    # action's ``input`` shape on both the Chat and Responses wires.
-    return _FAMILY.build_schema()
-
-
 def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
     """Drop explicit nulls so "absent" and "null" mean the same downstream.
 
@@ -254,7 +168,7 @@ def _adapt_manual_result(mcp_result: dict) -> dict:
     return flat
 
 
-def _handle_flow(agent) -> dict:
+def _handle_flow(runtime) -> dict:
     """``action='flow'`` — trigger one voluntary consultation fire.
 
     Relocated verbatim from the pre-migration ``handle`` if-chain; the gate,
@@ -267,7 +181,7 @@ def _handle_flow(agent) -> dict:
     # not an error to retry (see soul-manual).
     from .flow import _soul_flow_enabled, SOUL_FLOW_ENABLED_ENV
     if not _soul_flow_enabled():
-        agent._log("soul_flow_voluntary_disabled")
+        runtime.log("soul_flow_voluntary_disabled")
         return {
             "status": "disabled",
             "enabled": False,
@@ -294,15 +208,15 @@ def _handle_flow(agent) -> dict:
     # silent no-op. If free, release immediately and kick off the
     # real fire on a daemon thread; _run_consultation_fire will
     # re-acquire under the same gate.
-    lock = getattr(agent, "_soul_fire_lock", None)
+    lock = runtime.fire_lock
     if lock is not None:
         if not lock.acquire(blocking=False):
-            agent._log("soul_flow_voluntary_rejected", reason="ongoing")
+            runtime.log("soul_flow_voluntary_rejected", reason="ongoing")
             return {"error": "soul flow ongoing, request rejected"}
         lock.release()
 
     import threading
-    from .flow import _run_consultation_fire
+    from . import flow as _flow
 
     def _fire():
         try:
@@ -310,26 +224,26 @@ def _handle_flow(agent) -> dict:
             # while ACTIVE (inside a tool call), but _run_consultation_fire
             # gates on IDLE.  _idle is a threading.Event set on every
             # non-ACTIVE transition (see base_agent._set_state).
-            idle_event = getattr(agent, "_idle", None)
+            idle_event = runtime.idle_event
             if idle_event is not None:
-                agent._log("soul_flow_voluntary_waiting_idle")
+                runtime.log("soul_flow_voluntary_waiting_idle")
                 # Wait up to soul_delay seconds; if the agent never goes
                 # IDLE (stuck in ACTIVE), give up rather than hang.
-                timeout = getattr(agent, "_soul_delay", DEFAULT_SOUL_DELAY_SECONDS)
+                timeout = runtime.soul_delay
                 if not idle_event.wait(timeout=timeout):
-                    agent._log("soul_flow_voluntary_timeout",
+                    runtime.log("soul_flow_voluntary_timeout",
                                timeout=timeout)
                     return
-            _run_consultation_fire(agent)
+            _flow._run_consultation_fire(runtime)
         except Exception as e:
             try:
-                agent._log("soul_flow_voluntary_error", error=str(e)[:200])
+                runtime.log("soul_flow_voluntary_error", error=str(e)[:200])
             except Exception:
                 pass
 
     t = threading.Thread(target=_fire, daemon=True, name="soul-flow-voluntary")
     t.start()
-    agent._log("soul_flow_voluntary_triggered")
+    runtime.log("soul_flow_voluntary_triggered")
     return {
         "status": "ok",
         "message": (
@@ -340,62 +254,276 @@ def _handle_flow(agent) -> dict:
     }
 
 
-def _handle_inquiry(agent, action_input: Mapping[str, Any]) -> dict:
+def _handle_inquiry(runtime, action_input: Mapping[str, Any]) -> dict:
     """``action='inquiry'`` — sync mirror session; requires inquiry text."""
     inquiry = action_input.get("inquiry", "")
     if not isinstance(inquiry, str) or not inquiry.strip():
         return {"error": "inquiry is required — what do you want to reflect on?"}
 
-    agent._log("soul_inquiry", inquiry=inquiry.strip()[:200])
+    runtime.log("soul_inquiry", inquiry=inquiry.strip()[:200])
 
-    result = soul_inquiry(agent, inquiry.strip())
+    result = soul_inquiry(runtime, inquiry.strip())
 
     if result:
-        agent._persist_soul_entry(result, mode="inquiry")
-        agent._log("soul_inquiry_done")
+        runtime.persist_soul_entry(result, mode="inquiry")
+        runtime.log("soul_inquiry_done")
         return {"status": "ok", "voice": result["voice"]}
     else:
-        agent._log("soul_inquiry_done")
+        runtime.log("soul_inquiry_done")
         return {"status": "ok", "voice": "(silence)"}
 
 
-def _handle_dismiss(agent) -> dict:
+def _handle_dismiss(runtime) -> dict:
     """``action='dismiss'`` — clear the current soul flow notification."""
-    from lingtai.kernel.notifications import dismiss_channel
-    result = dismiss_channel(agent, "soul", invoked_by="soul")
+    result = runtime.dismiss_notification("soul", invoked_by="soul")
     if result.get("status") == "ok":
         result.setdefault("message", "Soul flow notification dismissed.")
     return result
 
 
-def handle(agent, args: dict) -> dict:
-    """Handle the ``soul`` family root — validate the envelope, dispatch one action.
+# Soul's operational action names and their strict inputs are declared once.
+# ``manual`` remains reserved to the declaration and is appended last by the
+# family through the shared ManualTool child.
+SOUL_DECLARED_ACTIONS: tuple[str, ...] = (
+    "inquiry", "flow", "config", "voice", "dismiss",
+)
 
-    Envelope validation and cross-action rejection belong to the generic
-    dispatcher (``tool_family/CONTRACT.md``). This function owns only what is
-    soul-specific: dropping ``_tc_id``, and the two post-dispatch presentation
-    adaptations below.
-    """
+_DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "inquiry": _INQUIRY_INPUT_SCHEMA,
+    "flow": _FLOW_INPUT_SCHEMA,
+    "config": _CONFIG_INPUT_SCHEMA,
+    "voice": _VOICE_INPUT_SCHEMA,
+    "dismiss": _DISMISS_INPUT_SCHEMA,
+}
+
+_DESCRIPTION = (
+    "Your inner voice. One tool, six actions, each with its own strict input "
+    "object: soul(action=..., input={...}, reasoning='why'). flow is OPT-IN "
+    "and DISABLED by default: it runs only when the operator sets env "
+    "LINGTAI_SOUL_FLOW_ENABLED=1 (then refreshes). While disabled, "
+    "soul(action='flow', input={}) returns status='disabled' (not an error — do not retry); inquiry/config/voice/dismiss still work. When enabled, "
+    "flow fires periodic past-self consultation every soul_delay seconds while "
+    "IDLE — M=1+K parallel LLM calls (1 stepped-back read of current chat + K "
+    "past-snapshot voices) arrive as an involuntary soul(action='flow') pair. "
+    "delay_seconds is only the cadence after opt-in, NOT an off switch, and no "
+    "action in this family can enable flow. inquiry: ask a deep copy of "
+    "yourself a question; answer returns in the tool result. config: tune flow "
+    "knobs at runtime (delay_seconds, consultation_past_count) — does not enable "
+    "flow. voice: read or choose how your own soul-flow voice sounds. dismiss: "
+    "clear the current flow notification. manual: return the installed "
+    "soul-manual skill without performing any soul operation. Results are "
+    "small, so leave root summarize false (short-result profile); call manual "
+    "with summarize=false so the exact procedure is not summarized away. See "
+    "soul-manual for details."
+)
+
+
+def _coerce_runtime(agent: Any) -> "SoulRuntimePort":
+    """Adapt a kernel-hook/legacy caller at the one compatibility boundary."""
+    from lingtai.adapters.tool_plugin_host import AgentSoulRuntimeAdapter, agent_soul_runtime
+
+    if isinstance(agent, AgentSoulRuntimeAdapter):
+        return agent
+    return agent_soul_runtime(agent)
+
+
+def _build_declared_children(runtime: "SoulRuntimePort | None") -> list[ChildTool]:
+    if runtime is None:
+        def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
+            raise AssertionError("the module-level schema-only ToolFamily never dispatches")
+
+        return [
+            ChildTool(action, _DECLARED_INPUT_SCHEMAS[action], _unused, title=f"{action} input")
+            for action in SOUL_DECLARED_ACTIONS
+        ]
+    return [
+        ChildTool("inquiry", _INQUIRY_INPUT_SCHEMA, lambda i: _handle_inquiry(runtime, _strip_nulls(i)), title="inquiry input"),
+        ChildTool("flow", _FLOW_INPUT_SCHEMA, lambda _i: _handle_flow(runtime), title="flow input"),
+        ChildTool("config", _CONFIG_INPUT_SCHEMA, lambda i: _handle_config(runtime, _strip_nulls(i)), title="config input"),
+        ChildTool("voice", _VOICE_INPUT_SCHEMA, lambda i: _handle_voice(runtime, _strip_nulls(i)), title="voice input"),
+        ChildTool("dismiss", _DISMISS_INPUT_SCHEMA, lambda _i: _handle_dismiss(runtime), title="dismiss input"),
+    ]
+
+
+def _build_family(
+    runtime: "SoulRuntimePort | None",
+    manual_source: Any | None = None,
+) -> ToolFamily:
+    children = _build_declared_children(runtime)
+    if runtime is None:
+        children.append(ChildTool("manual", MANUAL_INPUT_SCHEMA, lambda _i: {}, title="manual input"))
+    else:
+        children.append(build_manual_child(manual_source, DECLARATION.manual))
+    return ToolFamily(DECLARATION.name, children)
+
+
+def _build_children(agent: Any) -> list[ChildTool]:
+    """Compatibility test/hook view of the same declaration-owned children."""
+    if agent is None:
+        return _build_declared_children(None) + [
+            ChildTool("manual", MANUAL_INPUT_SCHEMA, lambda _i: {}, title="manual input")
+        ]
+    runtime = _coerce_runtime(agent)
+    return list(_build_family(runtime, runtime)._children.values())
+
+
+def get_description(lang: str = "en") -> str:
+    return _DESCRIPTION
+
+
+def get_schema(lang: str = "en") -> dict:
+    return _FAMILY.build_schema()
+
+
+def _handle_bound(runtime: "SoulRuntimePort", manual_source: Any, args: Mapping[str, Any] | None) -> dict:
     raw = dict(args or {})
-    # ``base_agent._dispatch_tool`` injects the wire ``_tc_id`` into EVERY
-    # intrinsic's args (capabilities like ``web`` never see it). It is kernel
-    # transport metadata, not a public root field and not action input, so it
-    # is dropped here before the envelope's closed-root check — soul does not
-    # consume it.
     raw.pop("_tc_id", None)
-
     action = raw.get("action")
-    result = ToolFamily("soul", _build_children(agent)).handle(raw)
-
+    result = _build_family(runtime, manual_source).handle(raw)
     if action == "manual" and "content" in result:
         return _adapt_manual_result(result)
     if result.get("error_code") == "ACTION_REQUIRED":
-        # Preserve soul's pre-migration unknown-action error verbatim.
         return {
             "error": (
                 f"Unknown soul action: {action if action is not None else ''}. "
-                "Use inquiry, config, voice, dismiss, "
-                "manual, or wait for flow (mechanical)."
+                "Use inquiry, config, voice, dismiss, manual, or wait for flow (mechanical)."
             )
         }
     return result
+
+
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    runtime = host.soul_runtime
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=lambda args: _handle_bound(runtime, host.workdir, args),
+        description=get_description(),
+        glossary_package=__package__,
+    )
+
+
+DECLARATION = ToolPluginDeclaration(
+    name="soul",
+    actions=SOUL_DECLARED_ACTIONS,
+    input_schemas=_DECLARED_INPUT_SCHEMAS,
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="soul-manual",
+    description=_DESCRIPTION,
+    binder=_bind,
+    requires=("workdir", "soul_runtime"),
+    glossary_package=__package__,
+)
+
+SOUL_ACTIONS: tuple[str, ...] = DECLARATION.public_actions
+ACTION_INPUT_SCHEMAS = DECLARATION.public_input_schemas()
+_FAMILY = _build_family(None)
+
+
+def setup(agent: Any, **_ignored: Any) -> None:
+    """Mount Soul through the controlled official host-plugin registrar."""
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    register_agent_tool_plugins(agent, [DECLARATION])
+
+
+def handle(agent: Any, args: dict) -> dict:
+    """Compatibility entry for kernel hooks and focused legacy tests.
+
+    Production Agent composition mounts :data:`DECLARATION`; this bridge keeps
+    direct callers on the same family and runtime port without giving the
+    declaration binder an Agent.
+    """
+    runtime = _coerce_runtime(agent)
+    return _handle_bound(runtime, runtime, args)
+
+
+# Kernel-facing intrinsic hook compatibility. BaseAgent resolves these exports
+# through its injected intrinsic registry; each adapts the live Agent once and
+# the real implementation thereafter sees only SoulRuntimePort.
+def _start_soul_timer(agent: Any) -> None:
+    _start_soul_timer_impl(_coerce_runtime(agent))
+
+
+def _cancel_soul_timer(agent: Any) -> None:
+    _cancel_soul_timer_impl(_coerce_runtime(agent))
+
+
+def _soul_whisper(agent: Any) -> None:
+    _soul_whisper_impl(_coerce_runtime(agent))
+
+
+def _persist_soul_entry(agent: Any, result: dict, mode: str = "flow", source: str = "agent") -> None:
+    _persist_soul_entry_impl(_coerce_runtime(agent), result, mode=mode, source=source)
+
+
+def _append_soul_flow_record(agent: Any, record: dict) -> None:
+    _append_soul_flow_record_impl(_coerce_runtime(agent), record)
+
+
+def _flatten_v3_for_pair(agent: Any, voice: dict) -> dict:
+    return _flatten_v3_for_pair_impl(_coerce_runtime(agent), voice)
+
+
+def _run_consultation_fire(agent: Any) -> None:
+    _run_consultation_fire_impl(_coerce_runtime(agent))
+
+
+def _soul_fire_allowed(agent: Any) -> bool:
+    return _soul_fire_allowed_impl(_coerce_runtime(agent))
+
+
+def _rehydrate_appendix_tracking(agent: Any) -> None:
+    _rehydrate_appendix_tracking_impl(_coerce_runtime(agent))
+
+
+def soul_inquiry(agent: Any, question: str) -> dict | None:
+    return _soul_inquiry_impl(_coerce_runtime(agent), question)
+
+
+def _run_inquiry(agent: Any, question: str, source: str = "agent") -> None:
+    _run_inquiry_impl(_coerce_runtime(agent), question, source=source)
+
+
+def _render_current_diary(agent: Any) -> str:
+    return _render_current_diary_impl(_coerce_runtime(agent))
+
+
+def _write_soul_tokens(agent: Any, response: Any) -> None:
+    _write_soul_tokens_impl(_coerce_runtime(agent), response)
+
+
+def _list_snapshot_paths(agent: Any):
+    return _list_snapshot_paths_impl(_coerce_runtime(agent))
+
+
+def _run_consultation(agent: Any, iface: Any, source: str) -> dict | None:
+    return _run_consultation_impl(_coerce_runtime(agent), iface, source)
+
+
+def _run_consultation_batch(agent: Any) -> list[dict]:
+    return _run_consultation_batch_impl(_coerce_runtime(agent))
+
+
+def _send_with_timeout(agent: Any, session: Any, content: "str | list"):
+    return _send_with_timeout_impl(_coerce_runtime(agent), session, content)
+
+
+def _build_consultation_cue(agent: Any, kind: str, diary: str) -> str:
+    return _build_consultation_cue_impl(_coerce_runtime(agent), kind, diary)
+
+
+def build_consultation_pair(agent: Any, voices: list[dict], tc_id: str | None = None):
+    return _build_consultation_pair_impl(_coerce_runtime(agent), voices, tc_id=tc_id)
+
+
+def _persist_soul_config(agent: Any, new_values: dict) -> str | None:
+    return _persist_soul_config_impl(_coerce_runtime(agent), new_values)
+
+
+def _persist_soul_voice(agent: Any, *, voice: str, voice_prompt: str) -> str | None:
+    return _persist_soul_voice_impl(_coerce_runtime(agent), voice=voice, voice_prompt=voice_prompt)
+
+
+def _build_soul_system_prompt(agent: Any, kind: str = "inquiry") -> str:
+    return _build_soul_system_prompt_impl(_coerce_runtime(agent), kind=kind)
