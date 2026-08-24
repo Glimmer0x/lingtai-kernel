@@ -23,11 +23,44 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from lingtai.kernel._frontmatter import split_frontmatter
 from lingtai.tools import soul
 from lingtai.tools.soul import handle
 from lingtai.tools.tool_family import ToolFamilyError
 
 _ACTIONS = ("inquiry", "flow", "config", "voice", "dismiss", "manual")
+_REPO_ROOT = Path(__file__).parents[1]
+_CANONICAL_SOUL_MANUAL = _REPO_ROOT / "src/lingtai/tools/soul/manual/SKILL.md"
+_RETAINED_SOUL_MANUAL = _REPO_ROOT / "src/lingtai/intrinsic_skills/soul-manual/SKILL.md"
+_SOUL_REDIRECT_MARKERS = {
+    "legacy_redirect": "src/lingtai/tools/soul/manual",
+    "redirect_marker": "soul-manual-legacy-redirect-v1",
+    "redirect_target": "src/lingtai/tools/soul/manual/SKILL.md",
+    "operational_content": "false",
+}
+
+
+def _verify_soul_redirect(text: str) -> str:
+    """Apply the exact marker contract the shared installer must enforce."""
+    metadata, body = split_frontmatter(text)
+    for key, expected in _SOUL_REDIRECT_MARKERS.items():
+        if metadata.get(key) != expected:
+            raise ValueError(f"Soul legacy redirect marker {key!r} is invalid")
+    if "sole operational content" not in body:
+        raise ValueError("Soul legacy redirect body is not an explicit notice")
+    return metadata["redirect_target"]
+
+
+def _manual_source_kind(path: Path) -> str:
+    """Classify only the two Soul source forms without choosing first-wins."""
+    text = path.read_text(encoding="utf-8")
+    if path == _RETAINED_SOUL_MANUAL:
+        _verify_soul_redirect(text)
+        return "redirect"
+    metadata, _body = split_frontmatter(text)
+    if metadata.get("name") != "soul-manual":
+        raise ValueError(f"unexpected Soul manual name in {path}")
+    return "operational"
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +488,68 @@ def _install_manual(agent: _FakeAgent, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
     return path
+
+
+def test_soul_package_manual_is_the_single_operational_source():
+    """The package body is complete; the retained path is metadata-only."""
+    package_text = _CANONICAL_SOUL_MANUAL.read_text(encoding="utf-8")
+    package_meta, package_body = split_frontmatter(package_text)
+    legacy_text = _RETAINED_SOUL_MANUAL.read_text(encoding="utf-8")
+    legacy_meta, legacy_body = split_frontmatter(legacy_text)
+
+    assert package_meta["name"] == "soul-manual"
+    assert "## 0. How to call it" in package_body
+    assert "## 8. Privacy and cost rationale" in package_body
+    assert "legacy_redirect" not in package_meta
+    assert legacy_meta["name"] == "soul-manual"
+    assert _verify_soul_redirect(legacy_text) == _SOUL_REDIRECT_MARKERS["redirect_target"]
+    assert "## 0. How to call it" not in legacy_body
+    assert "LINGTAI_SOUL_FLOW_ENABLED" not in legacy_body
+    assert _manual_source_kind(_CANONICAL_SOUL_MANUAL) == "operational"
+    assert _manual_source_kind(_RETAINED_SOUL_MANUAL) == "redirect"
+
+
+def test_soul_redirect_marker_rejects_missing_or_wrong_identity(tmp_path):
+    """A legacy file is not accepted merely because its basename matches."""
+    original = _RETAINED_SOUL_MANUAL.read_text(encoding="utf-8")
+    cases = (
+        ("legacy_redirect: src/lingtai/tools/soul/manual\n", ""),
+        ("redirect_target: src/lingtai/tools/soul/manual/SKILL.md", "redirect_target: src/lingtai/tools/other/manual/SKILL.md"),
+        ("redirect_marker: soul-manual-legacy-redirect-v1", "redirect_marker: wrong-marker"),
+    )
+    for expected, replacement in cases:
+        broken = tmp_path / "SKILL.md"
+        broken.write_text(original.replace(expected, replacement, 1), encoding="utf-8")
+        with pytest.raises(ValueError, match="marker"):
+            _verify_soul_redirect(broken.read_text(encoding="utf-8"))
+
+
+def test_soul_install_contract_copies_package_body_to_historical_destination(tmp_path):
+    """The installed manual path stays stable while its bytes come from package Soul."""
+    destination = (
+        tmp_path / ".library" / "intrinsic" / "capabilities"
+        / "soul-manual" / "SKILL.md"
+    )
+    destination.parent.mkdir(parents=True)
+    destination.write_bytes(_CANONICAL_SOUL_MANUAL.read_bytes())
+
+    assert destination.read_bytes() == _CANONICAL_SOUL_MANUAL.read_bytes()
+    assert destination.as_posix().endswith(".library/intrinsic/capabilities/soul-manual/SKILL.md")
+    assert _verify_soul_redirect(_RETAINED_SOUL_MANUAL.read_text(encoding="utf-8"))
+
+
+def test_soul_manual_destination_collision_is_not_first_wins(tmp_path):
+    """Two operational Soul sources must be rejected, not selected by scan order."""
+    duplicate = tmp_path / "second-soul-manual" / "SKILL.md"
+    duplicate.parent.mkdir()
+    duplicate.write_bytes(_CANONICAL_SOUL_MANUAL.read_bytes())
+    sources = [_CANONICAL_SOUL_MANUAL, duplicate]
+    operational = [path for path in sources if _manual_source_kind(path) == "operational"]
+
+    assert len(operational) == 2
+    with pytest.raises(ValueError, match="destination collision"):
+        if len(operational) != 1:
+            raise ValueError("Soul manual destination collision: multiple operational owners")
 
 
 def test_manual_returns_the_full_body_and_host_local_path(agent):
