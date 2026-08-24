@@ -5,6 +5,9 @@ contract_version: 1
 related_files:
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/ANATOMY.md
+  - src/lingtai/tools/plugin/BEHAVIORS.md
+  - src/lingtai/tools/plugin/manual/SKILL.md
+  - tests/test_plugin_tool.py
   - src/lingtai/services/plugin_registry.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
@@ -28,8 +31,8 @@ maintenance: |
 
 `plugin` is a read-only tool: it renders the per-agent **Agent Plugins**
 (agent-plugins.org, v1.0.0) catalog and boot registration snapshot into the
-protected `plugin` system-prompt section, and reports what mounted, what did
-not, and why. **The tool itself mutates nothing.** Mounting happens once, at
+protected `plugin` system-prompt section, and reports what was registered,
+what was not represented, and why. **The tool itself mutates nothing.** Registration happens once, at
 boot/refresh, in `services.plugin_registry.register_plugins`, which `Agent` calls
 before capability setup — no model-facing action can reach it. The tool slice
 lives in `src/lingtai/tools/plugin/__init__.py`; the scanning, registration, and
@@ -39,7 +42,7 @@ lazily). The code is the source of truth.
 This is an official declared host plugin. Its module-level `DECLARATION` is
 constructed before any Agent exists; the kernel reserves `plugin`, grants only
 `workdir`, `prompt_section`, and the read-only `plugin_catalog` projection, then
-activates and mounts the bound family. The tool never receives a whole Agent:
+activates the bound family and renders its protected prompt field. The tool never receives a whole Agent:
 its catalog snapshot and discovery inputs arrive through that projection, its
 manual is read through `workdir`, and it writes only its own protected section.
 The declaration/adapter do not validate, register, prune, launch, or execute an
@@ -53,12 +56,12 @@ This is the load-bearing distinction in this package; everything else follows.
 
 | Tier | Declared where | Effect |
 |---|---|---|
-| **registered** | `init.json` `manifest.plugins` (canonical) or `manifest.capabilities.plugin.paths` (retained alias, same meaning) | Each of the plugin's containment-validated skill directories is composed into the skills-catalog scan; each `mcp.json` server becomes an `mcp_registry.jsonl` record stamped `source="plugin:<name>"` |
-| **discovered** | Found on an inherited `manifest.capabilities.skills.paths` directory | Listed only. Nothing composed, nothing registered. |
+| **registered** | `init.json` `manifest.plugins` (canonical) or `manifest.capabilities.plugin.paths` (retained alias, same meaning) | Validated skill names/count are listed in the protected Plugin field (`registered[].skills` and `<skill_names>`), with sources inside the plugin; they are not injected into the vanilla `skills` catalog. Each `mcp.json` server becomes an `mcp_registry.jsonl` record stamped `source="plugin:<name>"` |
+| **discovered** | Found on an inherited `manifest.capabilities.skills.paths` directory | Metadata/count is listed in the protected Plugin field only. Nothing enters the vanilla `skills` catalog and nothing is registered. |
 
 The asymmetry is a security boundary, not a presentation choice: dropping a
 directory where the skills capability happens to scan must never silently
-register a third party's MCP server. Only an explicit declaration mounts.
+register a third party's MCP server. Only an explicit declaration registers the plugin; it does not open the vanilla skills namespace.
 
 Registration is registry-level, exactly as `addons:[]` is: a plugin's MCP server
 becomes registered and visible, **never running**. Activation still requires an
@@ -73,8 +76,8 @@ plus `system(action="refresh")`.
 - **Install:** add the plugin directory to `manifest.plugins`, refresh.
 - **Uninstall:** remove it from `manifest.plugins`, refresh. Every
   `source="plugin:<name>"` record whose owner is no longer declared is pruned by
-  `prune_plugin_records`, and the plugin's skills leave the catalog because
-  nothing scans its skill directories any more. **No file is deleted** — the plugin
+  `prune_plugin_records`, and the plugin's skills leave the protected Plugin
+  field because they are no longer registered. **No file is deleted** — the plugin
   directory belongs to whoever put it there.
 
 Pruning also converges a still-declared plugin: a server removed from its
@@ -116,6 +119,10 @@ composition/dispatch infrastructure -> `src/lingtai/tools/tool_family/CONTRACT.m
   presentation with zero side effects.
 - Symmetric to `mcp`: a per-agent presentation capability with a protected
   prompt section and exactly the same two actions.
+- `registered[].skills` and the protected `<registered_plugin>` field are the
+  Plugin namespace. `skills_mounted` is a result flag: it is true only when
+  validated plugin skills are present and the skills capability is enabled; it
+  never means that those entries were injected into the vanilla `skills` catalog.
 - Standard implemented: Agent Plugins v1.0.0. The two canonical schema
   identifiers
   (`https://agent-plugins.org/schemas/1.0.0/plugin.schema.json` and
@@ -123,8 +130,9 @@ composition/dispatch infrastructure -> `src/lingtai/tools/tool_family/CONTRACT.m
   NOT fetch them during loading; an unrecognized `$schema` is an unsupported
   version, reported as a problem, never a silent downgrade.
 - Non-goals: this *tool* never writes any file. It never copies a plugin's
-  skills into `.library/` (registration composes the plugin's own validated
-  skill directories into the catalog scan instead — nothing is copied anywhere), never appends to
+  skills into `.library/` or the vanilla `skills` catalog (registration retains
+  validated skill facts for the protected Plugin field instead — nothing is
+  copied or injected anywhere), never appends to
   `mcp_registry.jsonl` from an action, and never spawns a process. It is purely
   `info` (re-scan + report the boot snapshot) and `manual` (return the
   plugin-manual body).
@@ -200,7 +208,7 @@ cache. It only reads:
 
 ```text
 <plugin path>/<plugin>/plugin.json         # required manifest
-<plugin path>/<plugin>/skills/*/SKILL.md   # composed into the catalog scan, never copied
+<plugin path>/<plugin>/skills/*/SKILL.md   # validated and listed in the protected Plugin field, never copied or catalog-injected
 <plugin path>/<plugin>/mcp.json            # translated into registry records
 ```
 
@@ -225,9 +233,9 @@ directory whose immediate children are plugin roots; a directory carrying
 Do not change any of the following; documented for reviewers only.
 
 - **No model-facing side effects:** no action writes, copies, registers,
-  unregisters, or executes anything. Mounting is boot-only and unreachable from
+  unregisters, or executes anything. Registration is boot-only and unreachable from
   the tool surface, which is what keeps the capability safe in `CORE_DEFAULTS`.
-- **Declaration gates mounting:** an inherited skills path is scanned and listed
+- **Declaration gates registration:** an inherited skills path is scanned and listed
   but never registers anything. Only `manifest.plugins` and its alias mount.
 - **Registration never executes:** a registered MCP server holds a registry
   record and nothing more; running it still requires an `init.json` top-level
@@ -262,15 +270,16 @@ Do not change any of the following; documented for reviewers only.
   escaping skill directory or MCP server is skipped while the rest of the plugin
   is still listed. Skipped is enforced, not merely reported, on both halves: the
   escaping server never reaches `mcp_registry.jsonl`, and the escaping skill
-  directory is never composed into the skills catalog because registration
-  contributes the *per-skill validated directories* (`read_plugin`'s
-  `skill_paths`), never the parent `skills/` — whose recursive, symlink-following
-  scan would re-admit exactly what was rejected.
-- **Reported skills are mounted skills:** `_scan_skills` walks `skills/` with the
-  same traversal `tools._catalog._scan_recursive` mounts with (grouping
-  directories descended, dot-directories and corrupt directories skipped), so a
-  nested `skills/group/nested/SKILL.md` is reported as `group/nested` and counted
-  rather than mounting invisibly.
+  directory is never rendered in the protected Plugin field because registration
+  contributes only the *per-skill validated directories* (`read_plugin`'s
+  `skill_paths`). The vanilla `skills` catalog is a separate, closed namespace
+  and never receives Plugin paths.
+- **Reported skills are protected Plugin-field skills:** `_scan_skills` walks
+  `skills/` with the Plugin registry traversal (grouping directories descended,
+  dot-directories and corrupt directories skipped), so a nested
+  `skills/group/nested/SKILL.md` is reported as `group/nested` and counted.
+  Registered names are rendered in the protected Plugin field; they are not
+  injected into the vanilla `skills` catalog.
 - **Declared fields survive into the record:** `to_registry_record` carries
   `env`/`cwd` (stdio) and `headers` (http) through alongside `command`/`args`/
   `url`; the registry validator ignores keys it does not model. The record is a
@@ -299,14 +308,14 @@ Do not change any of the following; documented for reviewers only.
 | A symlink escape is rejected under §4.1 | `src/lingtai/services/plugin_registry.py` (`resolve_contained`) | `tests/test_plugin_tool.py::test_containment_rejects_symlink_escape` |
 | A missing/invalid `plugin.json` rejects the whole plugin | `src/lingtai/services/plugin_registry.py` (`read_plugin`) | `tests/test_plugin_tool.py::test_invalid_manifest_rejects_whole_plugin` |
 | An escaping component is skipped without rejecting the plugin | `src/lingtai/services/plugin_registry.py` (`_scan_skills`, `_scan_mcp_servers`) | `tests/test_plugin_tool.py::test_escaping_skill_is_skipped_but_plugin_survives` |
-| A skipped skill is absent from the composed catalog, not merely from the report | `src/lingtai/services/plugin_registry.py` (`_scan_skills`), `src/lingtai/tools/skills/__init__.py` (`_compose_paths`, `_scan_one_skill`) | `tests/test_plugin_tool.py::test_escaping_skill_is_absent_from_the_composed_skills_catalog`, `::test_registration_records_each_validated_skill_dir_on_the_agent` |
-| A nested skill is reported exactly as it mounts | `src/lingtai/services/plugin_registry.py` (`_walk_skills`) | `tests/test_plugin_tool.py::test_nested_skills_are_reported_exactly_as_they_mount` |
+| A skipped skill is absent from the protected Plugin field, not merely from the report | `src/lingtai/services/plugin_registry.py` (`_scan_skills`), `src/lingtai/tools/plugin/__init__.py` (`_registered_entries`, `_reconcile`) | `tests/test_plugin_tool.py::test_escaping_skill_is_absent_from_the_plugin_field`, `::test_registration_records_each_validated_skill_dir_on_the_agent` |
+| A nested skill is reported exactly as it is listed | `src/lingtai/services/plugin_registry.py` (`_walk_skills`) | `tests/test_plugin_tool.py::test_nested_skills_are_reported_exactly_as_they_are_listed` |
 | Containment is not bypassed by omitting the `./` prefix | `src/lingtai/services/plugin_registry.py` (`_expand_plugin_path`) | `tests/test_plugin_tool.py::test_containment_is_not_bypassed_by_omitting_the_dot_slash`, `::test_values_that_are_not_plugin_relative_paths_still_pass_through` |
 | `env`/`cwd`/`headers` are carried into the registry record | `src/lingtai/services/plugin_registry.py` (`to_registry_record`) | `tests/test_plugin_tool.py::test_env_and_cwd_are_carried_into_the_registry_record`, `::test_http_headers_are_validated_and_carried`, `::test_carried_fields_do_not_break_idempotence` |
 | The shipped boot flow registers once and is idempotent | `src/lingtai/agent.py` (`__init__`, `_register_declared_plugins`) | `tests/test_plugin_tool.py::test_cli_shaped_boot_registers_once_and_is_idempotent`, `::test_minimal_construction_does_not_wipe_plugin_records`, `::test_declaring_capabilities_without_plugins_still_uninstalls` |
-| An inherited (discovery-only) plugin mounts nothing | `src/lingtai/tools/plugin/__init__.py`, `src/lingtai/services/plugin_registry.py` | `tests/test_plugin_tool.py::test_discovery_only_plugin_installs_nothing` |
+| An inherited (discovery-only) plugin registers nothing | `src/lingtai/tools/plugin/__init__.py`, `src/lingtai/services/plugin_registry.py` | `tests/test_plugin_tool.py::test_discovery_only_plugin_installs_nothing` |
 | `manifest.plugins` is canonical and the capability key is its alias | `src/lingtai/services/plugin_registry.py` (`declared_plugin_paths`) | `tests/test_plugin_tool.py::test_manifest_plugins_is_the_canonical_declaration_key`, `::test_capability_paths_alias_is_still_honored` |
-| A declared plugin's skill joins the skills catalog, located inside the plugin | `src/lingtai/tools/skills/__init__.py` (`_compose_paths`) | `tests/test_plugin_tool.py::test_declared_plugin_skill_appears_in_the_skills_catalog` |
+| A declared plugin's skill is listed in the protected Plugin field, not the vanilla skills catalog | `src/lingtai/tools/plugin/__init__.py` (`_registered_entries`, `_reconcile`) | `tests/test_plugin_tool.py::test_declared_plugin_skill_appears_in_the_plugin_field` |
 | A declared plugin's MCP server gets a `source="plugin:<name>"` registry record | `src/lingtai/services/plugin_registry.py` (`register_plugins`, `to_registry_record`) | `tests/test_plugin_tool.py::test_declared_plugin_mcp_server_lands_in_the_registry` |
 | A path escape is rejected at registration, not merely displayed | `src/lingtai/services/plugin_registry.py` (`resolve_server_spec`) | `tests/test_plugin_tool.py::test_path_escape_is_rejected_at_registration_time`, `::test_containment_covers_args_not_just_command` |
 | Undeclaring a plugin prunes its records and its skills | `src/lingtai/services/plugin_registry.py` (`prune_plugin_records`) | `tests/test_plugin_tool.py::test_undeclaring_a_plugin_prunes_its_registry_records`, `::test_uninstalling_removes_the_skill_from_the_catalog` |
@@ -320,8 +329,8 @@ Do not change any of the following; documented for reviewers only.
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
 | Catalog renders into the prompt | `tests/test_plugin_tool.py::test_plugin_capability_renders_catalog_into_prompt` | Drop a plugin on a configured path, inspect the `plugin` prompt section | Discovered plugins invisible to the model |
-| Tool is read-only (mounting is boot-only) | `tests/test_plugin_tool.py::test_info_reports_registration_but_never_performs_it` | Add a plugin after boot, call `info`, confirm it reports as `discovered` and the registry is unchanged | A model-facing action could mount third-party code |
-| An inherited path never mounts | `tests/test_plugin_tool.py::test_discovery_only_plugin_installs_nothing` | Drop a plugin on a skills path, confirm `mcp_registry.jsonl` is untouched | Silent third-party MCP registration from a directory drop |
+| Tool is read-only (registration is boot-only) | `tests/test_plugin_tool.py::test_info_reports_registration_but_never_performs_it` | Add a plugin after boot, call `info`, confirm it reports as `discovered` and the registry is unchanged | A model-facing action could mount third-party code |
+| An inherited path never registers | `tests/test_plugin_tool.py::test_discovery_only_plugin_installs_nothing` | Drop a plugin on a skills path, confirm `mcp_registry.jsonl` is untouched | Silent third-party MCP registration from a directory drop |
 | Uninstall prunes exactly what the plugin owns | `tests/test_plugin_tool.py::test_pruning_leaves_records_the_plugin_system_does_not_own` | Undeclare a plugin with a hand-written record alongside; confirm only the plugin's line goes | Data loss in a human-owned registry |
 | Unknown actions handled | `tests/test_plugin_tool.py::test_unknown_action_returns_error_envelope` | Call `plugin(action="foo")` | Silent mis-dispatch |
 | `../` and symlink escapes rejected | `tests/test_plugin_tool.py::test_containment_rejects_dotdot_escape`, `::test_containment_rejects_symlink_escape` | Point a plugin's `mcp.json` `command` outside its root | Plugin-declared path reaches outside its own root |

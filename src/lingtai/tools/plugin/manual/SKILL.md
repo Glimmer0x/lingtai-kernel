@@ -15,7 +15,7 @@ description: >
     - You are authoring a `plugin.json` or `mcp.json` and need the required
       fields, the `name` grammar, or the `./`-prefixed path containment rule.
     - A plugin you expect is missing from `<registered_plugin>`, a skill you
-      expect is missing from your skills catalog, or a server you expect is
+      expect is missing from the protected Plugin field, or a server you expect is
       missing from `mcp_registry.jsonl`.
     - A plugin is listed as `<mount>discovered</mount>` and you need to know why
       nothing of it is usable.
@@ -48,17 +48,18 @@ maintenance: |
 The `plugin` capability is your view of **Agent Plugins** (the open standard at
 https://agent-plugins.org, version 1.0.0). A plugin is a directory bundling
 Agent Skills and MCP server configuration; this capability is how one gets
-mounted onto this agent, and how you see what did and did not mount.
+registered for this agent, represented in the protected Plugin field, and how
+you see what did and did not register.
 
-## The one thing to internalize: declaration is what mounts
+## The one thing to internalize: declaration is what registers
 
 Every plugin in `<registered_plugin>` carries a `<mount>` stamp, and it is the
-difference between "you can use this" and "this merely exists".
+difference between "this was registered for the agent" and "this merely exists".
 
 | `<mount>` | How it got there | Its skills | Its MCP servers |
 |---|---|---|---|
-| `registered` | Declared in `init.json` `manifest.plugins` | **In your skills catalog**, located inside the plugin | **In `mcp_registry.jsonl`** with `source="plugin:<name>"` — registered, *not running* |
-| `discovered` | Only found on an inherited `manifest.capabilities.skills.paths` directory | Not in your catalog | Not in the registry |
+| `registered` | Declared in `init.json` `manifest.plugins` | **Listed in the protected Plugin field** (`registered[].skills` / `<skill_names>`), with source inside the plugin; **not in the vanilla `skills` catalog** | **In `mcp_registry.jsonl`** with `source="plugin:<name>"` — registered, *not running* |
+| `discovered` | Only found on an inherited `manifest.capabilities.skills.paths` directory | Metadata/count in the protected Plugin field only; not in the vanilla `skills` catalog | Not in the registry |
 
 The asymmetry is deliberate and it is a security boundary. Dropping a directory
 somewhere the skills capability happens to scan must never silently register a
@@ -69,8 +70,8 @@ Two things registration still does **not** do, and both matter:
 | What you might assume | What is actually true |
 |---|---|
 | A registered server is running | **No.** Registration is registry-level, exactly like `addons:[]`. To actually run one, add a matching entry under the top-level `mcp` key in `init.json` and `system(action="refresh")`. |
-| A registered skill was copied into `.library/` | **No.** Nothing is copied. Each validated skill directory inside the plugin is composed into the catalog scan, so the entry's `location` still points inside the plugin. That is why uninstall needs no file deletion. |
-| A registered plugin is trustworthy | **Not implied.** Registration reports what parses and mounts, not what is safe. A plugin is third-party code, and declaring one is the human's decision to make, not yours to make for them. |
+| A registered skill was copied into `.library/` or injected into the vanilla catalog | **No.** Nothing is copied or injected. Its name/count is listed in the protected Plugin field and its source remains inside the plugin, so read it with `file` when needed. That is why uninstall needs no file deletion. |
+| A registered plugin is trustworthy | **Not implied.** Registration reports what parses and is represented, not what is safe. A plugin is third-party code, and declaring one is the human's decision to make, not yours to make for them. |
 
 ## Installing a plugin
 
@@ -93,7 +94,7 @@ There is no install action. Installing is a declaration edit plus a refresh:
    dir. An entry may be a single plugin directory (one carrying `plugin.json`)
    or a *collection* directory whose immediate children are plugin roots.
 3. `system(action="refresh")`. Registration runs before capability setup, so the
-   catalog and the registry are in their mounted state by the first turn.
+   protected Plugin field and the registry reflect the registered state by the first turn.
 4. `plugin(action="info", input={}, reasoning="confirm the mount")` and read
    `registered` — including `skipped`, which is where anything that did not
    mount says why.
@@ -171,26 +172,29 @@ Optional and type-checked when present: `version`, `description`, `homepage`,
 `extensions` (objects). `description` is what becomes `<summary>` in your
 prompt, truncated at 200 characters.
 
-### `skills/` — composed into your catalog
+### `skills/` — listed in the protected Plugin field, not the vanilla catalog
 
 Each subdirectory of `skills/` containing a `SKILL.md` is one skill, per the
 Agent Skills specification (https://agentskills.io/specification). For a
-**registered** plugin these become ordinary entries in your skills catalog, with
-their `location` pointing inside the plugin. For a **discovered** one they are
-counted and nothing more; to use one, read it from `<source>` with `file`.
+**registered** plugin these names/counts are rendered in the protected Plugin
+field, with their source inside the plugin; they do not become entries in the
+vanilla `skills` catalog. For a **discovered** one they are counted in the
+Plugin field and nothing more; to use one, read it from `<source>` with `file`.
 
 Two details worth knowing when you read a plugin's `skill_count`:
 
 - **Grouping directories are walked through.** A directory under `skills/` with
   no `SKILL.md` of its own but only subdirectories is a grouping directory, so
   `skills/group/nested/SKILL.md` is the skill `group/nested`. Reported and
-  mounted are the same set: the count is what the catalog actually holds, not
-  just the top level. A directory with loose files and no `SKILL.md` is
+  validated are the same set: the count is what the protected Plugin field
+  reports, not just the top level. A directory with loose files and no
+  `SKILL.md` is
   corrupted, and is named in `skipped`.
-- **What is mounted is the validated skill list, not the `skills/` directory.**
-  Each skill directory is contained-checked individually and composed into the
-  catalog scan on its own. That is why a skipped skill is genuinely absent from
-  your catalog rather than merely absent from the report.
+- **What is listed is the validated skill list, not the `skills/` directory.**
+  Each skill directory is contained-checked individually and its name/count is
+  rendered in the protected Plugin field. The vanilla `skills` catalog never
+  receives Plugin paths, so a skipped skill is absent from the Plugin field
+  rather than merely absent from the report.
 
 ### `mcp.json` — translated into registry records
 
@@ -278,13 +282,14 @@ Two failure boundaries, straight from the spec:
 - **Whole-plugin:** an unreadable or invalid `plugin.json` rejects the plugin.
   It does not appear at all, registers nothing, and the reason is in `problems`.
 - **Per-component:** a single skill directory or MCP server whose path escapes
-  is skipped, and the rest of the plugin still mounts. The skipped component is
+  is skipped, and the rest of the plugin remains listed. The skipped component is
   named in `problems` and in that plugin's `skipped` list. Skipped means *not
-  mounted*, on both halves: an escaping server never reaches
-  `mcp_registry.jsonl`, and an escaping skill directory is never composed into
-  the catalog — only the validated skill directories are, never their parent.
+  represented*, on both halves: an escaping server never reaches
+  `mcp_registry.jsonl`, and an escaping skill directory is absent from the
+  protected Plugin field — only validated skill directories are listed, never
+  the rejected parent.
 
-If a plugin you expect is missing, or a component of it did not mount, call
+If a plugin you expect is missing, or a component of it was not represented, call
 `plugin(action="info", ...)` and read `problems` and `registered[].skipped` —
 every rejection carries the label, the offending path, and the reason.
 
@@ -302,14 +307,17 @@ only.
   discovered, mcp_appended, mcp_pruned, paths, problems}`.
   - `registered` is the boot registration snapshot: per plugin, `skills`,
     `skills_mounted`, `mcp_servers`, `mcp_registered`, and `skipped`
-    (`{component, reason}` for everything that did not mount).
+    (`{component, reason}` for everything that was not represented).
+    `skills_mounted` is true only when validated plugin skills are present and
+    the skills capability is enabled; it does not mean that Plugin skills enter
+    the vanilla `skills` catalog. The protected Plugin field is their namespace.
   - `discovered` is the discovery-only tier.
   - `paths` is a per-configured-path report (`resolved`, `exists`, `plugins`).
 - `plugin(action="manual", input={}, reasoning="...")` returns this manual body
   on demand, without re-scanning.
 
 **Both actions are read-only.** `info` re-scans and reports; it does not
-register. Mounting happens at boot, so a plugin you just declared needs
+register. Registration happens at boot, so a plugin you just declared needs
 `system(action="refresh")` before it appears as `registered`.
 
 Every worked call in this manual is written in this full form; there is no

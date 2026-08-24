@@ -6,8 +6,8 @@ This official model-facing ``plugin`` family reports third-party Agent Plugins
 
 - **Declared → registered.** ``manifest.plugins`` and its compatibility alias
   name package directories.  The Agent registers those packages at boot, before
-  capability setup: their skill directories become visible in the Plugin catalog
-  and their ``mcp.json`` declarations become ``mcp_registry.jsonl`` records
+  capability setup: their validated skill names become visible in the protected Plugin
+  prompt field and their ``mcp.json`` declarations become ``mcp_registry.jsonl`` records
   stamped ``source="plugin:<name>"``.
 - **Inherited → discovered only.** Plugin packages found on an inherited skills
   path are listed, but cannot mount skills or register MCP servers.  Discovery
@@ -161,15 +161,18 @@ _DESCRIPTION = (
     "configured plugin paths and returns the boot registration snapshot; "
     "`manual` returns the plugin-manual body. Neither action mounts, "
     "unmounts, or launches anything. "
-    "Your per-agent Agent Plugins catalog (agent-plugins.org, v1.0.0). The "
+    "Your protected per-agent Agent Plugins catalog (agent-plugins.org, v1.0.0). The "
     "<registered_plugin> section in your system prompt lists every visible "
     "plugin with a <mount> stamp. `registered` = declared in init.json "
-    "manifest.plugins and mounted at boot: its skills are in your skills "
-    "catalog and its mcp.json servers hold mcp_registry.jsonl records with "
+    "manifest.plugins and registered at boot: its validated skills are "
+    "listed in the protected Plugin field (registered[].skills), not in "
+    "the vanilla skills catalog, and its mcp.json servers hold "
+    "mcp_registry.jsonl records with "
     "source=\"plugin:<name>\" — registered but NOT running, so activation "
     "still needs an init.json top-level mcp entry. `discovered` = merely found "
-    "on an inherited skills path: nothing mounted, skills absent from your "
-    "catalog, MCP servers absent from mcp_registry.jsonl. Before using this "
+    "on an inherited skills path: its metadata is listed in the protected "
+    "Plugin field, but no skills enter the vanilla skills catalog and MCP "
+    "servers are absent from mcp_registry.jsonl. Before using this "
     "tool (inspecting, authoring, installing, or uninstalling a plugin), read "
     "the `plugin-manual` skill — call `manual` to fetch its body (plugin.json "
     "contract, path containment, the registration and uninstall flow), and "
@@ -183,10 +186,10 @@ _EMPTY_INPUT: dict[str, Any] = MANUAL_INPUT_SCHEMA
 
 _ACTION_DESCRIPTION = (
     "info: read-only action; re-scans the configured plugin paths and returns "
-    "the boot registration snapshot (registered plugins with what mounted and "
-    "what was skipped and why, discovered-only plugins, per-path report, "
+    "the boot registration snapshot (registered plugins, their registration "
+    "facts, skipped reasons, discovered-only plugins, per-path report, "
     "problems) without the manual body. manual: return only the plugin-manual "
-    "skill body. Neither action registers or unregisters anything — mounting "
+    "skill body. Neither action registers or unregisters anything — registration "
     "happens at boot from init.json manifest.plugins, so a newly declared "
     "plugin needs system(action=\"refresh\")."
 )
