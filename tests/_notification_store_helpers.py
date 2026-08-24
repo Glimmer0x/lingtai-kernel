@@ -89,7 +89,11 @@ class FakeNotificationStore(NotificationStorePort):
         channel: str,
         expected_version: ExpectedVersion,
         pure_core_mutator: PureCoreMutator,
+        *,
+        owner: str | None = None,
     ) -> CompareUpdateResult:
+        if owner is not None and channel != "daemon":
+            raise ValueError("notification mutation owner is only valid for daemon")
         with self._lock:
             present = channel in self._channels
             current_payload = copy.deepcopy(self._channels.get(channel, {}))

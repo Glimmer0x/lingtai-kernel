@@ -80,8 +80,11 @@ The binder receives only these granted host ports:
   consulted at bind/route time; Vision does not snapshot an Agent or retain one.
 - `configuration` — one immutable `VisionConfiguration` snapshot containing the
   public setup arguments (`vision_service`, provider, `api_key`, `api_key_env`,
-  and opaque provider kwargs). It is not an Agent and is interpreted only by the
-  Vision binder.
+  and opaque provider kwargs). It travels as the kernel `ConfigurationPort`'s
+  copied `values` mapping (`VisionConfiguration.port_values()` on the way in,
+  `VisionConfiguration.from_port_values()` at bind; any other mapping shape is
+  refused with `ToolPluginDeclarationError`). It is not an Agent and is
+  interpreted only by the Vision binder.
 
 `setup` creates that configuration and delegates `DECLARATION` to the official
 registrar. The registrar owns claim/authorization/mount lifecycle; `_bind`

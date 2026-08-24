@@ -15,7 +15,7 @@ from lingtai.kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import FileIOPort, WorkdirPort
 
 __all__ = [
     "DEFAULT_READ_CAP_CHARS",
@@ -34,15 +34,15 @@ def _valid_cap(value: object) -> int | None:
     return value if type(value) is int and value > 0 else None
 
 
-def _runtime_hard_cap(agent: "BaseAgent") -> int:
+def _runtime_hard_cap(file_io: "FileIOPort") -> int:
     """Return the active runtime hard ceiling for provider-visible tool results."""
-    executor_cap = _valid_cap(getattr(getattr(agent, "_executor", None), "_max_result_chars", None))
+    executor_cap = _valid_cap(file_io.max_result_chars)
     if executor_cap is not None:
         return min(executor_cap, READ_HARD_CAP_CHARS)
     return READ_HARD_CAP_CHARS
 
 
-def _resolve_call_cap(agent: "BaseAgent", requested_max_chars: object) -> int:
+def _resolve_call_cap(file_io: "FileIOPort", requested_max_chars: object) -> int:
     """Return the per-call read cap, clamped by the runtime hard ceiling.
 
     ``max_chars`` lets the caller intentionally ask for smaller or larger chunks
@@ -50,7 +50,7 @@ def _resolve_call_cap(agent: "BaseAgent", requested_max_chars: object) -> int:
     prevents provider-visible tool-result blowups. Invalid per-call values are
     ignored and use the read default.
     """
-    runtime_cap = _runtime_hard_cap(agent)
+    runtime_cap = _runtime_hard_cap(file_io)
     requested_cap = _valid_cap(requested_max_chars)
     if requested_cap is None:
         return min(DEFAULT_READ_CAP_CHARS, runtime_cap)
@@ -114,7 +114,7 @@ def _apply_cap(
     return numbered, meta
 
 
-def build_operation(agent: "BaseAgent"):
+def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
     """Return the bound ``read`` operation for the ``file`` family.
 
     The returned callable takes only this action's own validated ``input``
@@ -126,12 +126,12 @@ def build_operation(agent: "BaseAgent"):
         path = args.get("file_path", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}
-        path = resolve_workdir_path(agent, path)
+        path = resolve_workdir_path(workdir.path, path)
         offset = args.get("offset", 1)
         limit = args.get("limit", 2000)
         max_chars = args.get("max_chars")
         try:
-            content = agent._file_io.read(path)
+            content = file_io.read(path)
         except FileNotFoundError:
             # Spill-aware messaging: if the missing file is under
             # tmp/tool-results/, it was an ephemeral sidecar artifact
@@ -142,7 +142,7 @@ def build_operation(agent: "BaseAgent"):
             # as a spill path.
             try:
                 rel = Path(path).resolve().relative_to(
-                    Path(agent._working_dir).resolve()
+                    workdir.path.resolve()
                 )
             except (ValueError, OSError):
                 rel = Path(path)
@@ -162,7 +162,7 @@ def build_operation(agent: "BaseAgent"):
             return {"status": "error", "message": f"Cannot read {path}: {e}"}
         lines = content.splitlines(keepends=True)
         start = max(0, offset - 1)
-        numbered, extra = _apply_cap(lines, start, limit, _resolve_call_cap(agent, max_chars))
+        numbered, extra = _apply_cap(lines, start, limit, _resolve_call_cap(file_io, max_chars))
         result: dict = {
             "content": numbered,
             "total_lines": len(lines),

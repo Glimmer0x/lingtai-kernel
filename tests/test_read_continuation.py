@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from lingtai.adapters.tool_plugin_host import AgentFileIOAdapter
 from lingtai.agent import Agent
 from lingtai.tools.file._read import (
     DEFAULT_READ_CAP_CHARS,
@@ -60,6 +61,25 @@ def _file_agent(tmp_path, *, config=None):
         working_dir=tmp_path / "test",
         capabilities=["file"],
         config=config,
+    )
+
+
+def _file_io_port(agent):
+    """Assemble the same narrow typed port File setup grants per declaration."""
+    file_io = agent._file_io
+    executor = getattr(agent, "_executor", None)
+
+    def max_result_chars():
+        value = getattr(executor, "_max_result_chars", None)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    return AgentFileIOAdapter(
+        read=file_io.read,
+        write=file_io.write,
+        glob=file_io.glob,
+        grep=file_io.grep,
+        last_traversal=lambda: getattr(file_io, "last_traversal", None),
+        max_result_chars=max_result_chars,
     )
 
 
@@ -240,7 +260,7 @@ def test_resolve_call_cap_defaults_to_read_default(tmp_path):
     """Without max_chars, read uses the 100k everyday page budget."""
     agent = _file_agent(tmp_path)
     try:
-        assert _resolve_call_cap(agent, None) == 100_000
+        assert _resolve_call_cap(_file_io_port(agent), None) == 100_000
     finally:
         agent.stop(timeout=1.0)
 
@@ -249,8 +269,9 @@ def test_resolve_call_cap_clamps_to_runtime_hard_cap(tmp_path):
     """max_chars may raise read chunk size, but never beyond the runtime ceiling."""
     agent = _file_agent(tmp_path)
     try:
-        assert _resolve_call_cap(agent, 50_000) == 50_000
-        assert _resolve_call_cap(agent, 200_000) == 200_000
+        file_io = _file_io_port(agent)
+        assert _resolve_call_cap(file_io, 50_000) == 50_000
+        assert _resolve_call_cap(file_io, 200_000) == 200_000
     finally:
         agent.stop(timeout=1.0)
 

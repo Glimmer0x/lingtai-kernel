@@ -26,6 +26,7 @@ from lingtai.kernel.token_ledger import (
     append_token_entry,
     safe_codex_pool_usage_extra,
 )
+from . import dispatch_ledger
 
 
 _MAX_CHECKPOINT_MESSAGE_CHARS = 50_000
@@ -152,6 +153,10 @@ class DaemonRunDir:
         self._state_writer_lock = threading.RLock()
         self._terminal_notification_lock = threading.Lock()
         self._ephemeral_redactions: tuple[str, ...] = ()
+        # A run becomes ledger-tracked only after DaemonManager has durably
+        # appended its acceptance record.  Construction itself must not create
+        # recovery work before the ledger commit point.
+        self._dispatch_sequence: int | None = None
         started_at_iso = self._now_iso()
 
         # New daemon-manager callers pass a compact id as ``run_id`` so the
@@ -242,6 +247,7 @@ class DaemonRunDir:
             # See DaemonManager._reap_dead_parent_daemon_records.
             "owner": "parent",
             "supervisor_pid": None,
+            "dispatch_sequence": None,
         }
 
         self._persist_daemon_state()
@@ -296,6 +302,8 @@ class DaemonRunDir:
         instance._state_writer_lock = threading.RLock()
         instance._terminal_notification_lock = threading.Lock()
         instance._ephemeral_redactions = ()
+        sequence = state.get("dispatch_sequence")
+        instance._dispatch_sequence = sequence if isinstance(sequence, int) and not isinstance(sequence, bool) and sequence > 0 else None
         instance._run_id = state.get("run_id") or path.name
         instance._path = path
         instance._state = state
@@ -382,6 +390,56 @@ class DaemonRunDir:
         """Return a shallow copy of the current daemon.json state."""
         with self._state_writer_lock:
             return dict(self._state)
+
+    def enable_dispatch_tracking(self, sequence: int) -> None:
+        """Record a committed dispatch sequence and create unresolved recovery state.
+
+        Called by ``DaemonManager`` only after the ledger line has been fsynced
+        and before detached execution is launched.  A marker-write failure is
+        allowed to propagate there, preventing a launch with unrecoverable work.
+        """
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("dispatch sequence must be a positive integer")
+        with self._state_transaction():
+            self._dispatch_sequence = sequence
+            self._state["dispatch_sequence"] = sequence
+            self._persist_daemon_state()
+        self._sync_dispatch_recovery(raise_errors=True)
+
+    def _sync_dispatch_recovery(self, *, raise_errors: bool = False) -> None:
+        """Keep small unresolved markers ordered behind authoritative state writes."""
+        sequence = self._dispatch_sequence
+        if sequence is None:
+            candidate = self._state.get("dispatch_sequence")
+            if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
+                sequence = candidate
+                self._dispatch_sequence = candidate
+        if sequence is None:
+            return
+        try:
+            state = self._state.get("state")
+            if state in self._TERMINAL_STATES:
+                dispatch_ledger.clear_marker(self._path.parent.parent, "running", self._run_id)
+                if self._state.get("terminal_notified") is False:
+                    dispatch_ledger.mark_pending_terminal_notification(
+                        self._path.parent.parent, self._run_id, sequence=sequence
+                    )
+                else:
+                    dispatch_ledger.clear_marker(self._path.parent.parent, "pending-terminal", self._run_id)
+            else:
+                dispatch_ledger.mark_running(self._path.parent.parent, self._run_id, sequence=sequence)
+                dispatch_ledger.clear_marker(self._path.parent.parent, "pending-terminal", self._run_id)
+        except Exception as exc:
+            if raise_errors:
+                raise
+            if self._log_callback is not None:
+                try:
+                    self._log_callback(
+                        "daemon_fs_error", em_id=self._handle, run_id=self._run_id,
+                        op="sync_dispatch_recovery", error=str(exc),
+                    )
+                except Exception:
+                    pass
 
     def update_state(self, **fields) -> None:
         """Persist owner-controlled daemon state fields as one write transaction.
@@ -775,33 +833,15 @@ class DaemonRunDir:
         atomic_write_json(path, data, ensure_ascii=False, indent=2)
 
     def _persist_daemon_state(self) -> None:
-        """Atomically write daemon.json, then refresh this daemon's compact
-        self-record — on every daemon turn (see ``session_stats.CONTRACT.md``).
+        """Atomically write authoritative daemon state and recovery markers.
 
-        daemon.json keeps its existing exception behavior (some callers, e.g.
-        ``set_session_id``, deliberately let a write failure propagate). The
-        self-record write is separate and always best-effort: it must never
-        turn a successful daemon.json write into a failed one, and a torn or
-        missing self-record just means this daemon is ignored by the owning
-        agent's bounded aggregation, never a fake zero.
+        ``daemon.json`` is the sole per-run lifecycle/usage truth.  The
+        owning agent's background session summary reads ledger-selected copies
+        directly, so this chokepoint deliberately does not create a duplicate
+        per-turn derived record beside every run.
         """
         self._atomic_write_json(self.daemon_json_path, self._state)
-        try:
-            from lingtai.kernel.session_stats import write_daemon_record
-
-            write_daemon_record(self._path, self._state)
-        except Exception as e:
-            if self._log_callback is not None:
-                try:
-                    self._log_callback(
-                        "daemon_fs_error",
-                        em_id=self._handle,
-                        run_id=self._run_id,
-                        op="write_session_stats_record",
-                        error=str(e),
-                    )
-                except Exception:
-                    pass
+        self._sync_dispatch_recovery()
 
     def _append_jsonl(self, path: Path, entry: dict) -> None:
         """Append one JSON line."""
@@ -1585,6 +1625,9 @@ class DaemonRunDir:
                     "published_at": cls._now_iso(),
                 }
                 atomic_write_json(daemon_json_path, state, ensure_ascii=False, indent=2)
+                # This recovery-only write is authoritative receipt truth; a
+                # lingering marker is removed only after it commits.
+                dispatch_ledger.clear_marker(daemon_json_path.parent.parent.parent, "pending-terminal", str(state.get("run_id") or daemon_json_path.parent.name))
                 return True
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return False

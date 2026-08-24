@@ -267,6 +267,9 @@ class VisionConfiguration:
     It contains exactly the public ``setup()`` arguments, never an Agent. The
     static declaration owns its validation and interpretation at bind time;
     keeping the value immutable makes a refresh bind from one coherent snapshot.
+    The kernel ``ConfigurationPort`` carries a copied mapping (the same shape
+    Shell earned); :meth:`port_values` and :meth:`from_port_values` are the
+    only translation between that mapping and this typed snapshot.
     """
 
     vision_service: Any | None
@@ -274,6 +277,39 @@ class VisionConfiguration:
     api_key: str | None
     api_key_env: str | None
     kwargs: Mapping[str, Any]
+
+    _PORT_FIELDS = ("vision_service", "provider", "api_key", "api_key_env", "kwargs")
+
+    def port_values(self) -> dict[str, Any]:
+        """The mapping handed to the host's ``configuration`` port for this bind."""
+        return {
+            "vision_service": self.vision_service,
+            "provider": self.provider,
+            "api_key": self.api_key,
+            "api_key_env": self.api_key_env,
+            "kwargs": dict(self.kwargs),
+        }
+
+    @classmethod
+    def from_port_values(cls, values: Any) -> "VisionConfiguration":
+        """Rebuild the snapshot from the granted port; refuse any other shape."""
+        if not isinstance(values, Mapping) or set(values) != set(cls._PORT_FIELDS):
+            raise ToolPluginDeclarationError(
+                "vision requires a VisionConfiguration snapshot supplied by "
+                "capability setup through its configuration port"
+            )
+        kwargs = values["kwargs"]
+        if not isinstance(kwargs, Mapping):
+            raise ToolPluginDeclarationError(
+                "vision configuration kwargs must be a mapping"
+            )
+        return cls(
+            vision_service=values["vision_service"],
+            provider=values["provider"],
+            api_key=values["api_key"],
+            api_key_env=values["api_key_env"],
+            kwargs=dict(kwargs),
+        )
 
 
 _DESCRIPTION = (
@@ -691,11 +727,7 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
     reaching through the Agent. Construction creates no transport, process, or
     prompt side effect; the kernel registrar alone activates and mounts.
     """
-    configuration = host.configuration.value
-    if not isinstance(configuration, VisionConfiguration):
-        raise ToolPluginDeclarationError(
-            "vision requires a VisionConfiguration supplied by capability setup"
-        )
+    configuration = VisionConfiguration.from_port_values(host.configuration.values)
     vision_service = configuration.vision_service
     provider = configuration.provider
     manual_reason = ""
@@ -1148,20 +1180,29 @@ def setup(
     resulting handler under the kernel-reserved ``vision`` name. No generic
     ``Agent.add_tool`` path is available to this official family.
     """
-    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+    from lingtai.adapters.tool_plugin_host import (
+        StaticConfigurationAdapter,
+        register_agent_tool_plugins,
+    )
 
+    configuration = StaticConfigurationAdapter(
+        VisionConfiguration(
+            vision_service=vision_service,
+            provider=provider,
+            api_key=api_key,
+            api_key_env=api_key_env,
+            kwargs=dict(kwargs),
+        ).port_values()
+    )
     (bound,) = register_agent_tool_plugins(
         agent,
         [DECLARATION],
-        configurations={
-            "vision": VisionConfiguration(
-                vision_service=vision_service,
-                provider=provider,
-                api_key=api_key,
-                api_key_env=api_key_env,
-                kwargs=dict(kwargs),
-            )
-        },
+        # The snapshot is granted to this declaration alone, through the same
+        # setup-selected seam Shell uses; it is never added to the standard
+        # table for every family.
+        extra_ports_for=lambda declaration: (
+            {"configuration": configuration} if declaration is DECLARATION else {}
+        ),
     )
     if not isinstance(bound.handler, VisionManager):  # pragma: no cover - declaration invariant
         raise ToolPluginDeclarationError("vision declaration bound a non-Vision handler")

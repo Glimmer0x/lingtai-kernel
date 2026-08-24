@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from lingtai.tools.task_card import TaskCardManager, get_description, get_schema, setup
+from lingtai.adapters.tool_plugin_host import AgentTaskCardNotificationsAdapter
+from lingtai.kernel import notifications
+from lingtai.kernel.tool_plugin import ToolPluginHost
+from lingtai.tools.task_card import DECLARATION, TaskCardManager, get_description, get_schema
 
 
 class _FakeAgent:
@@ -35,6 +39,59 @@ class _FakeAgent:
         self.added_tools.append((name, schema, handler, description, glossary_package))
 
 
+class _Lifecycle:
+    def __init__(self, agent: _FakeAgent) -> None:
+        self._agent = agent
+
+    def current_manager(self):
+        return getattr(self._agent, "_task_card_manager", None)
+
+    def retain_manager(self, manager) -> None:
+        self._agent._task_card_manager = manager
+
+    def report_resume_failure(self, error: str) -> None:
+        self._agent.resume_errors = getattr(self._agent, "resume_errors", []) + [error]
+
+
+def _task_card_notifications(agent: _FakeAgent) -> AgentTaskCardNotificationsAdapter:
+    """The production operation-native port over the fake agent's publisher.
+
+    The wire assertions below therefore exercise the real adapter's pinned
+    source/channel/priority/idempotency/extra projection, not a test double.
+    """
+
+    def _submit(turns: int) -> None:
+        notifications.submit(
+            agent,
+            "task_card",
+            data={"source": "task_card.reminder", "turns": turns},
+            header="Task Card reminder",
+            instructions="Check whether the Task Card is absent or stale; update or issue one only if useful.",
+        )
+
+    return AgentTaskCardNotificationsAdapter(
+        agent._enqueue_system_notification,
+        _submit,
+        lambda: notifications.clear(agent, "task_card"),
+    )
+
+
+def _task_card_host(agent: _FakeAgent) -> ToolPluginHost:
+    return ToolPluginHost.grant(
+        DECLARATION,
+        {
+            "workdir": SimpleNamespace(path=agent._working_dir),
+            "shutdown": agent._shutdown,
+            "task_card_lifecycle": _Lifecycle(agent),
+            "task_card_notifications": _task_card_notifications(agent),
+        },
+    )
+
+
+def _manager(agent: _FakeAgent) -> TaskCardManager:
+    return TaskCardManager(_task_card_host(agent))
+
+
 def _write_renderer(workdir: Path, body: str, name: str = "renderer.py") -> str:
     path = workdir / name
     path.write_text(body, encoding="utf-8")
@@ -51,20 +108,23 @@ def agent(tmp_path):
 
 @pytest.fixture
 def manager(agent):
-    value = TaskCardManager(agent)
+    value = _manager(agent)
     yield value
     value.shutdown_for_agent_stop()
 
 
-def test_setup_registers_the_intrinsic_task_card_tool(agent):
-    mgr = setup(agent)
+def test_declaration_binds_the_intrinsic_task_card_tool_through_narrow_ports(agent):
+    host = _task_card_host(agent)
+    bound = DECLARATION.bind(host)
+    mgr = agent._task_card_manager
     assert isinstance(mgr, TaskCardManager)
-    name, schema, handler, description, glossary = agent.added_tools[0]
-    assert name == "task_card"
-    assert schema == get_schema()
-    assert description == get_description()
-    assert glossary is None
-    assert callable(handler)
+    assert bound.name == "task_card"
+    assert bound.schema == get_schema()
+    assert bound.description == get_description()
+    assert callable(bound.handler)
+    assert DECLARATION.requires == (
+        "workdir", "shutdown", "task_card_lifecycle", "task_card_notifications"
+    )
 
 
 def test_description_routes_to_manual_and_file_contract():
@@ -174,7 +234,7 @@ def test_resume_persisted_watch_after_shutdown_rehydrates_watch(agent, manager):
     assert watch_path.is_file()
     assert Path(started["status_path"]).read_text(encoding="utf-8") == "inactive"
 
-    fresh = TaskCardManager(agent)
+    fresh = _manager(agent)
     resumed = fresh.resume_persisted_watch()
     assert resumed is not None
     assert resumed["status"] == "ok"
@@ -232,7 +292,7 @@ def test_resume_clears_descriptor_when_renderer_no_longer_exists(agent, manager)
     Path(renderer).unlink()
     manager.shutdown_for_agent_stop(reason="agent_stop")
 
-    fresh = TaskCardManager(agent)
+    fresh = _manager(agent)
     assert fresh.resume_persisted_watch() is None
     assert not watch_path.exists()
     assert fresh._watch is None
@@ -253,7 +313,7 @@ def test_resume_respects_carried_refresh_budget(agent, manager):
     watch.refreshes_used = 3  # budget exhausted
     manager.shutdown_for_agent_stop(reason="agent_stop")
 
-    fresh = TaskCardManager(agent)
+    fresh = _manager(agent)
     assert fresh.resume_persisted_watch() is None
     assert not Path(started["watch_path"]).exists()
     assert fresh._watch is None
@@ -283,7 +343,7 @@ def test_resume_renderer_failure_writes_active_and_preserves_body(agent, manager
     # The renderer now fails transiently (nonzero exit); the last body stays
     # on disk, exactly the case that used to leave status stuck inactive.
     Path(renderer).write_text("import sys; sys.exit(3)", encoding="utf-8")
-    fresh = TaskCardManager(agent)
+    fresh = _manager(agent)
     resumed = fresh.resume_persisted_watch()
     try:
         assert resumed is not None
@@ -321,7 +381,7 @@ def test_resume_carries_partial_refresh_budget_into_live_watch(agent, manager):
     payload = json.loads(Path(started["watch_path"]).read_text(encoding="utf-8"))
     assert payload["refreshes_used"] == 3
 
-    fresh = TaskCardManager(agent)
+    fresh = _manager(agent)
     resumed = fresh.resume_persisted_watch()
     try:
         assert resumed is not None
@@ -335,8 +395,8 @@ def test_resume_carries_partial_refresh_budget_into_live_watch(agent, manager):
         fresh.shutdown_for_agent_stop()
 
 
-def test_setup_resumes_a_persisted_watch_on_boot(agent, manager):
-    """setup() on a fresh agent rehydrates a persisted watch."""
+def test_declaration_activation_resumes_a_persisted_watch_on_boot(agent, manager):
+    """The fresh declaration bind/activation rehydrates a persisted watch."""
     renderer = _write_renderer(agent._working_dir, _OK_BODY)
     started = manager.handle(
         {
@@ -350,14 +410,17 @@ def test_setup_resumes_a_persisted_watch_on_boot(agent, manager):
     manager.shutdown_for_agent_stop(reason="agent_stop")
 
     fresh_agent = _FakeAgent(agent._working_dir)
-    mgr = setup(fresh_agent)
+    bound = DECLARATION.bind(_task_card_host(fresh_agent))
+    assert bound.activate is not None
+    bound.activate()
+    mgr = fresh_agent._task_card_manager
     try:
         assert isinstance(mgr, TaskCardManager)
         assert mgr._watch is not None
         assert mgr._watch.watch_id == started["watch_id"]
         assert mgr._watch.thread is not None and mgr._watch.thread.is_alive()
         assert Path(started["status_path"]).read_text(encoding="utf-8") == "active"
-        assert fresh_agent.added_tools[0][0] == "task_card"
+        assert callable(bound.handler)
     finally:
         mgr.shutdown_for_agent_stop()
 

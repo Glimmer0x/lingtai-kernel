@@ -15,7 +15,7 @@ related_files:
   - "src/lingtai/prompts/procedures/procedures.md"
   - "reference/substrate-manual/SKILL.md"
   - "reference/environment-variables/SKILL.md"
-  - "src/lingtai/intrinsic_skills/notification-manual/SKILL.md"
+  - "src/lingtai/tools/notification/manual/SKILL.md"
   - "src/lingtai/kernel/agent_readme/CONTRACT.md"
   - "src/lingtai/kernel/agent_readme/README.md.tpl"
 maintenance: >

@@ -771,6 +771,12 @@ class BaseAgent:
         self._llm_worker_refresh_requested: bool = False
         self._llm_worker_refresh_source: str | None = None
 
+        # system.sleep's persisted `.alarm` is shared by the tool handler and
+        # the heartbeat. This narrow lock makes arm/expiry last-writer-wins
+        # without widening notification or lifecycle state ownership.
+        self._sleep_alarm_lock: threading.RLock = threading.RLock()
+        self._sleep_alarm_problem_signature: str | None = None
+
         # Notification sync state (filesystem-as-protocol redesign).
         # _notification_fp: last-seen `.notification/` fingerprint for
         #   change-detection between heartbeat ticks.
@@ -904,6 +910,9 @@ class BaseAgent:
         # impossible, sequence is a bonus ordering signal for one process.
         self._session_stats_last_written_at: float | None = None
         self._session_stats_sequence: int = 0
+        # Created lazily by _write_session_stats_record so the explicit
+        # background owner is only present for agents that publish this record.
+        self._daemon_stats_snapshot = None
 
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
@@ -980,15 +989,17 @@ class BaseAgent:
             tool_result_recovery_lookup_fn=self._recover_pending_tool_result,
         )
 
-        # Boot intrinsics that define an optional ``boot(agent)`` hook. Order
-        # follows the injected registry; the two intrinsics that historically
-        # booted (pad/lingtai, email) both define ``boot`` and run here without
-        # name special-casing. Absent-intrinsic = nothing to boot.
+        # Boot ordinary intrinsics first. Official-intrinsic shims retain the
+        # injected kernel-hook and tool-call-id path, but their public surface is
+        # mounted only by the declared host-plugin registrar below.
         for name in self._intrinsics:
+            if self._intrinsic_registry.get(name, {}).get("official_plugin"):
+                continue
             module = self._intrinsic_modules.get(name)
             boot_fn = getattr(module, "boot", None) if module is not None else None
             if boot_fn is not None:
                 boot_fn(self)
+        self._boot_official_intrinsics()
 
     # ------------------------------------------------------------------
     # Intrinsic wiring
@@ -1006,8 +1017,40 @@ class BaseAgent:
         for name, info in self._intrinsic_registry.items():
             module = info["module"]
             self._intrinsic_modules[name] = module
-            handle_fn = module.handle
-            self._intrinsics[name] = lambda args, fn=handle_fn: fn(self, args)
+            if info.get("official_plugin"):
+                # Context needs the intrinsic dispatcher's private ``_tc_id``
+                # injection for its exact live ToolCallBlock replay, but its
+                # model-facing schema/handler are published exclusively through
+                # the official host mount. This shim is transport routing, not a
+                # second public registration.
+                def _official_dispatch(args, _name=name):
+                    handler = self._tool_handlers.get(_name)
+                    if handler is None:
+                        raise RuntimeError(
+                            f"official intrinsic {_name!r} was dispatched before it mounted"
+                        )
+                    return handler(args)
+
+                self._intrinsics[name] = _official_dispatch
+            else:
+                handle_fn = module.handle
+                self._intrinsics[name] = lambda args, fn=handle_fn: fn(self, args)
+
+    def _boot_official_intrinsics(self) -> None:
+        """Run declared mandatory-plugin wiring after construction or refresh.
+
+        Registry injection still keeps the kernel free of concrete family imports;
+        the flag only distinguishes an internal transport/hook shim from a
+        model-facing intrinsic registration. Each module's own ``boot`` owns the
+        registrar call and therefore the declaration it publishes.
+        """
+        for name, info in self._intrinsic_registry.items():
+            if not info.get("official_plugin"):
+                continue
+            module = self._intrinsic_modules.get(name)
+            boot_fn = getattr(module, "boot", None) if module is not None else None
+            if boot_fn is not None:
+                boot_fn(self)
 
     def _intrinsic_hook(self, intrinsic: str, name: str):
         """Resolve a kernel-facing hook function from an injected intrinsic.
@@ -2768,6 +2811,7 @@ class BaseAgent:
         logged and never interrupts the turn.
         """
         from ..session_stats import (
+            RecentDaemonSnapshot,
             build_agent_record,
             session_stats_refresh_seconds,
             should_refresh_agent_record,
@@ -2782,8 +2826,19 @@ class BaseAgent:
                 session_stats_refresh_seconds(),
             ):
                 return
+            snapshot_owner = getattr(self, "_daemon_stats_snapshot", None)
+            if snapshot_owner is None:
+                snapshot_owner = RecentDaemonSnapshot(self._working_dir)
+                self._daemon_stats_snapshot = snapshot_owner
+            # Never wait for the newest-1000 daemon reads: a blocked storage
+            # read must not delay the heartbeat's liveness publication.
+            snapshot_owner.schedule()
             self._session_stats_sequence += 1
-            record = build_agent_record(self, sequence=self._session_stats_sequence)
+            record = build_agent_record(
+                self,
+                sequence=self._session_stats_sequence,
+                daemon_summary=snapshot_owner.snapshot(),
+            )
             write_agent_record(self._working_dir, record)
             self._session_stats_last_written_at = wall_now
         except Exception as e:

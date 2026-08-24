@@ -4,17 +4,23 @@ contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/task_card/ANATOMY.md
+  - src/lingtai/tools/task_card/BEHAVIORS.md
   - src/lingtai/tools/task_card/__init__.py
   - src/lingtai/tools/task_card/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/registry.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/__init__.py
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/feishu/task_card.py
   - src/lingtai/mcp_servers/feishu/manager.py
   - tests/test_task_card_controller.py
+  - tests/test_task_card_notifications.py
   - tests/test_task_card_proactivity.py
+  - tests/test_tool_plugin_declaration.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
   - tests/test_feishu_programmable_task_cards.py
@@ -61,7 +67,8 @@ declarative artifact and one active watch per agent.
    concepts such as Telegram chat/message IDs, API retries, or consumer
    recovery policy.
 7. Renderer execution failures after a watch exists preserve the last valid body
-   and emit deduped `task_card.error` and `recovered` notifications. Refresh
+   and emit deduped `task_card.error` notifications whose typed state is
+   `error` or `recovered`. Refresh
    exhaustion emits one `task_card.limit` notification keyed by watch and limit;
    its body tells the agent to start a new watch when the underlying work is
    still ongoing, so an expired watch does not silently leave the card dark.
@@ -149,13 +156,56 @@ declarative artifact and one active watch per agent.
     body and lets the updater thread retry, matching live-watch error
     semantics.
 
+## Notification boundary [TK002](BEHAVIORS.md#behavior-tk002)
+
+The producer owns notification policy and constructs one of three immutable
+typed events: `TaskCardErrorNotification`, `TaskCardRecoveredNotification`, or
+`TaskCardLimitNotification`. The family-local `TaskCardNotificationsAdapter`
+is the only bridge from those events to the host, and it consumes **only** the
+kernel `TaskCardNotificationsPort`'s five closed operations —
+`publish_error`, `publish_recovered`, `publish_limit`, `submit_reminder`, and
+`clear_reminder` — forwarding each event's fields by name. It refuses a port
+that offers a generic publisher (`enqueue_system_notification` or any
+`**kwargs` vocabulary), and the manager retains only this typed view: never a
+host object, generic publisher, or service locator. The production host
+adapter behind the port pins the source (`task_card.error` for both error and
+recovered wire states, and `task_card.limit` for refresh exhaustion), the
+`system` channel, deduplication, priority, and the bounded `extra` fields.
+Neither the typed forms nor the native operations have a `source`, `channel`,
+`priority`, or arbitrary `extra`/keyword field, so a Task Card caller cannot
+publish a foreign source, address another channel, or smuggle generic
+notification metadata at either boundary. Reminder submission and clearing
+remain the two separate operations `submit_reminder(turns)` and
+`clear_reminder()`.
+
 ## Port
 
 Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
-`stop`, `remove`, and `manual`.
+`stop`, `remove`, and `manual`. It is the static official
+`ToolPluginDeclaration` for the reserved `task_card` name. Its binder receives
+only `workdir`, `shutdown`, `task_card_lifecycle`, and
+`task_card_notifications`: filesystem/manual paths, cooperative watch stop,
+the retained current-agent manager used by the existing lifecycle hooks, and
+its existing reminder/error/limit emissions as five closed native operations.
+The family immediately wraps that native port in `TaskCardNotificationsAdapter`,
+and the manager retains only that typed operation view. One `TaskCardManager`
+is retained per current Agent through the lifecycle port and rebound (fresh
+ports, same manager and watch) on every refresh; the persisted watch resumes
+only after a successful bind. It MUST NOT receive a whole Agent or mount
+itself; the kernel registrar binds, activates (resume), and mounts it.
 
 ## Adapters
 
+- Declared host adapter: `lingtai.adapters.tool_plugin_host` translates the
+  live Agent into the four Task Card ports. The lifecycle adapter retains the
+  same manager that `base_agent/lifecycle.py` stops and `turn.py` consults for
+  completed-work reminders; the host's `AgentTaskCardNotificationsAdapter`
+  implements the five native operations and pins source/channel/priority/
+  idempotency/bounded extras behind them, and the family-local
+  `TaskCardNotificationsAdapter` maps the typed error/recovered/limit events
+  onto those operations before the manager sees them. Notification and
+  shutdown adapters preserve existing current-agent behavior without exposing
+  the Agent to the plugin.
 - Renderer subprocess: `sys.executable <renderer>` with `cwd` set to the agent
   working directory.
 - Filesystem artifact writer: atomic temp-file write + `fsync` + `os.replace`
@@ -197,9 +247,20 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
     stale descriptors are cleared without resurrecting a dead watch, and the
     resumed watch keeps the same refresh budget rather than silently
     resetting its ceiling.
+11. Notification publication is typed and family-owned: only the three Task
+    Card event forms and the reminder operations may cross the family boundary,
+    and only the five closed native port operations may cross the host
+    boundary; source/channel/foreign-field injection is rejected at both, and
+    the emitted wire forms retain the established error/recovered/limit
+    source, idempotency, priority, and bounded-extra parity.
 
 ## Tests
 
+- `tests/test_task_card_notifications.py` covers the typed error/recovered/limit
+  operations through the production native-port adapter: fixed source/channel
+  and bounded-extra parity, reminder operations, the five-operation port surface
+  with no generic publisher, and foreign source/channel/field negatives at both
+  the native port and the typed event forms.
 - `tests/test_task_card_controller.py` covers intrinsic registration,
   exact paths, atomic ordering, one-watch enforcement, failure/recovery, stop
   semantics, configured defaults/ceilings (including the omitted-value and

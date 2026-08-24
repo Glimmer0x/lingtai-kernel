@@ -187,13 +187,17 @@ class NotificationStorePort(ABC):
         channel: str,
         expected_version: ExpectedVersion,
         pure_core_mutator: PureCoreMutator,
+        *,
+        owner: str | None = None,
     ) -> CompareUpdateResult:
         """Guard and atomically apply one pure current-payload mutation.
 
         ``UNCONDITIONAL`` always runs; ``None`` expects absence; a fingerprint
         tuple expects that delivered version. A conflict never calls the
         mutator. Otherwise its payload/change/value triple is committed and
-        returned as typed operational and policy evidence.
+        returned as typed operational and policy evidence. ``owner`` is only
+        valid for daemon's existing channel family: it names the run whose
+        mini-file is appended without exposing a separate Store operation.
         """
         ...
 

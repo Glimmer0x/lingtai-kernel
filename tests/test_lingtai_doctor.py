@@ -22,6 +22,13 @@ def load_doctor_module():
     return module
 
 
+def _valid_tombstone(*, cleared=None, pending=None) -> dict:
+    return {
+        "version": 1, "epoch": 0, "cleared": cleared or {},
+        "batch_state": {"count": 0, "alarm_fired": False}, "pending": pending,
+    }
+
+
 def test_lingtai_doctor_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(DOCTOR), "--self-test"],
@@ -153,6 +160,41 @@ def test_lingtai_doctor_skill_doc_lists_every_probed_addon():
 
     for name in doctor.ADDON_MODULES:
         assert f"`{name}`" in probe_text, f"SKILL.md omits probed addon {name}"
+
+
+def test_lingtai_doctor_reports_invalid_daemon_tombstone_without_contents(tmp_path):
+    doctor = load_doctor_module()
+    path = tmp_path / ".notification" / "daemon" / ".tombstone"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"secret":"never-report-me"}', encoding="utf-8")
+
+    valid, detail = doctor._daemon_tombstone_health(path)
+
+    assert valid is False
+    assert detail == {"error": "ValueError"}
+    assert "never-report-me" not in repr(detail)
+
+
+def test_lingtai_doctor_rejects_store_fatal_daemon_tombstones(tmp_path):
+    doctor = load_doctor_module()
+    path = tmp_path / ".notification" / "daemon" / ".tombstone"
+    path.parent.mkdir(parents=True)
+    cases = (
+        _valid_tombstone(cleared={
+            "bad.txt": {"raw_sha256": "0" * 64, "event_keys": []}
+        }),
+        _valid_tombstone(pending={
+            "daemon_id": "!!bad", "event_id": "event-1",
+            "prior_batch_state": {"count": 0, "alarm_fired": False},
+            "batch_state": {"count": 1, "alarm_fired": False},
+        }),
+    )
+
+    for value in cases:
+        path.write_text(json.dumps(value), encoding="utf-8")
+        valid, detail = doctor._daemon_tombstone_health(path)
+        assert valid is False
+        assert detail == {"error": "ValueError"}
 
 
 def test_lingtai_doctor_type_hints_resolve():

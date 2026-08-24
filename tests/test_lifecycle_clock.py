@@ -363,6 +363,7 @@ def _one_tick_heartbeat_agent(clock, *, state, snapshot_interval, snapshot_port=
         _asleep=Mock(),
         _set_state=Mock(),
         _write_status_snapshot=Mock(),
+        _write_session_stats_record=Mock(),
         _sync_notifications=Mock(),
         _setup_telegram_task_card=Mock(),
         _log=Mock(),
