@@ -201,9 +201,12 @@ injected official surface remains one schema and one canonical package manual
 when `capabilities={"email": None}` or `disable=["email"]`; neither opt-out
 form can reveal a generic fallback.
 
-The official mount swaps the same-name intrinsic handler while retaining the
-module-level hook exports. The public name, action order, closed LTP envelope,
-manual result, mailbox side effects, and error shapes are unchanged.
+The mounted official model-facing handler coexists with the retained same-name
+intrinsic lookup shim. Model dispatch uses the official handler; kernel hook
+lookup remains available through the shim, and `_mail` prefers the official
+handler with the shim as fallback. The module-level hook exports, public name,
+action order, closed LTP envelope, manual result, mailbox side effects, and error
+shapes are unchanged.
 
 `tests/test_email_official_tool_plugin.py` proves the production typed adapter,
 foreign-action rejection before manager invocation, normalization-before-request,

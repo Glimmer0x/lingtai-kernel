@@ -97,11 +97,12 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    `### Relationship to current runtime`; at authoring time lines 285-613).
    Confirm its opening **Status** paragraph distinguishes the current base
    `mcp` evidence and the family-generic C integration register's remaining
-   targets from the separately landed `avatar`, `context`, and `daemon` evidence; that
-   `mcp` is named as the current base reference slice and Avatar's `DECLARATION`
-   in `src/lingtai/tools/avatar/__init__.py`, Context's `DECLARATION` in
-   `src/lingtai/tools/context/__init__.py`, and Daemon's in
-   `src/lingtai/tools/daemon/__init__.py` are named as actual landed vertical
+   targets from the separately landed `avatar`, `context`, `daemon`, and `email`
+   evidence; that `mcp` is named as the current base reference slice and the
+   `DECLARATION` values in `src/lingtai/tools/avatar/__init__.py`,
+   `src/lingtai/tools/context/__init__.py`,
+   `src/lingtai/tools/daemon/__init__.py`, and
+   `src/lingtai/tools/email/__init__.py` are named as actual landed vertical
    proof; that the C register's remaining names are targets rather than
    candidate-merge claims; and that each claim is scoped to the declaration
    clauses only; that every remaining negative claim
@@ -176,7 +177,7 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.tools.daemon import DECLARATION as daemon; from lingtai.tools.email import DECLARATION as email; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; print(mcp.name, mcp.public_actions, mcp.requires, avatar.name, avatar.public_actions, avatar.requires, context.name, context.public_actions, context.requires, daemon.name, daemon.public_actions, daemon.requires, email.name, email.public_actions, email.requires, OFFICIAL_TOOL_PLUGIN_NAMES)"
    ```
 
-   Expect `mcp ('info', 'manual') ('workdir', 'prompt_section') avatar ('spawn', 'rules', 'manual') ('workdir', 'avatar_parent') context ('molt', 'summarize', 'rebuild', 'manual') ('workdir', 'context_runtime') daemon ('emanate', 'list', 'ask', 'check', 'reclaim', 'manual') ('workdir', 'daemon_runtime') email ('send', 'check', 'read', 'dismiss', 'reply', 'reply_all', 'search', 'archive', 'delete', 'contacts', 'add_contact', 'remove_contact', 'edit_contact', 'manual') ('workdir', 'email_runtime') ('mcp', 'avatar', 'context', 'daemon', 'email')` — five declarations constructed at import with no Agent, their actual narrow host ports, four reserved official names, and no server, transport, or catalog record involved.
+   Expect `mcp ('info', 'manual') ('workdir', 'prompt_section') avatar ('spawn', 'rules', 'manual') ('workdir', 'avatar_parent') context ('molt', 'summarize', 'rebuild', 'manual') ('workdir', 'context_runtime') daemon ('emanate', 'list', 'ask', 'check', 'reclaim', 'manual') ('workdir', 'daemon_runtime') email ('send', 'check', 'read', 'dismiss', 'reply', 'reply_all', 'search', 'archive', 'delete', 'contacts', 'add_contact', 'remove_contact', 'edit_contact', 'manual') ('workdir', 'email_runtime') ('mcp', 'avatar', 'context', 'daemon', 'email')` — five declarations constructed at import with no Agent, their actual narrow host ports, five reserved official names, and no server, transport, or catalog record involved.
 5. Inspect the **kernel-shipped MCP class** of the governed surface. A
    registry-only grep proves nothing about these families, so check them
    directly:

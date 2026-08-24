@@ -322,10 +322,12 @@ shipped in this distribution. That is two classes today, and both are inside
 this contract's classification:
 
 - **Registry families** — the intrinsics and built-in capability rows
-  registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`, `context`, `daemon`, and `plugin` are first-party families and
-  are in scope *as families*; the external records they render are not. `mcp`,
-  `avatar`, `context`, and `daemon` are declared under the selected form below; every other family in this class is a future migration
-  unit, and no family in this class is wrapped as an MCP plugin package today.
+  registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`, `context`,
+  `daemon`, `email`, and `plugin` are first-party families and are in scope *as
+  families*; the external records they render are not. `mcp`, `avatar`,
+  `context`, `daemon`, and `email` are declared under the selected form below;
+  every other family in this class is a future migration unit, and no family in
+  this class is wrapped as an MCP plugin package today.
 - **Kernel-shipped MCP families** — the model-facing families this
   distribution ships as MCP server packages under `src/lingtai/mcp_servers/`.
   The curated catalog families (`imap`, `telegram`, `feishu`, `wechat`,

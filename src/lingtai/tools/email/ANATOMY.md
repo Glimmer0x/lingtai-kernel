@@ -94,7 +94,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
   at call time. `handle()` strips `_tc_id` at this family's legacy/hook boundary.
   `BaseAgent._boot_official_intrinsics()` calls `boot()` during construction and
   refresh after it has wired the official intrinsic shim.
-- **Inbound (kernel convenience API):** `base_agent/messaging.py:_mail` sends through this intrinsic and carries the LTP v2 envelope (`{"action": "send", "input": {...}}`).
+- **Inbound (kernel convenience API):** `base_agent/messaging.py:_mail` prefers the mounted official handler and falls back to the retained intrinsic shim; it carries the LTP v2 envelope (`{"action": "send", "input": {...}}`).
 - **Outbound (family composition):** `__init__.py` imports `ChildTool`/`ToolFamily`
   from `../tool_family/` and `build_manual_child`/`MANUAL_INPUT_SCHEMA` from
   `../tool_family/manual.py`. Action handlers depend on the local
@@ -106,7 +106,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
 - **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`).
 - **Outbound (unread-email producer):** Mail arrival writes `.notification/email.json` via `publish_notification` (or deletes it via `clear_notification` when count hits 0). `base_agent/messaging.py:_on_normal_mail` calls `_rerender_unread_digest(agent)` (resolved via `_intrinsic_hook("email", "_rerender_unread_digest")` at `src/lingtai/kernel/base_agent/messaging.py:61`) which uses `primitives.py:_render_unread_digest` for count/newest compatibility and `_unread_notification_context` for full-body entries, then `system.publish_notification(workdir, "email", header=…, icon="📧", data={count, newest_received_at, email_ids, emails})`. The kernel's `_sync_notifications` poll picks up the fingerprint change on the next heartbeat tick and updates the wire's `notification(action="check")` block. See root `ANATOMY.md` "Notifications" for the full architecture.
 - **Outbound (bounce notification):** `primitives.py:_mailman` calls `agent._enqueue_system_notification(source="email.bounce", ref_id=msg_id, body=...)` (`primitives.py:280`). The system events producer in `base_agent/messaging.py` merges the bounce into the events list inside `.notification/system.json` (capped at 20 newest) under a per-agent `threading.Lock`. Bounces share `system.json` with daemon notices, MCP-bridged events, and any future kernel events — they are NOT aggregated into the unread email notification at `email.json`.
-- **Data flow:** All state lives in the filesystem under `mailbox/` and `.notification/`. The `EmailManager` is stateless except for `_last_sent` (duplicate-send guard) and `_scheduler_thread` (background timer).
+- **Data flow:** Durable state lives in the filesystem under `mailbox/` and `.notification/`. The live `EmailManager` retains only `_agent`, `_last_sent` (duplicate-send guard), and `_dup_free_passes`; it has no scheduler thread.
 
 ## Key invariants
 
