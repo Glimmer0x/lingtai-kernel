@@ -333,7 +333,7 @@ def test_manual_returns_body_and_path_without_double_wrapping(file_agent):
     body = result["content"][0]["text"]
     manual_path = result["structuredContent"]["manual_path"]
     assert "name: file-manual" in body
-    assert manual_path.endswith("capabilities/file/SKILL.md")
+    assert manual_path.endswith("capabilities/file-manual/SKILL.md")
     assert Path(manual_path).read_text(encoding="utf-8") == body
     # No nested child-result envelope inside the action result.
     assert "content" not in result["structuredContent"]

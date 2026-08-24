@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lingtai.tools.bash import BashManager
-from lingtai.tools.avatar import AvatarManager, setup as setup_avatar
+from lingtai.tools.avatar import AvatarManager
 from lingtai.tools.avatar._launcher import AvatarLaunchReceipt
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
@@ -387,15 +387,6 @@ class TestAddCapability:
 
 class TestUnifiedAvatarTool:
     """Regression coverage for the avatar_spawn + avatar_rules → avatar merge."""
-
-    def test_setup_registers_exactly_one_public_tool(self):
-        """setup() must register exactly one tool named 'avatar' and no old names."""
-        agent = MagicMock()
-        setup_avatar(agent)
-        assert agent.add_tool.call_count == 1
-        (name,), kwargs = agent.add_tool.call_args
-        assert name == "avatar"
-        assert kwargs["schema"]["properties"]["action"]["enum"] == ["spawn", "rules", "manual"]
 
     def test_schema_is_ltp_v2_action_separated_envelope(self):
         """The root is exactly the LTP v2 envelope, not the old flat object.

@@ -130,10 +130,9 @@ _OPERATION_MODULES = (_read, _write, _edit, _glob, _grep)
 
 # ``file-manual`` is the established public installation/result path. The package
 # manual under ``tools/file/manual`` is the only body owner; ``file`` is accepted
-# only as a transitional fallback while a stale worktree still uses the new
-# candidate installer mapping. The fallback is intentionally read-only and is
-# removed from the integration path once the shared installer maps File's package
-# manual to the legacy destination.
+# only as a read-only transitional fallback for stale candidate-era installs.
+# The integrated shared installer maps File's package manual directly to the
+# established legacy destination, so it never creates the fallback path.
 _LEGACY_MANUAL_SKILL = "file-manual"
 _TRANSITIONAL_MANUAL_SKILL = "file"
 _REDIRECT_MARKER = "redirect: src/lingtai/tools/file/manual/SKILL.md"
@@ -143,11 +142,10 @@ def _load_file_manual(source: Any) -> dict[str, Any]:
     """Load File's one authoritative manual with explicit path compatibility.
 
     Integrated agents install the package-owned body at ``file-manual`` so the
-    public path remains stable. A candidate worktree may still install it at
-    ``file`` until the serialized Agent installer delta lands; accepting that
-    path here keeps local File tests and refreshes usable without making the
-    legacy intrinsic source a second body owner. A retained redirect marker is
-    never returned as the operational manual.
+    public path remains stable. A stale candidate-era worktree may still have
+    installed it at ``file``; accepting that path keeps old worktrees readable
+    without making the retained legacy intrinsic source a second body owner. A
+    redirect marker is never returned as the operational manual.
     """
     legacy = load_installed_manual(source, _LEGACY_MANUAL_SKILL)
     if legacy.get("status") == "ok" and _REDIRECT_MARKER not in legacy.get("manual", ""):
@@ -313,10 +311,9 @@ DECLARATION = ToolPluginDeclaration(
     actions=_DECLARED_ACTIONS,
     input_schemas=_DECLARED_SCHEMAS_BY_ACTION,
     manual_input_schema=MANUAL_INPUT_SCHEMA,
-    # The package-owned manual is installed at the established legacy
-    # ``capabilities/file-manual`` path by the serialized installer delta.
-    # ``_load_file_manual`` accepts ``capabilities/file`` only as a transitional
-    # fallback for this stale candidate worktree.
+    # The package-owned manual is installed at the established
+    # ``capabilities/file-manual`` path. ``_load_file_manual`` accepts
+    # ``capabilities/file`` only as a read-only stale-candidate fallback.
     manual=_LEGACY_MANUAL_SKILL,
     description=get_description(),
     binder=_bind,
@@ -341,6 +338,32 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     ports, binds this declaration, and mounts the resulting family. Re-running
     setup on refresh is idempotent for this exact declaration.
     """
-    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+    from lingtai.adapters.tool_plugin_host import (
+        AgentFileIOAdapter,
+        register_agent_tool_plugins,
+    )
 
-    register_agent_tool_plugins(agent, [DECLARATION])
+    # Capture only the two concrete runtime objects File consumes. The adapter
+    # stores their bound operations and narrow fact readers, never the Agent.
+    file_io = agent._file_io
+    executor = getattr(agent, "_executor", None)
+
+    def _max_result_chars() -> int | None:
+        value = getattr(executor, "_max_result_chars", None)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    file_io_port = AgentFileIOAdapter(
+        read=file_io.read,
+        write=file_io.write,
+        glob=file_io.glob,
+        grep=file_io.grep,
+        last_traversal=lambda: getattr(file_io, "last_traversal", None),
+        max_result_chars=_max_result_chars,
+    )
+    register_agent_tool_plugins(
+        agent,
+        [DECLARATION],
+        extra_ports_for=lambda declaration: (
+            {"file_io": file_io_port} if declaration is DECLARATION else {}
+        ),
+    )

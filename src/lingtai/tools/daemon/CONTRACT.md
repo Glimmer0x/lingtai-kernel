@@ -7,13 +7,16 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 10
-last_changed_at: "2026-08-18"
+contract_version: 12
+last_changed_at: "2026-08-24"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/tool_family/__init__.py
@@ -24,6 +27,8 @@ related_files:
   - src/lingtai/services/mcp.py
   - src/lingtai/kernel/llm/base.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/notification_store/CONTRACT.md
+  - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/llm/service.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
@@ -63,6 +68,9 @@ related_files:
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/services/mcp.py
@@ -205,17 +213,21 @@ The former flat root `summary` boolean is replaced by the canonical root
 rather than silently ignored, and the legacy `summary` spelling remains
 accepted there for historical/pending calls.
 
-`_tool_family.py` owns the child registry, the composed schema, and the
-`DaemonFamilyDispatcher` that translates one envelope call into
-`DaemonManager.handle`'s unchanged legacy flat shape. `DaemonManager` remains
-the untouched engine: batch emanation, backend routing, run directories, the
-detached supervisor, `daemon_common` completion signaling, cancellation,
-timeouts, terminal notifications, and result/error persistence are unchanged by
-the migration. `DaemonManager.handle`'s own `action="manual"` branch is retained
-as that internal flat shape only; the registered model-facing `manual` is the
-shared reserved `build_manual_child(agent, "daemon")` child, returning the
-canonical `content[0].text` / `structuredContent.manual_path` result verbatim
-with no double wrap, and reaching no engine method.
+`DECLARATION` in `daemon/__init__.py` is Daemon's static official identity:
+its five operational actions use `_tool_family.py`'s strict schemas and the
+kernel appends the reserved installed `manual` child. Its binder receives only
+`workdir` plus the capability-native `daemon_runtime` port; it constructs the
+unchanged `DaemonManager` and `DaemonFamilyDispatcher` without retaining an
+Agent. The runtime port preserves the real current-agent service/model,
+regular tool schemas and handlers, MCP-name exclusion, preset sandbox/load,
+notification, time, Task Card, logging, and resolved manager options through
+named operations. `DaemonManager` remains the engine for batch emanation,
+backend routing, run directories, supervision, completion signaling,
+cancellation, timeouts, terminal notifications, and result/error persistence.
+Its legacy flat `action="manual"` branch remains for internal callers only; the
+registered `manual` is `build_manual_child(workdir, DECLARATION.manual)`,
+returning canonical `content[0].text` / `structuredContent.manual_path`
+verbatim with no manager operation or double wrap.
 
 `list`, `check`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
 are the three side-effectful actions.
@@ -482,10 +494,17 @@ surface through the per-run mini-channel
 `.notification/daemon/<daemon-id>.json`, rather than ordinary parent request
 text. `daemon` is a built-in notification channel; both the in-process manager
 and detached supervisor use the typed `NotificationStorePort.compare_update_channel`
-operation, and the production adapter routes each run id to its own file. The
-sibling `.notification/daemon.json` is a derived report containing only
-mini-file run/state statistics; it is excluded from aggregate snapshot,
-fingerprint, and dismissal. Existing root event facts may be retained only as
+operation, and the production adapter routes each run id through the narrow
+Daemon-only `owner` hot path to its own file. That append is unconditional and
+idempotent under its run/control resources; it does not scan the aggregate or
+rebuild the sibling report. The Store's durable
+`.notification/daemon/.tombstone` control record is the aggregate-clear,
+dismiss, and CAS linearization authority: it commits a visibility cut before
+best-effort mini-file compaction, so a crash cannot resurrect a cleared event.
+A corrupt control record fails loudly into Store/doctor repair visibility rather
+than blacking out daemon notices. The sibling `.notification/daemon.json` is a
+derived report containing only mini-file run/state statistics; it is excluded
+from aggregate snapshot, fingerprint, and dismissal. Existing root event facts may be retained only as
 report migration metadata and are never re-delivered; new event writes always
 route to the run's mini-file and never fall back to the root. The run directory
 may write a temporary `daemon.json.terminal_notification_claim` before publication to

@@ -40,8 +40,8 @@ The `file` package is the sole owner of the public `file` tool and its
 operational manual body. It exposes one model-facing handler over six canonical
 children — `read`, `write`, `edit`, `glob`, `grep`, `manual` — and owns their
 implementations outright. The old `file-manual` source path remains only as a
-compatibility marker; the package manual is copied to that established runtime
-path by the serialized installer integration.
+compatibility marker; the integrated installer copies the package manual to that
+established runtime path and excludes the marker from standalone copying.
 
 ## Components
 

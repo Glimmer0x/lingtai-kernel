@@ -241,7 +241,7 @@ Per `../CONTRACT.md` invariant 9, a family must not hide a stronger child
 action behind a weaker family-level posture. This repository has no ToolGuard,
 no MCP-style `annotations`/`readOnlyHint` surface, and no per-tool risk field
 at the time of this migration — the enforcement owner is the operation itself
-(the injected `FileIOService`) plus the agent workdir boundary, exactly as
+(the granted `FileIOPort`) plus the separate agent workdir boundary, exactly as
 before. Should an outer guard or annotation surface be introduced and prove
 unable to discriminate per action, the truthful family-level declaration is the
 **strongest** child posture — mutating, not read-only. Declaring `file`
@@ -261,7 +261,7 @@ likewise stays false so exact procedure is not summarized away.
 
 The family owns exactly one manual body: `action="manual"` returns the
 package-owned `tools/file/manual/SKILL.md`, whose frontmatter remains
-`name: file-manual`. The serialized installer preserves the established public
+`name: file-manual`. The integrated installer preserves the established public
 result/install path at `capabilities/file-manual/SKILL.md`; the File-local loader
 accepts `capabilities/file/SKILL.md` only as a read-only transition fallback for
 stale candidate worktrees. The retained `intrinsic_skills/file-manual/SKILL.md`

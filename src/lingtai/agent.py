@@ -33,6 +33,24 @@ from lingtai.llm.service import (
 from lingtai.kernel.prompt import build_system_prompt
 
 
+# Runtime manual destinations remain stable even when a capability packages its
+# manual beside code. This map is deliberately small and explicit: it is not a
+# discovery or normalization rule for future manual collisions.
+_TOOL_MANUAL_DESTINATION_NAMES: dict[str, str] = {
+    "bash": "shell",
+    "web_search": "web",
+    "context": "context-manual",
+    "file": "file-manual",
+}
+
+# No-delete Context recut only: the retained standalone context-manual source is
+# a documented redirect to the canonical tools/context/manual package. It may
+# yield to that exact canonical source, and no other same-name collision may.
+_CANONICAL_TOOL_MANUAL_LEGACY_REDIRECTS: dict[str, str] = {
+    "context": "context-manual",
+}
+
+
 def _detached_spawn_kwargs() -> dict[str, Any]:
     """Platform kwargs for launching a detached agent-run child.
 
@@ -573,6 +591,11 @@ class Agent(BaseAgent):
             shutil.rmtree(intrinsic_dir)
         (intrinsic_dir / "capabilities").mkdir(parents=True, exist_ok=True)
 
+        # The first installer records which canonical package owns every installed
+        # destination. The standalone installer below may yield only through the
+        # one reviewed canonical-to-legacy redirect relation declared above.
+        canonical_manual_owners: dict[tuple[str, str], str] = {}
+
         def install_from(pkg, subdir: str) -> None:
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
@@ -586,19 +609,22 @@ class Agent(BaseAgent):
                 if entry.name == "browser":
                     continue
                 src = entry / "manual"
-                if src.is_dir():
-                    # Retained implementation directories map to canonical
-                    # model-facing names exactly once.
-                    if entry.name == "bash":
-                        destination_name = "shell"
-                    elif entry.name == "web_search":
-                        destination_name = "web"
-                    else:
-                        destination_name = entry.name
-                    destination = intrinsic_dir / subdir / destination_name
-                    if destination.exists():
-                        continue
-                    shutil.copytree(src, destination)
+                if not src.is_dir():
+                    continue
+                destination_name = _TOOL_MANUAL_DESTINATION_NAMES.get(
+                    entry.name, entry.name
+                )
+                destination = intrinsic_dir / subdir / destination_name
+                owner_key = (subdir, destination_name)
+                if destination.exists():
+                    prior_owner = canonical_manual_owners.get(owner_key, "unknown")
+                    raise RuntimeError(
+                        "intrinsic manual destination collision: canonical tool "
+                        f"{entry.name!r} and {prior_owner!r} both target "
+                        f"{destination}"
+                    )
+                shutil.copytree(src, destination)
+                canonical_manual_owners[owner_key] = entry.name
 
         def install_skills_from(
             pkg, subdir: str, *, exclude: frozenset[str] = frozenset()
@@ -622,7 +648,30 @@ class Agent(BaseAgent):
                     or entry.name in exclude
                 ):
                     continue
-                shutil.copytree(entry, intrinsic_dir / subdir / entry.name)
+                destination = intrinsic_dir / subdir / entry.name
+                owner = canonical_manual_owners.get((subdir, entry.name))
+                if destination.exists():
+                    # Context's old intrinsic tree remains in the source package
+                    # solely as a documented redirect. The exact allowlist and the
+                    # redirect marker make this exception auditable; a new,
+                    # unrelated same-name collision fails rather than silently
+                    # choosing installer order.
+                    redirect_name = _CANONICAL_TOOL_MANUAL_LEGACY_REDIRECTS.get(owner)
+                    marker = f"legacy_redirect: src/lingtai/tools/{owner}/manual"
+                    redirect_skill = entry / "SKILL.md"
+                    is_documented_redirect = (
+                        redirect_name == entry.name
+                        and redirect_skill.is_file()
+                        and marker in redirect_skill.read_text(encoding="utf-8")
+                    )
+                    if is_documented_redirect:
+                        continue
+                    raise RuntimeError(
+                        "intrinsic manual destination collision: standalone skill "
+                        f"{entry.name!r} conflicts with canonical owner {owner!r} at "
+                        f"{destination}; no canonical-to-legacy redirect allowlist applies"
+                    )
+                shutil.copytree(entry, destination)
 
         # Every tool package with a manual/ installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
@@ -2198,6 +2247,10 @@ class Agent(BaseAgent):
                     self._setup_capability(name, **cap_kwargs)
                 except (ValueError, ImportError, TypeError) as e:
                     self._log("capability_skipped", capability=name, reason=str(e))
+
+        # Mandatory declared intrinsics are mounted through their own official
+        # registrar wiring on refresh as well as on first construction.
+        self._boot_official_intrinsics()
 
         # Install intrinsic manuals (wipe-and-rewrite .library/intrinsic/)
         # from the bundles shipped with each enabled capability.

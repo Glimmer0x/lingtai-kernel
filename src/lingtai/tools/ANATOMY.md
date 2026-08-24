@@ -19,6 +19,8 @@ related_files:
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/file/CONTRACT.md
+  - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/CONTRACT.md
   - src/lingtai/tools/soul/ANATOMY.md
@@ -76,9 +78,11 @@ maintenance: |
   descriptor/catalog route is the retained external-transport/launcher adapter
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. They are
-  not a claim that any family here beyond `mcp` is declared or wrapped today,
-  and the normative rules — including the selected form, the reserved
-  official-name rule, and the governed-surface classification — stay in the
+  not a claim that every shared-C target has merged: `mcp` is the base reference,
+  while the separately landed `avatar`, Context, Daemon, Email, and File vertical
+  slices are actual declared evidence; only the remaining target names stay
+  candidates. The normative rules — including the selected form,
+  the reserved official-name rule, and the governed-surface classification — stay in the
   Contract and in the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
@@ -94,9 +98,9 @@ capability names and lazy adapters.
 - `CONTRACT.md` — the LingTai Tool Protocol (LTP): the future canonical
   model-facing tool call contract, the two-level family/action settings
   addressing and ownership rules, the explicit per-tool migration boundary, and
-  `### Tool-to-MCP Plugin Contract`, the additive future target for wrapping
-  each first-party family in the selected curated-descriptor MCP plugin package
-  form that owns its manual.
+  `### Tool-to-MCP Plugin Contract`, the per-family migration target selecting
+  the kernel-owned declared host-plugin form and package-owned manual, with the
+  curated descriptor route retained only as an external-transport adapter.
 - `BEHAVIORS.md` — the paired LABT file: LP001 guards the closed LTP envelope,
   LP002 guards the Tool-to-MCP Plugin Contract's status, its two-class governed
   surface, its single selected wrapper form, the document graph, and the
@@ -109,9 +113,11 @@ capability names and lazy adapters.
 - `task_card/` — intrinsic channel-neutral declarative Task Card producer: one
   public `task_card` family, one agent-local artifact under `taskcard/`, and
   no transport ownership (`src/lingtai/tools/task_card/ANATOMY.md`).
-- `file/` — sole owner of the public `file` capability: the composed schema,
-  the envelope dispatch, and all five operation implementations in
-  `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`
+- `file/` — sole owner of the public `file` capability: its static sixth
+  official `DECLARATION`, composed schema/envelope dispatch, all five operation
+  implementations in `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`,
+  and the one package manual body installed as `file-manual`; the retained
+  standalone source is only an excluded redirect marker
   (`src/lingtai/tools/file/ANATOMY.md`).
 - `vision/` — public `vision` composition owner: one action-separated family
   with canonical `analyze`/`manual` children over the existing direct
@@ -160,8 +166,9 @@ capability names and lazy adapters.
   family: `check`, three atomic dismiss actions, and `manual`
   (`src/lingtai/tools/notification/ANATOMY.md`). Its public model-facing schema
   is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
-  builds its dispatching family per call, because an intrinsic receives `agent`
-  per call rather than owning a manager.
+  retains a legacy dispatching family per call, because an intrinsic receives `agent`
+  per call rather than owning a manager; this is not the generic registrar/bridge
+  dispatch path.
 - `context/` — mandatory intrinsic owning the public `context` family: the
   agent's context lifecycle and hygiene — `molt`, `summarize`, `rebuild`, and
   `manual` — behind one root (`src/lingtai/tools/context/ANATOMY.md`). It
@@ -220,10 +227,11 @@ calls into the internal flat shape `ShellManager.handle` consumes. `bash` is
 the one-way legacy input alias for `shell` (`registry.py`) and is never
 emitted as a public name or a second schema.
 
-The public `file` row imports `lingtai.tools.file` lazily; that owner binds its
-five operation modules once per manager and reaches the working tree only
-through the injected `FileIOService`. Unlike `bash`/`web_search`, the file
-migration kept no configuration aliases: `read`, `write`, `edit`, `glob`, and
+The public `file` row imports `lingtai.tools.file` lazily; that owner registers
+its static declaration, binds the five operation modules once per host grant,
+and reaches the working tree only through `WorkdirPort` plus the capability-native
+`FileIOPort` implemented by `AgentFileIOAdapter`. Unlike `bash`/`web_search`, the
+file migration kept no configuration aliases: `read`, `write`, `edit`, `glob`, and
 `grep` are unknown capability names that fail loudly. Capability groups no
 longer exist at all — `file` was `_GROUPS`' only entry, so the map,
 `expand_groups`, and every consumer were deleted rather than left empty.
@@ -234,14 +242,39 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
-kernel-owned declared host-plugin contract, and two families in this package
-are wired onto it today. `src/lingtai/kernel/tool_plugin/ANATOMY.md` owns the
-static `ToolPluginDeclaration`, least-privilege host ports, reserved
-`OFFICIAL_TOOL_PLUGIN_NAMES`, and fail-fast registrar. `mcp` binds its
-workdir/prompt ports; `src/lingtai/tools/file/__init__.py` binds workdir plus
-its earned `FileIOPort`, preserving its public actions and result shapes while
-keeping real I/O outside the family. Every other family here still boots through
-`setup(agent)` with the whole `Agent` and is a future migration unit.
+kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
+Context, Daemon, Email, and File are accepted vertical evidence. Avatar binds
+only `workdir`/`avatar_parent`; Context `workdir`/`context_runtime`; Daemon
+`workdir`/`daemon_runtime`; Email `workdir`/`email_runtime`; and File exactly
+`workdir`/`file_io`. The remaining candidate targets are only `notification`,
+`soul`, `vision`, `web`, `system`, and `task_card`; the list is not a generic
+dispatch or admission mechanism.
+These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
+selected form's own component: the static `ToolPluginDeclaration`, the
+least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
+the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is
+the current base reference slice — `mcp` binds against `workdir` and
+`prompt_section` instead of the whole `Agent`, with its public tool name,
+actions, inputs, and result shapes unchanged. `src/lingtai/tools/avatar/__init__.py`
+`DECLARATION` is the landed detached-peer slice — `avatar` binds against
+`workdir` and `avatar_parent` instead of the whole `Agent`.
+`src/lingtai/tools/context/__init__.py` is the current in-process lifecycle
+slice: it binds `workdir` plus `context_runtime`, keeps the established live
+engines behind that narrow port, and owns the canonical package manual installed
+as `context-manual`. `src/lingtai/tools/email/__init__.py` is the fifth slice:
+it owns `EmailRuntimeRequest`/`EmailRuntimePort`, creates or replaces the real
+EmailManager before using `extra_ports_for` to grant a call-time
+`AgentEmailRuntimeAdapter`, and remains a mandatory injected official family
+with no capability/manifest row. `src/lingtai/tools/file/__init__.py` is the
+sixth slice: its declaration composes the unchanged operations against
+`workdir`/`file_io`, and `setup` grants a typed `AgentFileIOAdapter` only through
+`extra_ports_for`; the adapter has no whole Agent, generic dispatch, or mount
+operation. The Agent installer maps the package-owned File manual body to the
+established `capabilities/file-manual` destination and excludes the standalone
+redirect marker, so no `capabilities/file` destination can overwrite or duplicate
+it. Candidate-local families may still boot through legacy `setup(agent)` paths
+until their own vertical slice lands; that compatibility fact is not a generic
+registrar/bridge dispatch model.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

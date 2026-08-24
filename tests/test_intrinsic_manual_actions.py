@@ -79,7 +79,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "system-manual",
             "web",
             "vision",
-            "file",
+            "file-manual",
             "task_card",
         )
     }
@@ -99,7 +99,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     shell_manager = shell_tool.ShellManager.__new__(shell_tool.ShellManager)
     shell_manager._agent = agent
     daemon_manager = daemon_tool.DaemonManager.__new__(daemon_tool.DaemonManager)
-    daemon_manager._agent = agent
+    daemon_manager._workdir = SimpleNamespace(path=tmp_path)
     web_manager = web_tool.setup(agent)
     vision_manager = vision_tool.setup(agent)
     task_card_manager = task_card_tool.setup(agent)
@@ -129,7 +129,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "task_card": ("task_card", lambda: task_card_manager.handle(
             {"action": "manual", "input": {}, "reasoning": "load task card guidance"}
         )),
-        "file": ("file", lambda: file_handler(
+        "file": ("file-manual", lambda: file_handler(
             {"action": "manual", "input": {}, "reasoning": "load file guidance"}
         )),
     }
