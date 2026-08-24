@@ -72,9 +72,9 @@ from . import email, system, context, soul  # noqa: E402  (lingtai.tools.<pkg>)
 from . import psyche  # noqa: E402  (lingtai.tools.psyche)
 
 INTRINSICS: dict[str, dict[str, Any]] = {
-    "email": {"module": email},
+    "email": {"module": email, "official_plugin": True},
     "system": {"module": system},
-    "context": {"module": context},
+    "context": {"module": context, "official_plugin": True},
     "psyche": {"module": psyche},
     "soul": {"module": soul},
 }

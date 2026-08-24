@@ -12,12 +12,28 @@ related_files:
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
-  - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
+  - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/manual/SKILL.md
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/manual/SKILL.md
+  - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/manual/SKILL.md
+  - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/email/manual/SKILL.md
+  - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/notification/manual/SKILL.md
+  - src/lingtai/kernel/notifications.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_family_avatar_migration.py
+  - tests/test_context_declared_tool_plugin.py
+  - tests/test_daemon.py
+  - tests/test_email_official_tool_plugin.py
+  - tests/test_notification_delay_alarm.py
+  - tests/test_notification_store.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -25,7 +41,7 @@ maintenance: |
   BEHAVIORS.md, the Port module, the production Adapter
   (src/lingtai/adapters/tool_plugin_host.py), the host mount seam
   (src/lingtai/kernel/base_agent/tools.py), the owning LTP contract
-  (src/lingtai/tools/CONTRACT.md), the one declared slice and its manual, the
+  (src/lingtai/tools/CONTRACT.md), declared slices and their manuals, the
   Composition Root, and the contract tests. OFFICIAL_TOOL_PLUGIN_NAMES is
   normative: adding, removing, or renaming a reserved official name is a change
   to this contract and must move the list, this file, BEHAVIORS.md, and
@@ -43,8 +59,8 @@ maintenance: |
 ## Purpose
 Guarded by: [TP001](BEHAVIORS.md#behavior-tp001), [TP002](BEHAVIORS.md#behavior-tp002)
 
-This component is the kernel's boundary for **one declared official
-model-facing tool plugin**. Every official tool family in this distribution
+This component is the kernel's boundary for **one declared official**
+model-facing tool plugin. Every official tool family in this distribution
 follows one declared plugin contract: a static declaration of its identity and
 public actions, a bind step against a least-privilege host facade, and a
 kernel-owned registrar that reserves official names and refuses a conflict
@@ -54,8 +70,11 @@ It owns exactly four things:
 
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
-2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `ToolMountPort`) through
-   which a plugin controls the live Agent body, and the `ToolPluginHost` facade
+2. The kernel host Ports (`WorkdirPort`, `PromptSectionPort`,
+   `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
+   `NotificationStatePort`, `ToolMountPort`) and Email's family-owned
+   `EmailRuntimePort`, through which a plugin controls the live Agent body, and
+   the `ToolPluginHost` facade
    that grants a declaration exactly the ports it named.
 3. `OFFICIAL_TOOL_PLUGIN_NAMES` — the auditable, static, kernel-owned reserved
    list of official plugin names.
@@ -101,8 +120,12 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today two families are declared:
-  `mcp` and `notification`.
+  vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
+  `daemon`, `email`, and `notification` are declared; every remaining target
+  stays outside this contract. Notification is a mandatory injected official
+  family: its declaration remains mounted once through the existing official
+  boot route on construction and refresh even when its capability is null or
+  listed in `disable`.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -129,14 +152,26 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
-| `NotificationStatePort` | `dismiss`, `delay`, and hook-registry operations | Agent-bound Notification Core operations for the `notification` slice. It exposes neither Agent, Store, delivery fingerprint, nor producer state, so Core retains all dismissal, guard, delay, timer, and registry policy. |
+| `AvatarParentPort` | `parent_name`, `venv_path`, `has_rule_privilege()` | Avatar-only parent context: the identity placed in a newborn prompt, optional runtime location inherited into its init, and the existing any-admin-value gate for rules. It grants no mutable admin/configuration surface or Agent reference. |
+| `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
+| `DaemonRuntimePort` | named model/tool/preset/notification/log operations | Daemon-only parent-runtime boundary: inherited service and regular tool snapshots, preset sandbox/load, live notification route, time, Task Card, logging, and resolved manager options. It never grants the Agent or a mount operation. |
+| `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, bounded `log` | Notification-only Core delegation. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |
+| `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` because the `mcp` slice consumes them, plus
-`notification_state` because the `notification` slice delegates real
-agent-scoped Notification Core operations through it. Families that later need
-to drive the live Agent body earn their ports one real slice at a time.
+`workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
+`daemon_runtime`, `email_runtime`, and `notification_state`: `mcp` consumes the
+first two as the shared-C base reference; Avatar, Context, and Daemon consume
+their respective narrow runtime ports; Email consumes `workdir` plus its
+Email-owned `email_runtime` boundary; and Notification consumes exactly
+`workdir` plus `notification_state`. `email_runtime` is a grant name, not a
+universal kernel Protocol. Its one production adapter is family-specific; the
+Notification base-table adapter is still granted only to a declaration that
+requires it. Neither expands a family into a generic Agent or dispatch seam.
+Later families must earn a named capability-native port with implementation,
+adapter, declaration, and vertical evidence rather than pre-enumerating a
+dispatch escape hatch.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -148,11 +183,28 @@ argument surface** handed to a plugin, not about deep object-graph isolation.
 
 `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set,
 placed outside the kernel package so the dependency points inward
-(`Adapter -> Port <- Core`). `AgentWorkdirAdapter`, `AgentPromptSectionAdapter`, and
-`AgentNotificationStateAdapter` translate the live `BaseAgent` into grantable
-ports. The notification adapter stores only Core callbacks bound to the agent,
-not the Agent/Store itself, preserving the existing Core state machine. `agent_host_ports` builds one declaration's grantable
-table; `register_agent_tool_plugins` is the composition/registrar wiring helper.
+(`Adapter -> Port <- Core`). `AgentWorkdirAdapter` and
+`AgentPromptSectionAdapter` translate the live
+`BaseAgent` into the grantable ports, each constructed from a bound method or
+one narrow read closure rather than from the agent object.
+`AgentAvatarParentAdapter` supplies Avatar's identity/runtime/authorization
+facts without passing the Agent through. `AgentDaemonRuntimeAdapter` supplies
+Daemon's named runtime operations; its notification operation looks up the
+current host route when publishing, so a replaced failing route keeps terminal
+state retryable rather than reporting a stale callback as published.
+`AgentEmailRuntimeAdapter` holds only a manager reader, performs the
+Email-owned action check before a single flattened manager call, and reads a
+replacement manager live; it never uses `_intrinsics` or a tool-handler route.
+`AgentNotificationStateAdapter` holds only Notification Core callbacks: a
+`dismiss_channel(..., invoked_by="notification")` partial, delay, hook, and
+bounded logging operations. It does not pass the Notification declaration an
+Agent, Store, producer state, fingerprint, generic handler, or `ToolMountPort`.
+Daemon's host runtime continues to omit the parent `email` official surface, so
+its separately accepted explicit task-scoped daemon-email MCP route is not
+silently widened by Email's parent declaration. `agent_host_ports` builds one
+declaration's grantable table;
+`register_agent_tool_plugins` is the
+composition/registrar wiring helper.
 
 The registrar-local mount seam reaches `BaseAgent._mount_official_tool`, then
 `_add_tool` at the common model-facing boundary
@@ -163,9 +215,14 @@ common-boundary rejection for reserved official names. Direct generic `add_tool`
 external stdio/HTTP catalogs, and foreign registrar declarations cannot overwrite
 an existing official claim; same-name replacement for nonreserved tools remains.
 
-The Composition Root stays `src/lingtai/agent.py` and the capability `setup()`
-it drives: it selects which declarations are registered and when. This
-component never selects.
+The Composition Root stays `src/lingtai/agent.py`: dynamic capability `setup()`
+hooks and injected official-family `boot()` hooks select when a declaration is
+registered. Email is the latter: its boot creates/replaces its real manager,
+then uses `extra_ports_for` to grant `email_runtime`. Notification is also a
+mandatory injected official family, registered through that existing route with
+its static `DECLARATION` and canonical package-owned manual; capability null and
+`disable` declarations do not suppress its first-construction or refresh mount.
+This component never selects.
 
 ## Contract rules
 
@@ -248,12 +305,20 @@ component never selects.
 
 ## Contract tests
 
-`tests/test_tool_plugin_declaration.py` is the shared contract suite:
+`tests/test_tool_plugin_declaration.py` is the shared primitive/slice suite;
+`tests/test_tool_family_avatar_migration.py` supplies Avatar's focused declared
+vertical proof; `tests/test_context_declared_tool_plugin.py` supplies Context's
+focused static-declaration, restricted-runtime-port, canonical-manual, and
+installer-collision proof; `tests/test_daemon.py` preserves Daemon manager
+lifecycle coverage, including terminal-notification retry behavior;
+`tests/test_email_official_tool_plugin.py` supplies Email's manager/port,
+no-row/one-mount, and refresh-replacement proof; and
+`tests/test_notification_delay_alarm.py` plus `tests/test_notification_store.py`
+preserve Notification Core delay/timer and Store behavior:
 
-- compact live-slice coverage: `mcp` remains claimed/mounted with its
-  prompt/workdir ports, and `notification` is claimed/mounted with its
-  workdir/state ports, package-owned manual, check placeholder, and
-  Core-backed dismissal;
+- declaration staticness and the `mcp`/`avatar`/`context`/`daemon`/`email`/
+  `notification` declared-versus-composed surfaces, including the official
+  Daemon binding manager's live notification-route retry regression;
 - construction-time validation, including the reserved `manual` action,
   duplicate/empty actions, schema/action agreement, and the non-grantable
   `tool_mount` port;
@@ -268,8 +333,9 @@ component never selects.
   failing a real `Agent(...)` boot instead of being absorbed as
   `capability_skipped`;
 - declared-versus-shipped agreement — a plugin advertising undeclared actions
-  or no action enum is refused at `bind()` with nothing mounted or claimed, and both `mcp` and `notification` derive manual destination and per-action
-  input schemas from their declarations;
+  or no action enum is refused at `bind()` with nothing mounted or claimed, and
+  `mcp`'s manual destination and per-action `input` schemas follow its
+  declaration;
 - atomicity, stated exactly — a mid-batch host-port failure leaves the earlier
   member mounted and claimed;
 - claim-map lifecycle — the claim is reachable through the public
@@ -288,12 +354,20 @@ component never selects.
   only this plugin's protected section;
 - kernel isolation — no file under `src/lingtai/kernel/` imports
   `lingtai.tools`, with relative imports resolved so the kernel's own
-  `base_agent.tools` module is not mistaken for it.
+  `base_agent.tools` module is not mistaken for it;
+- Avatar's static declaration, local packaged-manual result, restricted port
+  grant, preserved spawn/rules facts, and one live registrar mount;
+- Email's static declaration, canonical package manual, one mounted schema, no
+  capability/manifest manager row, null/disable parity, and a production adapter
+  that observes a replaced manager at call time without intrinsic dispatch;
+- Notification's static `DECLARATION`, exact `workdir`/`notification_state`
+  grant, no-Agent/no-Store boundary, package-owned canonical manual, unchanged
+  `check` placeholder, one claimed/mounted schema and handler under both
+  capability opt-out forms on construction and refresh, and real
+  Core-backed `dismiss_channel` behavior.
 
 Also decisive for a change here:
 `tests/test_mcp_capability.py`, `tests/test_tool_family_mcp_migration_parity.py`,
-`tests/test_notification_tool.py`, `tests/test_notification_sync.py`,
-`tests/test_notification_delay_alarm.py`,
 `tests/test_mcp_identity_discovery.py` (the slice's unchanged public behavior),
 `tests/test_curated_mcp_plugin_package.py` (the external transport route is
 undisturbed), and `tests/test_architecture_documents.py`.

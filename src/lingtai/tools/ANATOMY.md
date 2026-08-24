@@ -76,9 +76,10 @@ maintenance: |
   descriptor/catalog route is the retained external-transport/launcher adapter
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. They are
-  not a claim that any family here beyond `mcp` is declared or wrapped today,
-  and the normative rules — including the selected form, the reserved
-  official-name rule, and the governed-surface classification — stay in the
+  not a claim that every shared-C target has merged: `mcp` is the base reference,
+  while the separately landed `avatar`, Context, Daemon, Email, and Notification
+  vertical slices are actual declared evidence; only the remaining target names stay candidates. The normative rules — including the selected form,
+  the reserved official-name rule, and the governed-surface classification — stay in the
   Contract and in the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
@@ -141,7 +142,7 @@ capability names and lazy adapters.
 - `system/` — mandatory intrinsic owning the public `system` family: runtime,
   lifecycle, preset, and identity-naming actions behind one model-facing root
   (`src/lingtai/tools/system/ANATOMY.md`). It owns no public context-hygiene
-  action — `summarize.py` stays here as the private engine `context` drives. Like `soul` and `notification` it is
+  action — `summarize.py` stays here as the private engine `context` drives. Like `soul` it is
   an intrinsic rather than a manager-owning capability, so it composes its
   schema from a module-level schema-only family and builds a dispatching one
   per `handle(agent, args)` call.
@@ -156,13 +157,14 @@ capability names and lazy adapters.
   the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
   package's only schema/description pair, while `ShellManager` remains the
   unchanged execution engine behind an internal-only flat call shape.
-- `notification/` — always-on official declared host plugin owning the public
-  `notification` family: `check`, three atomic dismiss actions, hook registry,
-  consumer delay, and `manual` (`src/lingtai/tools/notification/ANATOMY.md`).
-  Its ToolFamily-composed LTP v2 envelope is bound through the kernel registrar
-  to `workdir` plus a narrow Notification Core state port; it never receives a
-  whole Agent or recreates producer/dismissal state.
-
+- `notification/` — always-on declared official family owning the public
+  `notification` action set (`check`, three atomic dismiss actions, hook-registry
+  actions, `delay`, and `manual`; `src/lingtai/tools/notification/ANATOMY.md`).
+  Its static `DECLARATION` is registered through the official host-plugin route,
+  binds only `workdir` and `notification_state`, and preserves the ToolFamily
+  LTP v2 surface without receiving the Agent or a direct intrinsic dispatcher.
+  Its Host adapters retain presentation-only rules while Notification Core owns
+  all producer guards, Store mutation, and delay/timer policy.
 - `context/` — mandatory intrinsic owning the public `context` family: the
   agent's context lifecycle and hygiene — `molt`, `summarize`, `rebuild`, and
   `manual` — behind one root (`src/lingtai/tools/context/ANATOMY.md`). It
@@ -171,8 +173,8 @@ capability names and lazy adapters.
   the public `system` summarize action moved in. `summarize` records only;
   `rebuild` is the sole active full reconstruction: canonical prompt composition,
   summary application, then provider replay. Refresh/molt invoke the same
-  internal contract passively. Like `soul` it builds its family
-  per call and alone consumes kernel `_tc_id`.
+  internal contract passively. Like `soul` it builds its family per call and
+  alone consumes kernel `_tc_id`.
 - `pad/` — mandatory `append | manual` family. `append` validates/persists pinned
   references without hot-loading; private `_pad_load` participates only in the
   Agent's canonical reconstruction path (`src/lingtai/tools/pad/ANATOMY.md`).
@@ -235,16 +237,32 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
-kernel-owned declared host-plugin contract, and exactly one family in this
-package is wired onto it today. These are the roles it separates, and where
-each one already lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
+kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
+Context, Daemon, Email, and Notification are accepted vertical evidence. Avatar
+binds only `workdir`/`avatar_parent`; Context binds `workdir`/`context_runtime`;
+Daemon binds `workdir`/`daemon_runtime`; Email binds `workdir`/`email_runtime`;
+and Notification binds `workdir`/`notification_state`. The remaining candidate
+targets are only `file`, `soul`, `vision`, `web`, `system`, and `task_card`; the
+list is not a generic dispatch or admission mechanism.
+These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
 the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is
-the one declared slice — `mcp` binds against two granted host ports instead of
-the whole `Agent`, with its public tool name, actions, inputs, and result
-shapes unchanged. Every other family here still boots through `setup(agent)`
-with the whole `Agent` and is a future migration unit.
+the current base reference slice — `mcp` binds against `workdir` and
+`prompt_section` instead of the whole `Agent`, with its public tool name,
+actions, inputs, and result shapes unchanged. `src/lingtai/tools/avatar/__init__.py`
+`DECLARATION` is the landed detached-peer slice — `avatar` binds against
+`workdir` and `avatar_parent` instead of the whole `Agent`.
+`src/lingtai/tools/context/__init__.py` is the current in-process lifecycle
+slice: it binds `workdir` plus `context_runtime`, keeps the established live
+engines behind that narrow port, and owns the canonical package manual installed
+as `context-manual`. `src/lingtai/tools/email/__init__.py` is the fifth slice:
+it owns `EmailRuntimeRequest`/`EmailRuntimePort`, creates or replaces the real
+EmailManager before using `extra_ports_for` to grant a call-time
+`AgentEmailRuntimeAdapter`, and remains a mandatory injected official family
+with no capability/manifest row. Candidate-local families may still boot through
+their legacy `setup(agent)` paths until their own vertical slice lands; that
+compatibility fact is not a generic registrar/bridge dispatch model.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

@@ -10,9 +10,19 @@ related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/notification/__init__.py
-  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/kernel/notifications.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_family_avatar_migration.py
+  - tests/test_context_declared_tool_plugin.py
+  - tests/test_daemon.py
+  - tests/test_email_official_tool_plugin.py
+  - tests/test_notification_delay_alarm.py
+  - tests/test_notification_store.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
   with CONTRACT.md and ANATOMY.md (tridirectional loop): when a behavior clause
@@ -20,9 +30,13 @@ maintenance: |
   the least-privilege grant, the reserved official name list, or the
   check-before-bind ordering — update the guarding LABT here in the same change.
   Keep every command copy-paste executable from the repository root. When a
-  second family recuts onto the contract, or when authoring-time line numbers
-  drift, replace the affected evidence with that family's own proof rather than
-  leaving a stale pass.
+  further family recuts onto the contract, or when authoring-time line numbers
+  drift, extend the affected evidence with that family's own focused proof rather
+  than leaving a stale pass. The shared C register is family-generic and distinguishes
+  target reserved names from candidate merge evidence. `mcp` is the shared-C base
+  reference; Avatar, Context, Daemon, Email, and Notification are current
+  vertical evidence. Ports remain least-privilege and tool-specific, while
+  registrar mounts are runtime-bound rather than per-call Agent dispatch.
 ---
 # Declared Host Tool Plugin Behavior Tests
 
@@ -48,12 +62,13 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 1. Prove the declaration exists and validates before any Agent does:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION; print(DECLARATION.name, DECLARATION.actions, DECLARATION.public_actions, DECLARATION.requires)"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.notification import DECLARATION as notification; print(mcp.name, mcp.actions, mcp.public_actions, mcp.requires); print(notification.name, notification.requires, notification.public_actions)"
    ```
 
-   Expect `mcp ('info',) ('info', 'manual') ('workdir', 'prompt_section')`. No
-   `Agent` was constructed; the reserved `manual` action is appended, not
-   declared.
+   Expect `mcp ('info',) ('info', 'manual') ('workdir', 'prompt_section')` and
+   `notification ('workdir', 'notification_state')` followed by its declared
+   actions plus one reserved `manual`. No `Agent` was constructed; both static
+   declarations append rather than declare the reserved action.
 
 2. Prove the public model-facing surface is unchanged by the recut:
 
@@ -70,11 +85,10 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.mcp import DECLARATION; h = ToolPluginHost('mcp', {'workdir': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
    ```
 
-   Expect `('workdir', 'prompt_section', 'notification_state') ('workdir',)` printed, then an
+   Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime', 'daemon_runtime', 'email_runtime', 'notification_state') ('workdir',)` printed, then an
    `AttributeError` whose message says the plugin *did not require host port*
    `'prompt_section'`. Confirm `tool_mount` is absent from
-   `GRANTABLE_HOST_PORTS`. The `notification_state` port is separately earned
-   by `lingtai.tools.notification`; it is absent from this `mcp` facade.
+   `GRANTABLE_HOST_PORTS`.
 
 4. Prove the family reaches the live Agent body only through granted ports:
 
@@ -126,7 +140,8 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 7. Run the contract suite:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_tool_plugin_declaration.py
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
+     tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py tests/test_context_declared_tool_plugin.py tests/test_daemon.py tests/test_email_official_tool_plugin.py tests/test_notification_delay_alarm.py tests/test_notification_store.py
    ```
 
 ### Expected evidence
@@ -145,13 +160,21 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 - [ ] Step 6: the family derives its name, `input` schemas, and manual
       destination from its declaration, and `bind()` refuses a plugin
       advertising anything other than `public_actions`.
-- [ ] Step 7: the suite passes.
+- [ ] Notification: its static `DECLARATION` requires exactly `workdir` and
+      `notification_state`; the granted host exposes neither Agent nor Store;
+      one official schema and handler remain on construction and refresh under
+      both null-capability and `disable` opt-outs; its package owns the canonical
+      installed manual; `check` retains its deliberate placeholder; and a real
+      Core-backed `dismiss_channel` returns the established success shape and
+      clears the live mirror.
+- [ ] Step 7: the shared suite plus Avatar's, Context's, Daemon's, Email's, and
+      Notification's focused declared/Core slices pass.
 
 ### Pass / Fail
 
 Pass when every box above is observed. **Fail loudly** if a declaration needs a
-live Agent to construct, if the public `mcp` surface changed, if an ungranted
-port is reachable, if `tool_mount` becomes grantable, if any code path hands a
+live Agent to construct, if an official family's public surface changed, if an
+ungranted port is reachable, if `tool_mount` becomes grantable, if any code path hands a
 whole `Agent` to a plugin, if a family restates its name, its per-action input
 schemas, or its manual destination instead of deriving them from its own
 declaration, or if the kernel package imports `lingtai.tools`.

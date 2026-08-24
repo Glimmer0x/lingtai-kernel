@@ -1,5 +1,9 @@
-"""Generic test seam for dispatching an already-declared official tool."""
-from __future__ import annotations
+"""Family-agnostic seams for declared host-plugin tests.
+
+This helper intentionally exercises only the generic declaration/host boundary.
+Family-specific setup, runtime handlers, and manual paths belong in each
+candidate's own vertical slice and must not be imported here.
+"""
 
 from typing import Any
 
@@ -8,15 +12,9 @@ from lingtai.kernel.tool_plugin import ToolPluginDeclaration, ToolPluginHost
 
 
 def dispatch_declared_tool(
-    declaration: ToolPluginDeclaration,
-    agent: Any,
-    args: dict[str, Any],
-) -> dict[str, Any]:
-    """Dispatch through the production host adapter and declaration binder.
+    declaration: ToolPluginDeclaration, agent: Any, args: dict[str, Any]
+) -> Any:
+    """Bind one declaration against the agent's least-privilege host ports."""
 
-    This helper is intentionally family-agnostic: callers choose the declared
-    family and the live/stub agent supplies its real host ports. It does not
-    duplicate a tool handler or construct Notification-specific callbacks.
-    """
     host = ToolPluginHost.grant(declaration, agent_host_ports(agent, declaration.name))
     return declaration.bind(host).handler(args)

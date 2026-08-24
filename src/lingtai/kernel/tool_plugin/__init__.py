@@ -45,6 +45,9 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "ContextRuntimePort",
+    "AvatarParentPort",
+    "DaemonRuntimePort",
     "NotificationStatePort",
     "ToolMountPort",
     "ToolPluginHost",
@@ -65,10 +68,11 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by one real vertical
-#: slice this component ships with (``mcp`` or ``notification``). Root
-#: ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so a later
-#: family adds the port it actually needs together with its own slice.
+#: Earned, not enumerated: each name below is consumed by a real vertical
+#: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
+#: ``email``, or ``notification``).
+#: Root ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so a
+#: later family adds the port it actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
@@ -76,6 +80,10 @@ MANUAL_ACTION = "manual"
 GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "workdir",
     "prompt_section",
+    "avatar_parent",
+    "context_runtime",
+    "daemon_runtime",
+    "email_runtime",
     "notification_state",
 )
 
@@ -88,7 +96,9 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "notification")
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
+    "mcp", "avatar", "context", "daemon", "email", "notification"
+)
 
 
 # Opaque capability used only by the production host adapter's private
@@ -175,12 +185,135 @@ class PromptSectionPort(Protocol):
         """Replace this plugin's protected prompt section with *body*."""
 
 
+class ContextRuntimePort(Protocol):
+    """Run the Context family's live lifecycle operations.
+
+    This is intentionally a capability-shaped operation port rather than the
+    Agent or a bag of its private state. ``molt`` preserves the live chat
+    selection/wipe/replay transaction; ``summarize`` preserves record-only
+    history compaction; ``rebuild`` preserves full prompt composition before
+    summary application and provider replay. Context receives no other live
+    Agent authority through this port.
+    """
+
+    def molt(self, args: dict) -> dict:
+        """Run one agent-initiated Context molt with validated action arguments."""
+
+    def summarize(self, args: dict) -> dict:
+        """Record Context summaries without reconstructing provider context."""
+
+    def rebuild(self, args: dict) -> dict:
+        """Reconstruct prompt/context, then apply summaries and provider replay."""
+
+
+class AvatarParentPort(Protocol):
+    """The parent facts Avatar needs to spawn and control its own subtree.
+
+    This is deliberately Avatar-specific rather than a second whole-Agent
+    facade: spawning needs the parent identity and inherited runtime location,
+    while rules control needs only the already-decided authorization bit.  It
+    grants no mutable administration surface, no generic configuration, and no
+    tool mounting capability.
+    """
+
+    @property
+    def parent_name(self) -> str:
+        """The parent identity to put in the newborn's first prompt."""
+
+    @property
+    def venv_path(self) -> str | None:
+        """Optional parent runtime location inherited by a newborn avatar."""
+
+    def has_rule_privilege(self) -> bool:
+        """Whether this parent may distribute rules through its avatar subtree."""
+
+
+class DaemonRuntimePort(Protocol):
+    """Daemon's capability-native view of the current agent runtime.
+
+    Daemon needs more than a directory: it inherits the parent model service,
+    the currently mounted regular tool surface, selected preset loading, one
+    notification route, compact runtime settings, and event logging.  Those
+    facts are exposed as named operations rather than as a whole ``Agent``.
+    The port deliberately owns no model-facing mount operation; that remains
+    registrar-only through :class:`ToolMountPort`.
+    """
+
+    @property
+    def service(self) -> Any:
+        """The parent service whose effective model configuration Daemon inherits."""
+
+    @property
+    def tool_schemas(self) -> tuple[Any, ...]:
+        """Current parent dynamic schemas, in their host order."""
+
+    @property
+    def tool_handlers(self) -> Mapping[str, Callable[[dict], dict]]:
+        """Current parent dynamic dispatch handlers by public tool name."""
+
+    @property
+    def mcp_tool_names(self) -> frozenset[str]:
+        """Names occupied by parent MCP tools, which Daemon never auto-inherits."""
+
+    @property
+    def language(self) -> str:
+        """Resolved parent prompt language."""
+
+    @property
+    def max_aed_attempts(self) -> int:
+        """Resolved parent empty-response retry limit."""
+
+    @property
+    def tool_call_guard(self) -> Any:
+        """The parent guard supplied to daemon-local tool execution, if any."""
+
+    @property
+    def manager_options(self) -> Mapping[str, Any]:
+        """Resolved construction options for this daemon manager binding."""
+
+    def setup_preset_capability(
+        self, name: str, kwargs: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Callable[[dict], dict]]]:
+        """Build one preset capability's isolated tool surface without mounting it."""
+
+    def read_preset_from_init(self) -> Mapping[str, Any]:
+        """Read the raw selected-preset policy block, or return an empty mapping."""
+
+    def load_preset(self, name: str) -> dict:
+        """Load one parent-authorized preset through the host's canonical route."""
+
+    def enqueue_daemon_notification(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        idempotency_key: str | None,
+        skip_if_idempotency_key_exists: bool,
+        extra: Mapping[str, Any],
+        channel: str,
+    ) -> None:
+        """Publish one parent-facing Daemon notification through the host."""
+
+    def has_active_task_card_watch(self) -> bool:
+        """Whether the host has a live Task Card watch for Daemon presentation."""
+
+    def attach_daemon_manager(self, manager: Any) -> None:
+        """Retain this binding's manager for the capability setup return value."""
+
+    def now_iso(self) -> str:
+        """Render the host-configured current timestamp for a daemon prompt."""
+
+    def log(self, event_type: str, **fields: Any) -> None:
+        """Record one Daemon lifecycle event through the host journal."""
+
+
 class NotificationStatePort(Protocol):
     """Notification Core operations bound to one live agent's real state.
 
     The notification family may ask Core to manipulate notification-owned
     mirrors and hook registration, but it never receives the Agent, its Store,
-    delivery fingerprints, or producer state directly.  The host adapter binds
+    delivery fingerprints, or producer state directly. The host adapter binds
     each operation to the real agent before the plugin is composed, preserving
     Core's allowlist, producer-guard, stale-version, acknowledgement, timer,
     and Store semantics rather than recreating a parallel local state machine.

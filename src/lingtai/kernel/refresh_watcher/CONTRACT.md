@@ -1,6 +1,6 @@
 ---
 name: refresh-watcher
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/refresh_watcher/ANATOMY.md
@@ -10,6 +10,9 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - src/lingtai/kernel/refresh_watcher/MANUAL.md
   - src/lingtai/kernel/process_match.py
+  - src/lingtai/kernel/notification_store/CONTRACT.md
+  - src/lingtai/kernel/notification_store/_mutation_lock.py
+  - src/lingtai/adapters/notification_store_lock.py
   - src/lingtai/adapters/refresh_watcher.py
   - src/lingtai/adapters/posix/refresh_watcher.py
   - src/lingtai/adapters/posix/refresh_watcher_process.py
@@ -59,7 +62,12 @@ event policy.
 The generated program is still rendered by
 `watcher_program.render_watcher_script(request)` and still crosses the existing
 compact `encode_request`/`decode_request` wire via each platform's `-m`
-entrypoint.
+entrypoint. Its terminal `system.json` publisher independently mirrors the
+Store's canonical `channel:system` path mapping: on POSIX it takes the same
+shared one-release `.store.lock` bridge and exclusive scoped lock before merging
+an event. It must remain a narrow external filesystem producer, not import or
+construct the Store; Windows keeps its existing fail-open publisher and is
+covered by the Store's explicit quiesced legacy-cutover gate.
 The generated policy receives a second, watcher-local
 `RefreshWatcherProcessPort` through the entrypoint's `PROCESS_MECHANISM` global.
 That narrow Port performs no policy: it supplies only observation, process
@@ -244,6 +252,13 @@ same matcher import and not embed a second matcher implementation.
    marker authoritative in both directions without mutating the parent.
 10. The existing request serialization validation rejects invalid JSON, missing
     or extra fields, and wrong field shapes with `ValueError`.
+11. The generated POSIX terminal publisher computes the exact bounded
+    `channel:system` Store lock filename (sanitized scope label plus SHA-256
+    prefix), acquires shared legacy `.store.lock` then exclusive scoped lock in
+    that order, and releases both without deleting either lock file. It has a
+    bounded fail-open timeout so permanent-refresh visibility is not silently
+    lost to a wedged holder. This is canonical behavior sharing, not a second
+    Store implementation; it must stay byte-compatible with the Store mapping.
 
 ## Contract tests
 
@@ -255,7 +270,9 @@ rendered Core policy with a small fake process mechanism and asserts policy
 selection of observation, liveness, launch, graceful stop, and forced stop
 without source-keyword scanning. The real POSIX `-m` smoke remains the evidence
 that the POSIX entrypoint composes the production process adapter.
-`tests/test_refresh_watcher_windows.py` pins the Windows side: exact detached
+`tests/test_perform_refresh_handshake.py` also renders the POSIX terminal
+publisher and pins its canonical `system` scoped filename plus shared legacy
+bridge behavior against the Store mapping. `tests/test_refresh_watcher_windows.py` pins the Windows side: exact detached
 spawn shape (Windows entrypoint module, creation flags, env-overwrite policy in
 both directions), entrypoint composition of the workdir-bound Windows process
 mechanism, the `.suspend` graceful-stop channel, CIM observation shapes with

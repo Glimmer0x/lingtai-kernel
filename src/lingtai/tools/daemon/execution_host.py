@@ -158,6 +158,17 @@ class DetachedDaemonExecutionHost:
         self._agent._tool_schemas = list(collector.schemas.values())
         self._agent._tool_handlers = dict(collector.handlers)
 
+        # The manager units below consume the same narrow runtime/workdir ports
+        # as the official parent binding.  This detached host owns a supervisor
+        # stub rather than a live Agent, so its adapter is intentionally local
+        # to this execution body and never participates in model tool mounting.
+        from lingtai.adapters.tool_plugin_host import (
+            AgentWorkdirAdapter,
+            daemon_runtime_for_agent,
+        )
+        self._runtime = daemon_runtime_for_agent(self._agent, {})
+        self._workdir = AgentWorkdirAdapter(lambda: self._agent._working_dir)
+
         # The manager methods are used as unbound production units below.  A
         # host does not need DaemonManager.__init__, which would create a
         # parent-owned ask executor and perform parent-record reconciliation.

@@ -356,6 +356,12 @@ class _ReadOnlyDaemonView:
         )
 
         self._agent = agent
+        from lingtai.adapters.tool_plugin_host import (
+            AgentWorkdirAdapter,
+            daemon_runtime_for_agent,
+        )
+        self._runtime = daemon_runtime_for_agent(agent, {})
+        self._workdir = AgentWorkdirAdapter(lambda: agent._working_dir)
         self._emanations: dict = {}
         self._manager_pool_size = 100
         # Historical fixed cap for bounded ``.prompt`` reads during damaged-run

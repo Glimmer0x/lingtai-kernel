@@ -76,6 +76,8 @@ def _refresh_tool_inventory_section(agent) -> None:
     lang = agent._config.language
     lines = []
     for name in agent._intrinsics:
+        if agent._intrinsic_registry.get(name, {}).get("official_plugin"):
+            continue
         module = agent._intrinsic_modules.get(name)
         if module:
             base = module.get_description()
@@ -112,6 +114,8 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
 
     # Intrinsic schemas — canonical English, language-independent.
     for name in agent._intrinsics:
+        if agent._intrinsic_registry.get(name, {}).get("official_plugin"):
+            continue
         module = agent._intrinsic_modules.get(name)
         if module:
             params = dict(module.get_schema())

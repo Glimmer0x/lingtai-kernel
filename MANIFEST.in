@@ -26,6 +26,10 @@ include NOTICE
 include README.md
 include src/lingtai/init.jsonc
 
+# Standalone intrinsic skill bundles are runtime package data (including nested
+# system-manual scripts/references); source releases must carry the same tree.
+graft src/lingtai/intrinsic_skills
+
 # Include packaged prompt resources and the runtime guidance Markdown catalog in
 # sdists. pyproject.toml owns wheel package-data globs; keep this connected so
 # source releases carry the same prompt corpus. The `*.yaml` line carries the
@@ -53,6 +57,7 @@ recursive-include src/lingtai/tools glossary-en.md
 recursive-include src/lingtai/tools glossary-zh.md
 recursive-include src/lingtai/tools glossary-wen.md
 graft src/lingtai/tools/email/manual
+graft src/lingtai/tools/context/manual
 graft src/lingtai/tools/system/manual
 graft src/lingtai/tools/psyche/manual
 graft src/lingtai/tools/soul/manual
@@ -62,6 +67,6 @@ graft src/lingtai/tools/skills/manual
 graft src/lingtai/tools/bash/manual
 graft src/lingtai/tools/avatar/manual
 graft src/lingtai/tools/daemon/manual
-graft src/lingtai/tools/mcp/manual
+graft src/lingtai/tools/mcp/skills
 graft src/lingtai/tools/web_search/manual
 graft src/lingtai/tools/browser/manual
