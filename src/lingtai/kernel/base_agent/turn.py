@@ -934,9 +934,11 @@ def _run_loop(agent) -> None:
         # once under the registry lock.
         from ..turns import cancel_all_turns
         from ..execution_workspace import clear_execution_workspace
+        from ..turn_events import clear_turn_tool_observer
 
         cancel_all_turns(agent, reason="agent run loop stopped")
         clear_execution_workspace()
+        clear_turn_tool_observer()
 
 
 def _run_loop_body(agent) -> None:
@@ -1033,6 +1035,7 @@ def _run_loop_body(agent) -> None:
 
             turn_control = begin_turn(agent, msg)
             execution_workspace_token = None
+            tool_observer_token = None
             if turn_control is not None:
                 from ..execution_workspace import (
                     bind_execution_workspace,
@@ -1045,6 +1048,14 @@ def _run_loop_body(agent) -> None:
                 clear_execution_workspace()
                 execution_workspace_token = bind_execution_workspace(
                     turn_control.execution_workspace
+                )
+                from ..turn_events import (
+                    bind_turn_tool_observer,
+                    clear_turn_tool_observer,
+                )
+                clear_turn_tool_observer()
+                tool_observer_token = bind_turn_tool_observer(
+                    turn_control.tool_observer
                 )
                 msg = correlated_message_text(msg)
             elif msg.type == MSG_CORRELATED_TURN:
@@ -1638,6 +1649,9 @@ def _run_loop_body(agent) -> None:
             if execution_workspace_token is not None:
                 from ..execution_workspace import reset_execution_workspace
                 reset_execution_workspace(execution_workspace_token)
+            if tool_observer_token is not None:
+                from ..turn_events import reset_turn_tool_observer
+                reset_turn_tool_observer(tool_observer_token)
             _settle_correlated_after_turn(
                 agent,
                 turn_control,

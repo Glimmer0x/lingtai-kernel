@@ -24,6 +24,7 @@ from lingtai.kernel.turns import (
     settle_turn,
     submit_turn,
 )
+from lingtai.kernel.turn_events import current_turn_tool_observer
 
 
 class _Interface:
@@ -155,6 +156,33 @@ def test_consecutive_correlated_turns_reset_execution_workspace(tmp_path, monkey
         ("workspace", workspace.resolve()),
         ("unscoped", None),
     ]
+
+
+def test_consecutive_correlated_turns_reset_tool_observer(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    observer = SimpleNamespace(on_tool_lifecycle=lambda _event: None)
+    first = submit_turn(
+        agent,
+        "observed",
+        correlation_id="turn-observed",
+        tool_observer=observer,
+    )
+    second = submit_turn(agent, "plain", correlation_id="turn-plain")
+    seen = []
+
+    def fake_handle(current, msg):
+        seen.append((msg.content, current_turn_tool_observer()))
+        if msg.content == "plain":
+            current._shutdown.set()
+        return {"text": msg.content, "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert first.result(timeout=1).outcome is TurnOutcome.NORMAL
+    assert second.result(timeout=1).outcome is TurnOutcome.NORMAL
+    assert seen == [("observed", observer), ("plain", None)]
+    assert current_turn_tool_observer() is None
 
 
 def test_matching_active_cancel_wins_before_terminal_settlement(tmp_path, monkeypatch):

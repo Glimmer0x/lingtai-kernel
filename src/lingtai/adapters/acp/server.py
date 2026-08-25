@@ -12,6 +12,10 @@ from uuid import uuid4
 
 from lingtai.kernel.turns import TurnHandle, TurnOutcome
 from lingtai.kernel.execution_workspace import ExecutionWorkspace
+from lingtai.kernel.turn_events import (
+    ToolLifecycleEvent,
+    ToolLifecycleState,
+)
 from lingtai.services.session_mcp import StdioMCPServerConfig
 
 
@@ -41,6 +45,7 @@ class _ActivePrompt:
     request_id: str | int
     session_id: str
     handle: TurnHandle
+    generation: int
     thread: threading.Thread | None = None
     terminal_claimed: bool = False
 
@@ -52,6 +57,87 @@ class _OutboundBatch:
     generation: int
     wires: tuple[str, ...]
     active: _ActivePrompt | None = None
+    settles_active: bool = False
+
+
+class _PromptToolObserver:
+    """Project one Core turn's bounded tool facts onto ACP v1 updates."""
+
+    def __init__(
+        self,
+        server: AcpStdioServer,
+        session_id: str,
+        correlation_id: str,
+        generation: int,
+    ) -> None:
+        self._server = server
+        self._session_id = session_id
+        self._correlation_id = correlation_id
+        self._generation = generation
+        self._active: _ActivePrompt | None = None
+        self._started: set[str] = set()
+        self._terminal: set[str] = set()
+
+    def bind_active(self, active: _ActivePrompt) -> None:
+        self._active = active
+
+    def on_tool_lifecycle(self, event: ToolLifecycleEvent) -> None:
+        server = self._server
+        with server._state_lock:
+            active = self._active
+            if (
+                active is None
+                or server._active is not active
+                or active.terminal_claimed
+                or server._closing
+                or server._generation != self._generation
+            ):
+                return
+            tool_call_id = f"{self._correlation_id}:{event.tool_call_id}"
+            if tool_call_id in self._terminal:
+                return
+            if event.state is ToolLifecycleState.STARTED:
+                if tool_call_id in self._started:
+                    return
+                self._started.add(tool_call_id)
+                update = {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": tool_call_id,
+                    "title": event.tool_name,
+                    "status": "in_progress",
+                }
+            else:
+                failed = event.state in {
+                    ToolLifecycleState.FAILED,
+                    ToolLifecycleState.DENIED,
+                }
+                status = "failed" if failed else "completed"
+                self._terminal.add(tool_call_id)
+                if tool_call_id in self._started:
+                    update = {
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": tool_call_id,
+                        "status": status,
+                    }
+                else:
+                    update = {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": tool_call_id,
+                        "title": event.tool_name,
+                        "status": status,
+                    }
+            server._enqueue_messages(
+                ({
+                    "jsonrpc": JSONRPC_VERSION,
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": self._session_id,
+                        "update": update,
+                    },
+                },),
+                generation=self._generation,
+                active=active,
+            )
 
 
 def _package_version() -> str:
@@ -488,18 +574,28 @@ class AcpStdioServer:
                 raise _RpcError(INTERNAL_ERROR, "server is closing")
             if self._active is not None:
                 raise _RpcError(SESSION_BUSY, "session already has an active prompt")
+            correlation_id = f"acp_{uuid4().hex}"
+            generation = self._generation
+            observer = _PromptToolObserver(
+                self,
+                session_id,
+                correlation_id,
+                generation,
+            )
             try:
                 handle = self._agent.submit_turn(
                     content,
                     sender="user",
-                    correlation_id=f"acp_{uuid4().hex}",
+                    correlation_id=correlation_id,
                     execution_workspace=self._execution_workspace,
+                    tool_observer=observer,
                 )
             except (TypeError, ValueError) as exc:
                 raise _RpcError(INVALID_PARAMS, str(exc)) from exc
             except RuntimeError as exc:
                 raise _RpcError(INTERNAL_ERROR, "agent cannot accept the turn") from exc
-            active = _ActivePrompt(request_id, session_id, handle)
+            active = _ActivePrompt(request_id, session_id, handle, generation)
+            observer.bind_active(active)
             worker = threading.Thread(
                 target=self._await_prompt,
                 args=(active,),
@@ -546,7 +642,7 @@ class AcpStdioServer:
                 # The captured generation is re-checked when the atomic terminal
                 # batch enters the queue and before each physical write begins.
                 active.terminal_claimed = True
-                generation = self._generation
+                generation = active.generation
 
             messages: list[dict[str, Any]] = []
             if result is None or result.outcome is TurnOutcome.FAILED:
@@ -589,6 +685,7 @@ class AcpStdioServer:
                 messages,
                 generation=generation,
                 active=active,
+                settles_active=True,
             )
         except Exception:
             # Serialization is deterministic for the fixed shapes above. If an
@@ -633,6 +730,7 @@ class AcpStdioServer:
         *,
         generation: int | None = None,
         active: _ActivePrompt | None = None,
+        settles_active: bool = False,
     ) -> bool:
         try:
             wires: list[str] = []
@@ -661,7 +759,12 @@ class AcpStdioServer:
                 return False
             try:
                 self._outbound.put_nowait(
-                    _OutboundBatch(generation, tuple(wires), active)
+                    _OutboundBatch(
+                        generation,
+                        tuple(wires),
+                        active,
+                        settles_active,
+                    )
                 )
             except queue.Full:
                 # A non-reading client may never release the writer. Bound memory
@@ -712,7 +815,11 @@ class AcpStdioServer:
                 return
             finally:
                 with self._state_lock:
-                    if batch.active is not None and self._active is batch.active:
+                    if (
+                        batch.settles_active
+                        and batch.active is not None
+                        and self._active is batch.active
+                    ):
                         self._active = None
                 self._outbound.task_done()
 

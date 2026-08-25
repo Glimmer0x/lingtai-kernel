@@ -16,6 +16,7 @@ import pytest
 from lingtai.adapters.acp.server import AcpStdioServer
 from lingtai.kernel.base_agent import BaseAgent, StopResult, StopStatus
 from lingtai.kernel.turns import TurnOutcome, TurnResult, control_from_message
+from lingtai.kernel.turn_events import ToolLifecycleEvent, ToolLifecycleState
 
 
 class _Handle:
@@ -43,12 +44,21 @@ class _Agent:
         self.submissions: list[dict] = []
         self._shutdown = threading.Event()
 
-    def submit_turn(self, content, *, sender, correlation_id, execution_workspace=None):
+    def submit_turn(
+        self,
+        content,
+        *,
+        sender,
+        correlation_id,
+        execution_workspace=None,
+        tool_observer=None,
+    ):
         self.submissions.append({
             "content": content,
             "sender": sender,
             "correlation_id": correlation_id,
             "execution_workspace": execution_workspace,
+            "tool_observer": tool_observer,
         })
         self.handle.correlation_id = correlation_id
         return self.handle
@@ -172,6 +182,104 @@ def test_acp_prompt_queues_canonical_workspace_through_real_base_agent(tmp_path)
     assert control is not None
     assert control.execution_workspace is server._execution_workspace
     assert control.execution_workspace.root == workspace.resolve()
+    assert control.tool_observer is not None
+
+
+def test_tool_lifecycle_projects_ordered_private_free_updates_before_terminal():
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    observer = agent.submissions[0]["tool_observer"]
+    observer.on_tool_lifecycle(
+        ToolLifecycleEvent("provider-id", "file", ToolLifecycleState.STARTED)
+    )
+    observer.on_tool_lifecycle(
+        ToolLifecycleEvent("provider-id", "file", ToolLifecycleState.COMPLETED)
+    )
+    handle._future.set_result(
+        TurnResult(handle.correlation_id, TurnOutcome.NORMAL, text="done")
+    )
+
+    messages = _wait_for(output, 6)
+    prompt_frames = messages[2:]
+    assert [
+        frame.get("params", {}).get("update", {}).get("sessionUpdate")
+        for frame in prompt_frames[:-1]
+    ] == ["tool_call", "tool_call_update", "agent_message_chunk"]
+    initial = prompt_frames[0]["params"]["update"]
+    update = prompt_frames[1]["params"]["update"]
+    assert initial == {
+        "sessionUpdate": "tool_call",
+        "toolCallId": f"{handle.correlation_id}:provider-id",
+        "title": "file",
+        "status": "in_progress",
+    }
+    assert update == {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": initial["toolCallId"],
+        "status": "completed",
+    }
+    assert prompt_frames[-1] == {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {"stopReason": "end_turn"},
+    }
+    projected_wire = json.dumps(prompt_frames[:2])
+    for forbidden in (
+        "arguments",
+        "rawInput",
+        "rawOutput",
+        "results",
+        "content",
+        "locations",
+        "never-project",
+    ):
+        assert forbidden not in projected_wire
+
+    before = output.getvalue()
+    observer.on_tool_lifecycle(
+        ToolLifecycleEvent("late", "shell", ToolLifecycleState.STARTED)
+    )
+    time.sleep(0.02)
+    assert output.getvalue() == before
+
+
+def test_denied_tool_projects_one_initial_failed_update_and_close_drops_events():
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 4, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "denied"}],
+    })
+    observer = agent.submissions[0]["tool_observer"]
+    observer.on_tool_lifecycle(
+        ToolLifecycleEvent("denied-id", "shell", ToolLifecycleState.DENIED)
+    )
+    messages = _wait_for(output, 3)
+    assert messages[2]["params"]["update"] == {
+        "sessionUpdate": "tool_call",
+        "toolCallId": f"{handle.correlation_id}:denied-id",
+        "title": "shell",
+        "status": "failed",
+    }
+
+    server.close()
+    before = output.getvalue()
+    observer.on_tool_lifecycle(
+        ToolLifecycleEvent("after-close", "file", ToolLifecycleState.STARTED)
+    )
+    time.sleep(0.02)
+    assert output.getvalue() == before
 
 
 @pytest.mark.parametrize("cwd,mcp_servers", [
@@ -903,11 +1011,18 @@ def test_close_after_terminal_claim_before_enqueue_suppresses_entire_prompt_batc
     proceed = threading.Event()
     original_enqueue = server._enqueue_messages
 
-    def gated_enqueue(messages, *, generation=None, active=None):
+    def gated_enqueue(
+        messages, *, generation=None, active=None, settles_active=False
+    ):
         if active is not None:
             claimed.set()
             assert proceed.wait(timeout=5)
-        return original_enqueue(messages, generation=generation, active=active)
+        return original_enqueue(
+            messages,
+            generation=generation,
+            active=active,
+            settles_active=settles_active,
+        )
 
     monkeypatch.setattr(server, "_enqueue_messages", gated_enqueue)
     _request(server, 3, "session/prompt", {

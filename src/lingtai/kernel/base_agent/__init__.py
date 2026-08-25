@@ -64,6 +64,7 @@ from .._fsutil import atomic_write_json, atomic_write_text
 from ..trace_redaction import redact_for_trajectory
 from ..runtime_identity import runtime_identity_event_fields
 from ..execution_workspace import ExecutionWorkspace
+from ..turn_events import TurnToolObserver
 from ..turns import TurnHandle
 from .lifecycle import StopResult, StopStatus
 
@@ -2877,6 +2878,7 @@ class BaseAgent:
         sender: str = "user",
         correlation_id: str | None = None,
         execution_workspace: str | Path | ExecutionWorkspace | None = None,
+        tool_observer: TurnToolObserver | None = None,
     ) -> TurnHandle:
         """Queue one text turn and return its protocol-neutral terminal handle."""
         from ..turns import submit_turn
@@ -2886,6 +2888,7 @@ class BaseAgent:
             sender=sender,
             correlation_id=correlation_id,
             execution_workspace=execution_workspace,
+            tool_observer=tool_observer,
         )
 
     def cancel_turn(self, correlation_id: str) -> bool:

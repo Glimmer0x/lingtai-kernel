@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from .message import MSG_CORRELATED_TURN, Message, _make_message
 from .execution_workspace import ExecutionWorkspace
+from .turn_events import TurnToolObserver
 
 
 class TurnOutcome(str, Enum):
@@ -43,6 +44,7 @@ class _TurnControl:
     content: str
     sender: str
     execution_workspace: ExecutionWorkspace | None = None
+    tool_observer: TurnToolObserver | None = None
     cancel_requested: threading.Event = field(default_factory=threading.Event)
     future: Future[TurnResult] = field(default_factory=Future)
     cancel_callback: Callable[[str], bool] | None = None
@@ -107,6 +109,7 @@ def submit_turn(
     sender: str = "user",
     correlation_id: str | None = None,
     execution_workspace: str | Path | ExecutionWorkspace | None = None,
+    tool_observer: TurnToolObserver | None = None,
 ) -> TurnHandle:
     """Queue one text turn and return its correlated terminal handle."""
 
@@ -118,6 +121,10 @@ def submit_turn(
         correlation_id = f"turn_{uuid4().hex}"
     if not isinstance(correlation_id, str) or not correlation_id:
         raise ValueError("correlation_id must be a non-empty string")
+    if tool_observer is not None and not callable(
+        getattr(tool_observer, "on_tool_lifecycle", None)
+    ):
+        raise TypeError("tool_observer must define on_tool_lifecycle(event)")
 
     shutdown = getattr(agent, "_shutdown", None)
     if shutdown is not None and shutdown.is_set():
@@ -133,6 +140,7 @@ def submit_turn(
         content=content,
         sender=sender,
         execution_workspace=execution_workspace,
+        tool_observer=tool_observer,
     )
     control.cancel_callback = lambda requested_id: cancel_turn(agent, requested_id)
     with lock:
