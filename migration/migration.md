@@ -1,8 +1,8 @@
 ---
 product: kernel
-release_version: "1.0.0"
-release_tag: "v1.0.0"
-migration: no-op
+release_version: "1.0.3"
+release_tag: "v1.0.3"
+migration: manual
 refresh_required: true
 related_files:
   - RELEASING.md
@@ -17,18 +17,34 @@ maintenance: |
   per-release versions. Never append a second release history here or invent a
   version that disagrees with package metadata.
 ---
-# LingTai kernel 1.0.0 migration
+# LingTai kernel 1.0.3 post-tag corrective migration
 
 ## Applies when
 
-The target kernel release is `1.0.0` / tag `v1.0.0` and that tag lies in the
+The target kernel release is `1.0.3` / tag `v1.0.3` and that tag lies in the
 open update interval `(current, target]`.
 
-## Migration
+## Post-tag provenance
 
-**No configuration rewrite.** This release contains kernel/backend feature and
-maintenance changes, but does not change an agent workdir, preset, `init.json`,
-or another kernel-owned on-disk configuration shape.
+`v1.0.3` was already cut and retained stale migration text. This stable-path
+main-branch correction must not be represented as content of `v1.0.3`.
+Do not move or recreate `v1.0.3`. This document does not establish a corrected
+publication.
+
+## Conditional migration
+
+If an existing `init.json` has
+`manifest.capabilities.daemon.max_emanations`, daemon capability setup can be
+skipped after upgrade because `max_emanations` was removed before `1.0.3`.
+The configuration owner must choose explicitly:
+
+1. Remove `max_emanations` and accept the current default
+   `manager_pool_size=100`.
+2. Remove `max_emanations` and deliberately set an appropriate
+   `manager_pool_size`.
+
+These controls are not a 1:1 mapping; no automatic conversion exists. If this
+legacy key is absent, leave existing configuration unchanged.
 
 Before mutation, confirm that the installer selected the intended
 `LINGTAI_RUNTIME_PYTHON`. If more than one LingTai runtime is present, rerun with
@@ -39,8 +55,10 @@ user machine, and do not use PyPI metadata to choose the release version.
 
 ## Validate
 
-- Do not rewrite agent configuration for this kernel migration.
-- Confirm this file was read from the kernel repository at exact tag `v0.19.5`.
+- Treat this stable-path document as a post-tag correction, not a `v1.0.3` tag
+  snapshot.
+- If the legacy key is present, verify it was removed and that the selected
+  `manager_pool_size` choice is intentional.
 - Verify `lingtai.__version__`, `lingtai.__file__`, and
   `lingtai.kernel.__file__` from the selected runtime interpreter after install.
 - If the product, version, tag, stable path, mirror content, or artifact hash does
@@ -52,4 +70,4 @@ user machine, and do not use PyPI metadata to choose the release version.
 The verified wheel changes bytes on disk but a running agent still has the old
 code loaded. After active work is checkpointed and refresh is authorized, call
 `system(action='refresh')` and verify the new process uses the selected
-interpreter and reports `0.19.5`.
+interpreter and reports `1.0.3`.

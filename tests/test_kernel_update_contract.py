@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+_MIGRATION = ROOT / "migration/migration.md"
 _SUBSTRATE = ROOT / "src/lingtai/prompts/substrate/substrate.md"
 _CHANNEL_MODEL = ROOT / "src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md"
 _RUNTIME_UPDATE = ROOT / "src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md"
@@ -18,7 +19,10 @@ def _frontmatter(path: Path) -> dict[str, str]:
     assert match, f"{path} has no YAML frontmatter"
     values: dict[str, str] = {}
     for line in match.group(1).splitlines():
-        parsed = re.match(r"^(release_version|release_tag):\s*[\"']?([^\"']+?)[\"']?\s*$", line)
+        parsed = re.match(
+            r"^(release_version|release_tag|migration):\s*[\"']?([^\"']+?)[\"']?\s*$",
+            line,
+        )
         if parsed:
             values[parsed.group(1)] = parsed.group(2)
     return values
@@ -27,9 +31,39 @@ def _frontmatter(path: Path) -> dict[str, str]:
 def test_migration_frontmatter_matches_authoritative_package_version_and_tag():
     package = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = package["project"]["version"]
-    metadata = _frontmatter(ROOT / "migration/migration.md")
+    metadata = _frontmatter(_MIGRATION)
     assert metadata["release_version"] == version
     assert metadata["release_tag"] == f"v{version}"
+
+
+def test_migration_is_a_post_tag_manual_correction_for_legacy_daemon_config():
+    package = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = package["project"]["version"]
+    tag = f"v{version}"
+    document = _MIGRATION.read_text(encoding="utf-8")
+    body = " ".join(document.split())
+    metadata = _frontmatter(_MIGRATION)
+
+    assert metadata["migration"] == "manual"
+    assert metadata["migration"] != "no-op"
+    assert "**No configuration rewrite.**" not in body
+    assert f"# LingTai kernel {version} post-tag corrective migration" in body
+    assert f"The target kernel release is `{version}` / tag `{tag}`" in body
+    assert "`1.0.0`" not in body
+    assert "`v1.0.0`" not in body
+    assert "`v0.19.5`" not in body
+    assert "`0.19.5`" not in body
+    assert f"`{tag}` was already cut and retained stale migration text." in body
+    assert f"must not be represented as content of `{tag}`." in body
+    assert f"Do not move or recreate `{tag}`." in body
+    assert "This document does not establish a corrected publication." in body
+    assert "`manifest.capabilities.daemon.max_emanations`" in body
+    assert f"`max_emanations` was removed before `{version}`." in body
+    assert "daemon capability setup can be skipped after upgrade" in body
+    assert "`manager_pool_size=100`" in body
+    assert "not a 1:1 mapping; no automatic conversion exists." in body
+    assert "If this legacy key is absent, leave existing configuration unchanged." in body
+    assert f"interpreter and reports `{version}`." in body
 
 
 def test_kernel_update_guidance_uses_only_the_installer_route():
