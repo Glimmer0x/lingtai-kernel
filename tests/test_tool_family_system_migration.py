@@ -592,6 +592,72 @@ def test_refresh_null_optionals_behave_as_absent(tmp_path: Path) -> None:
     assert calls == ["refresh"]
 
 
+_ACTIONABLE_VENV_ERROR = (
+    "Configured venv_path is not usable: /x/.venv/bin: venv_path names the "
+    "venv's 'bin' executable directory, but it must name the venv root (the "
+    "directory that contains 'bin'); no python executable exists at "
+    "/x/.venv/bin/bin/python. Set venv_path to /x/.venv if that is the venv root"
+)
+
+
+def test_refresh_launch_error_propagates_and_never_returns_ok(tmp_path: Path) -> None:
+    """Human contract (Telegram 15222): an invalid configured ``venv_path``
+    must surface as an actionable error from ``system(action="refresh")``;
+    the family must not swallow it or masquerade success.
+
+    ``_refresh`` returns its ``{status: "ok"}`` receipt only after the bound
+    ``_perform_refresh()`` returned normally. When that call raises the
+    actionable configured-venv ``RuntimeError`` (the wrapper's
+    ``resolve_venv`` precheck reached through ``_build_launch_cmd``), the
+    exception propagates out of the public family handler unchanged, and at
+    the canonical ``ToolExecutor`` boundary it becomes a ``status: "error"``
+    result whose message retains the correction guidance.
+    """
+    from lingtai.kernel.llm.base import ToolCall
+    from lingtai.kernel.loop_guard import LoopGuard
+    from lingtai.kernel.tool_executor import ToolExecutor
+
+    calls: list[str] = []
+
+    class _Agent(_StubAgent):
+        def _perform_refresh(self) -> None:
+            calls.append("refresh")
+            raise RuntimeError(_ACTIONABLE_VENV_ERROR)
+
+    agent = _Agent(tmp_path)
+    agent._config = type("C", (), {"language": "en"})()
+
+    # 1. The public family handler cannot return the success receipt.
+    with pytest.raises(RuntimeError, match="must name the venv root"):
+        system_tool.handle(agent, {"action": "refresh", "input": {"reason": "fix"}})
+    assert calls == ["refresh"]
+
+    # 2. Through the canonical executor the raise is a truthful error result
+    #    that keeps the operator-facing correction message.
+    executor = ToolExecutor(
+        dispatch_fn=lambda tc: system_tool.handle(agent, tc.args),
+        make_tool_result_fn=lambda name, result, **kw: result,
+        guard=LoopGuard(),
+        known_tools={"system"},
+        parallel_safe_tools=set(),
+    )
+    errors: list[str] = []
+    results, intercepted, _ = executor.execute(
+        [ToolCall(name="system", args={"action": "refresh", "input": {}}, id="c1")],
+        collected_errors=errors,
+    )
+
+    assert calls == ["refresh", "refresh"]
+    assert intercepted is False
+    assert len(results) == 1
+    payload = results[0]
+    assert payload["status"] == "error"
+    assert payload["message"] == _ACTIONABLE_VENV_ERROR
+    assert "Set venv_path to /x/.venv" in payload["message"]
+    assert payload["error_type"] == "RuntimeError"
+    assert errors == [f"system: {_ACTIONABLE_VENV_ERROR}"]
+
+
 def test_presets_reports_unreadable_init_json(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     result = system_tool.handle(agent, {"action": "presets", "input": {}})

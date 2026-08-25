@@ -970,147 +970,157 @@ def _perform_refresh(
             agent._log("refresh_skipped", reason="refresh_already_in_progress")
             return
         # Claim the single-flight slot before any side effect (chat-history
-        # save, handshake rename, watcher spawn). Released on every failure
-        # exit below so a failed refresh never wedges a live agent.
+        # save, handshake rename, watcher spawn).
         agent._refresh_started = True
 
-    # When the worker interface is poisoned, the in-memory ChatInterface may
-    # still be mutated by a stuck worker thread — saving it would serialize
-    # unsafe state. Fail closed: skip the save and rebuild from disk.
-    poisoned = bool(getattr(agent, "_llm_worker_interface_poisoned", False))
-    effective_skip_save = skip_chat_history_save or poisoned
-    effective_skip_reason = (
-        skip_save_reason
-        or ("worker_still_running_interface_unsafe" if poisoned else None)
-    )
-    agent._log(
-        "refresh_start",
-        skip_chat_history_save=effective_skip_save,
-        skip_save_reason=effective_skip_reason,
-    )
-    if effective_skip_save:
-        agent._log("refresh_chat_history_save_skipped", reason=effective_skip_reason)
-    else:
-        agent._save_chat_history()
-
-    # Refresh is one of README.md's mechanical regeneration points
-    # (template-version check only). Fail-soft: a README problem must never
-    # break a refresh.
+    # Slot-release invariant: until the detached watcher handoff succeeds,
+    # EVERY exit from the block below — an ordinary failure return or an
+    # exception from the chat-history save, `_build_launch_cmd()` (including
+    # the wrapper's configured-venv precheck), the missing-Port check, the
+    # handshake normalization, or `spawn_detached` itself — must release the
+    # slot so the live process can retry a corrected refresh later. A raise
+    # that left the slot claimed would make every later refresh silently log
+    # `refresh_skipped(refresh_already_in_progress)` for the rest of the
+    # process lifetime. Once `spawn_detached` has returned, the refresh is
+    # terminal for this process and the slot stays claimed even if the
+    # logging or shutdown signaling after it fails.
+    handed_off = False
     try:
-        from ..agent_readme import ensure_agent_readme
-
-        ensure_agent_readme(agent._working_dir, _log=agent._log)
-    except Exception:
-        agent._log("agent_readme_ensure_failed", stage="refresh")
-    # Bound-method dispatch — _build_launch_cmd lives on BaseAgent (returns
-    # None) and Agent (returns the real `lingtai-agent run` cmd). A prior version
-    # called a module-level _build_launch_cmd shadow that always returned
-    # None, silently no-opping every user refresh on the Agent subclass —
-    # see issue #7, confirmed in vivo against deepseek_pro 2026-05-05.
-    cmd = agent._build_launch_cmd()
-    if cmd is None:
-        agent._log("refresh_no_launch_cmd")
-        with guard:
-            agent._refresh_started = False
-        return
-
-    # A real launch command means this refresh will actually spawn a watcher.
-    # Fail loudly here, before any handshake or shutdown mutation, if the
-    # agent has no RefreshWatcherPort — raw BaseAgent construction allows
-    # omitting it (see kernel/refresh_watcher/CONTRACT.md), but an omitted
-    # Port must never orphan an agent mid-handshake or leave it silently
-    # unable to relaunch.
-    if agent._refresh_watcher is None:
-        with guard:
-            agent._refresh_started = False
-        raise RuntimeError(
-            "_perform_refresh requires a RefreshWatcherPort to spawn the "
-            "relaunch watcher, but this agent was constructed without one "
-            "(refresh_watcher=None). Inject a RefreshWatcherPort (e.g. "
-            "PosixRefreshWatcherAdapter) at BaseAgent construction."
+        # When the worker interface is poisoned, the in-memory ChatInterface
+        # may still be mutated by a stuck worker thread — saving it would
+        # serialize unsafe state. Fail closed: skip the save and rebuild from
+        # disk.
+        poisoned = bool(getattr(agent, "_llm_worker_interface_poisoned", False))
+        effective_skip_save = skip_chat_history_save or poisoned
+        effective_skip_reason = (
+            skip_save_reason
+            or ("worker_still_running_interface_unsafe" if poisoned else None)
         )
+        agent._log(
+            "refresh_start",
+            skip_chat_history_save=effective_skip_save,
+            skip_save_reason=effective_skip_reason,
+        )
+        if effective_skip_save:
+            agent._log("refresh_chat_history_save_skipped", reason=effective_skip_reason)
+        else:
+            agent._save_chat_history()
 
-    working_dir = agent._working_dir
-    refresh_path = working_dir / ".refresh"
-    taken_path_obj = working_dir / ".refresh.taken"
-    # Handshake normalization — make the on-disk state look the same
-    # regardless of caller. The watcher polls for `.refresh.taken`; we
-    # guarantee it exists before spawning the watcher, then remove any
-    # remaining `.refresh` so the heartbeat doesn't fire a duplicate
-    # watcher on its next tick.
-    handshake_source = None
-    if taken_path_obj.exists():
-        handshake_source = "preexisting_taken"
-    elif refresh_path.exists():
+        # Refresh is one of README.md's mechanical regeneration points
+        # (template-version check only). Fail-soft: a README problem must
+        # never break a refresh.
         try:
-            refresh_path.rename(taken_path_obj)
-            handshake_source = "renamed_refresh"
-        except OSError:
-            # Rename failed (e.g. cross-device, race). Fall back to a
-            # synthesized ack so the watcher can still proceed.
+            from ..agent_readme import ensure_agent_readme
+
+            ensure_agent_readme(agent._working_dir, _log=agent._log)
+        except Exception:
+            agent._log("agent_readme_ensure_failed", stage="refresh")
+        # Bound-method dispatch — _build_launch_cmd lives on BaseAgent
+        # (returns None) and Agent (returns the real `lingtai-agent run` cmd).
+        # A prior version called a module-level _build_launch_cmd shadow that
+        # always returned None, silently no-opping every user refresh on the
+        # Agent subclass — see issue #7, confirmed in vivo against deepseek_pro
+        # 2026-05-05.
+        cmd = agent._build_launch_cmd()
+        if cmd is None:
+            agent._log("refresh_no_launch_cmd")
+            return
+
+        # A real launch command means this refresh will actually spawn a
+        # watcher. Fail loudly here, before any handshake or shutdown
+        # mutation, if the agent has no RefreshWatcherPort — raw BaseAgent
+        # construction allows omitting it (see
+        # kernel/refresh_watcher/CONTRACT.md), but an omitted Port must never
+        # orphan an agent mid-handshake or leave it silently unable to
+        # relaunch.
+        if agent._refresh_watcher is None:
+            raise RuntimeError(
+                "_perform_refresh requires a RefreshWatcherPort to spawn the "
+                "relaunch watcher, but this agent was constructed without one "
+                "(refresh_watcher=None). Inject a RefreshWatcherPort (e.g. "
+                "PosixRefreshWatcherAdapter) at BaseAgent construction."
+            )
+
+        working_dir = agent._working_dir
+        refresh_path = working_dir / ".refresh"
+        taken_path_obj = working_dir / ".refresh.taken"
+        # Handshake normalization — make the on-disk state look the same
+        # regardless of caller. The watcher polls for `.refresh.taken`; we
+        # guarantee it exists before spawning the watcher, then remove any
+        # remaining `.refresh` so the heartbeat doesn't fire a duplicate
+        # watcher on its next tick.
+        handshake_source = None
+        if taken_path_obj.exists():
+            handshake_source = "preexisting_taken"
+        elif refresh_path.exists():
+            try:
+                refresh_path.rename(taken_path_obj)
+                handshake_source = "renamed_refresh"
+            except OSError:
+                # Rename failed (e.g. cross-device, race). Fall back to a
+                # synthesized ack so the watcher can still proceed.
+                try:
+                    taken_path_obj.touch()
+                    handshake_source = "synthesized_after_rename_failed"
+                except OSError:
+                    handshake_source = "ack_write_failed"
+        else:
             try:
                 taken_path_obj.touch()
-                handshake_source = "synthesized_after_rename_failed"
+                handshake_source = "synthesized_direct_call"
             except OSError:
                 handshake_source = "ack_write_failed"
-    else:
+        if not taken_path_obj.exists():
+            # Do not spawn a watcher or shut the agent down unless the ack
+            # invariant is actually established. Otherwise an unusual
+            # filesystem failure could turn a failed refresh into a dead
+            # agent with no relaunch. If .refresh still exists, leave it for
+            # the heartbeat path or a later retry rather than consuming it.
+            agent._log("refresh_ack_failed", handshake=handshake_source)
+            return
+
+        # If both files happen to exist (heartbeat renamed but a later
+        # consumer rewrote .refresh), remove the stale .refresh so the
+        # heartbeat does not spawn a second watcher.
         try:
-            taken_path_obj.touch()
-            handshake_source = "synthesized_direct_call"
+            refresh_path.unlink(missing_ok=True)
         except OSError:
-            handshake_source = "ack_write_failed"
-    if not taken_path_obj.exists():
-        # Do not spawn a watcher or shut the agent down unless the ack
-        # invariant is actually established. Otherwise an unusual
-        # filesystem failure could turn a failed refresh into a dead
-        # agent with no relaunch. If .refresh still exists, leave it for
-        # the heartbeat path or a later retry rather than consuming it.
-        agent._log("refresh_ack_failed", handshake=handshake_source)
-        with guard:
-            agent._refresh_started = False
-        return
+            pass
 
-    # If both files happen to exist (heartbeat renamed but a later
-    # consumer rewrote .refresh), remove the stale .refresh so the
-    # heartbeat does not spawn a second watcher.
-    try:
-        refresh_path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-    taken_path = str(taken_path_obj)
-    lock_path = str(working_dir / ".agent.lock")
-    events_path = str(working_dir / "logs" / "events.jsonl")
-    agent_name = agent.agent_name
-    address = agent._working_dir.name
-    working_dir_str = str(working_dir)
-    stderr_log = str(working_dir / "logs" / "refresh_relaunch.log")
-    # A tuple-of-pairs would only be shallowly immutable: the runtime-identity
-    # dict's nested `kernel_runtime` value is itself a mutable dict (in fact
-    # the same object as runtime_identity.py's module-level cache), so a
-    # shallow container copy would still alias and expose it. Snapshotting to
-    # a JSON string at this boundary is genuinely immutable at any nesting
-    # depth — see RefreshWatcherRequest.identity_fields_json's docstring.
-    identity_fields_json = json.dumps(agent._runtime_identity_event_fields)
-    request = RefreshWatcherRequest(
-        taken_path=taken_path,
-        lock_path=lock_path,
-        events_path=events_path,
-        stderr_log=stderr_log,
-        working_dir=working_dir_str,
-        cmd=tuple(cmd),
-        agent_name=agent_name,
-        address=address,
-        identity_fields_json=identity_fields_json,
-    )
-    try:
+        taken_path = str(taken_path_obj)
+        lock_path = str(working_dir / ".agent.lock")
+        events_path = str(working_dir / "logs" / "events.jsonl")
+        agent_name = agent.agent_name
+        address = agent._working_dir.name
+        working_dir_str = str(working_dir)
+        stderr_log = str(working_dir / "logs" / "refresh_relaunch.log")
+        # A tuple-of-pairs would only be shallowly immutable: the
+        # runtime-identity dict's nested `kernel_runtime` value is itself a
+        # mutable dict (in fact the same object as runtime_identity.py's
+        # module-level cache), so a shallow container copy would still alias
+        # and expose it. Snapshotting to a JSON string at this boundary is
+        # genuinely immutable at any nesting depth — see
+        # RefreshWatcherRequest.identity_fields_json's docstring.
+        identity_fields_json = json.dumps(agent._runtime_identity_event_fields)
+        request = RefreshWatcherRequest(
+            taken_path=taken_path,
+            lock_path=lock_path,
+            events_path=events_path,
+            stderr_log=stderr_log,
+            working_dir=working_dir_str,
+            cmd=tuple(cmd),
+            agent_name=agent_name,
+            address=address,
+            identity_fields_json=identity_fields_json,
+        )
         agent._refresh_watcher.spawn_detached(request)
-    except BaseException:
-        # Spawn failed: the agent stays alive and must be able to retry
-        # refresh later — release the single-flight slot.
-        with guard:
-            agent._refresh_started = False
-        raise
+        handed_off = True
+    finally:
+        if not handed_off:
+            # Failure or exception before the handoff: the agent stays alive
+            # and must be able to retry refresh later.
+            with guard:
+                agent._refresh_started = False
     agent._log("refresh_deferred_relaunch",
                cmd=cmd[0], handshake=handshake_source)
     # Lock-clear signaling — direct callers (intrinsic system tool call,
