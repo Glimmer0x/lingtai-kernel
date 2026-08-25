@@ -8,8 +8,8 @@ description: |
   consistency, newly introduced env vars, context-vs-target-context_limit,
   durable-store and working-tree state, source_drift, and what to check when
   a refresh fails or comes back with a broken surface.
-version: 1.0.1
-last_changed_at: "2026-08-24T21:00:00Z"
+version: 1.0.0
+last_changed_at: "2026-08-07T00:00:00Z"
 tags: [lingtai, system, refresh, preset, precheck, checklist, mcp, env, pth, editable-install, verification, lifecycle]
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
@@ -20,8 +20,6 @@ related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
 - src/lingtai/tools/system/schema.py
-- src/lingtai/tools/system/CONTRACT.md
-- src/lingtai/kernel/meta_block.py
 - src/lingtai/kernel/presets.py
 maintenance: |
   Sequencing-only node: every check here cites the owner that holds the fact
@@ -172,11 +170,8 @@ If current context exceeds the target's limit, **the swap is refused before acti
 have already told a human "switching now" is a self-inflicted incident. Order is:
 tend durable stores → `context(action="molt", …)` → re-check → swap.
 
-Note also that the cache-miss budget (System `settings/system.json` or
-`LINGTAI_CACHE_MISS_BUDGET`, default 2,000,000) accumulates **since last molt and
-survives a refresh**. The environment resolves live; the file resolves live only
-when no valid env value wins. Changing the threshold or refreshing does not reset
-the cumulative counter; only molt does.
+Note also that the cache-miss budget (`manifest.cache_miss_budget`, default 1,000,000)
+accumulates **since last molt and survives a refresh** — refreshing does not reset it.
 
 ### Step 6 — Newly introduced environment variables (trigger: the change adds an env read)
 

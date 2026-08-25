@@ -778,11 +778,10 @@ _PROVIDER_TOKEN_USAGE_KEYS = {
     "thinking",
 }
 # Keys carried INSIDE the `session` half (cumulative get_token_usage-derived —
-# since last molt, surviving refresh). ``cache_miss_tokens`` is always present
-# (derivable from the cumulative counters); ``cache_miss_budget`` /
-# ``cache_miss_remaining_tokens`` ride along only when a positive-int budget is
-# resolvable from agent._config. Current context state (context_tokens/
-# context_window/context_usage) rides here too whenever it is resolvable.
+# since last molt, surviving refresh). ``cache_miss_tokens`` is derived from the
+# counters; the budget fields use the positive outer hook or fixed fallback.
+# Current context state (context_tokens/context_window/context_usage) rides here
+# too whenever it is resolvable.
 _SESSION_TOKEN_USAGE_KEYS = {
     "session_cache_rate",
     "api_calls",

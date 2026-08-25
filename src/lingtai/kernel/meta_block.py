@@ -1801,8 +1801,8 @@ def build_tool_meta_token_usage(
       ``avg_input_tokens_per_api_call``, the current context state
       ``context_tokens`` / ``context_window`` / ``context_usage`` (when
       resolvable), plus the always-on cache-miss/budget telemetry
-      ``cache_miss_tokens`` and (when a positive-int budget is configured)
-      ``cache_miss_budget`` / ``cache_miss_remaining_tokens``.  These are
+      ``cache_miss_tokens``, ``cache_miss_budget``, and
+      ``cache_miss_remaining_tokens``.  These are
       cumulative/restored totals that SURVIVE refresh (NOT the since-refresh
       runtime-session deltas); see :func:`_build_session_token_economy`.
 
