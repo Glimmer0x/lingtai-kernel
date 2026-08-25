@@ -435,11 +435,7 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         package_file_manual = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(
             encoding="utf-8"
         )
-        redirect_marker = Path(
-            "src/lingtai/intrinsic_skills/file-manual/SKILL.md"
-        ).read_text(encoding="utf-8")
         assert file_manual_body == package_file_manual
-        assert file_manual_body != redirect_marker
         assert "# File Manual" in file_manual_body
         assert not (
             workdir

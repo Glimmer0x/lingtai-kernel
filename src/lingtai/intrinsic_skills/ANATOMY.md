@@ -11,7 +11,6 @@ related_files:
   - src/lingtai/tools/context/manual/assets/molt-template.md
   - src/lingtai/tools/context/manual/assets/session-journal-entry-template.md
   - src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/intrinsic_skills/lingtai-doctor/SKILL.md
   - src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
@@ -19,13 +18,9 @@ related_files:
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py
   - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
   - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/soul-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md
@@ -67,10 +62,6 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
 
 - `__init__.py` — the package marker that states the contract above: one
   subdirectory per bundle, copied verbatim, for skills without companion code.
-- `context-manual/` — a retained no-delete **legacy redirect**, not a bundle
-  owner. Context's canonical package manual (including its assets and nested
-  summarize reference) lives under `src/lingtai/tools/context/manual/` and is
-  the source installed at runtime through the one audited allowlist in Agent.
 - `system-manual/` — the largest bundle: the `system` family manual plus ten
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
   `how-to-change-name`, `llm-adapters`, `procedures-manual`,
@@ -82,8 +73,6 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   derives its reserved `manual` child from `DECLARATION.manual ==
   "system-manual"` (`src/lingtai/tools/system/__init__.py`), and no second
   package-owned System manual exists.
-- `notification-manual/` — the `notification` family manual plus the
-  `channel-model` and `dismissal-safety` reference sub-skills.
 - `lingtai-kernel-anatomy/` — the repository's own navigation skill: how to read
   and maintain the Anatomy/Contract graph. It carries
   `reference/mcp-protocol.md` and two scripts,
@@ -91,13 +80,8 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `scripts/bench_agent_session_rebuild.py`.
 - `lingtai-doctor/` — read-only health diagnostics for agents and bots, with a
   bundled `scripts/doctor.py` for layered local checks that expose no secrets.
-- Single-file bundles — `lingtai-manual/`, `pad-manual/`, `psyche-manual/`,
-  `read-manual/`, and `soul-manual/`, each one `SKILL.md` documenting its
-  namesake surface. The retained `file-manual/` source is excluded from install:
-  File now owns the authoritative packaged manual under `tools/file/manual/`.
-  The retained `soul-manual/` source is a marker-verified redirect only:
-  package-owned `tools/soul/manual/` is the sole operational owner and is
-  installed at the historical `soul-manual` destination.
+- Single-file bundles — `lingtai-manual/`, `pad-manual/`, `psyche-manual/`, and
+  `read-manual/`, each one `SKILL.md` documenting its namesake surface.
 
 ## Connections
 
@@ -110,9 +94,7 @@ for the per-tool `manual/` bundles and `install_skills_from`
 touches `.library/custom/`, which is the agent's own territory.
 `src/lingtai/tools/`
 supplies the other half of the same install — the per-tool `manual/` bundles —
-so a bundle lives here precisely when no tool package owns it. The retained
-`context-manual/` tree is the one documented exception: it is not copied when
-its canonical tool package is present and cannot become a competing owner.
+so a bundle lives here precisely when no tool package owns it.
 
 After the copy, the `skills` capability re-scans `.library/` and renders the
 catalog into the `skills` prompt section

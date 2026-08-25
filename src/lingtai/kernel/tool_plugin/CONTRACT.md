@@ -26,7 +26,6 @@ related_files:
   - src/lingtai/tools/email/manual/SKILL.md
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/manual/SKILL.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/manual/SKILL.md
   - src/lingtai/tools/notification/ANATOMY.md
@@ -373,8 +372,7 @@ registered. Email is the latter: its boot creates/replaces its real manager,
 then uses `extra_ports_for` to grant `email_runtime`. File remains a dynamic
 capability and uses the same per-declaration seam for `file_io`. The Agent manual
 installer maps File's package-owned body to the established `file-manual`
-destination and excludes the retained standalone redirect marker, preventing a
-second body or `capabilities/file` install. This component never selects.
+destination. This component never selects.
 then uses `extra_ports_for` to grant `email_runtime`. Notification is also a
 mandatory injected official family, registered through that existing route with
 its static `DECLARATION` and canonical package-owned manual; capability null and

@@ -10,11 +10,9 @@ related_files:
 - src/lingtai/tools/context/_session_journal.py
 - src/lingtai/tools/system/summarize.py
 - src/lingtai/agent.py
-- src/lingtai/intrinsic_skills/context-manual/SKILL.md
 maintenance: |
   This package is the canonical Context manual source and runtime-installed owner.
-  Keep its content, the installer redirect allowlist, and the retained legacy redirect
-  synchronized; update when the tool/capability behavior changes.
+  Update it when the tool/capability behavior changes.
 ---
 
 # Context Manual

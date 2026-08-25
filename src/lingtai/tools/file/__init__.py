@@ -128,47 +128,13 @@ if tuple(_DECLARED_SCHEMAS_BY_ACTION) != _DECLARED_ACTIONS:
 
 _OPERATION_MODULES = (_read, _write, _edit, _glob, _grep)
 
-# ``file-manual`` is the established public installation/result path. The package
-# manual under ``tools/file/manual`` is the only body owner; ``file`` is accepted
-# only as a read-only transitional fallback for stale candidate-era installs.
-# The integrated shared installer maps File's package manual directly to the
-# established legacy destination, so it never creates the fallback path.
+# ``file-manual`` is the established public installation and result path.
 _LEGACY_MANUAL_SKILL = "file-manual"
-_TRANSITIONAL_MANUAL_SKILL = "file"
-_REDIRECT_MARKER = "redirect: src/lingtai/tools/file/manual/SKILL.md"
 
 
 def _load_file_manual(source: Any) -> dict[str, Any]:
-    """Load File's one authoritative manual with explicit path compatibility.
-
-    Integrated agents install the package-owned body at ``file-manual`` so the
-    public path remains stable. A stale candidate-era worktree may still have
-    installed it at ``file``; accepting that path keeps old worktrees readable
-    without making the retained legacy intrinsic source a second body owner. A
-    redirect marker is never returned as the operational manual.
-    """
-    legacy = load_installed_manual(source, _LEGACY_MANUAL_SKILL)
-    if legacy.get("status") == "ok" and _REDIRECT_MARKER not in legacy.get("manual", ""):
-        return legacy
-
-    transitional = load_installed_manual(source, _TRANSITIONAL_MANUAL_SKILL)
-    if transitional.get("status") == "ok":
-        return transitional
-
-    if legacy.get("status") == "ok":
-        # The old standalone source was accidentally installed without the
-        # package body. Fail with a truthful degraded result rather than
-        # presenting a redirect marker as executable File guidance.
-        return {
-            "status": "degraded",
-            "manual": "",
-            "manual_path": legacy.get("manual_path", ""),
-            "error": (
-                "file-manual compatibility redirect found, but the authoritative "
-                "package manual is not installed"
-            ),
-        }
-    return legacy
+    """Load File's installed manual from its established public path."""
+    return load_installed_manual(source, _LEGACY_MANUAL_SKILL)
 
 
 def _to_manual_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
@@ -184,7 +150,7 @@ def _to_manual_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _build_manual_child(source: Any) -> ChildTool:
-    """Build File's manual child with its legacy-path compatibility route."""
+    """Build File's manual child from its established installed-manual path."""
     def handler(_input: Mapping[str, Any]) -> dict[str, Any]:
         return _to_manual_result(_load_file_manual(source))
 
@@ -312,8 +278,7 @@ DECLARATION = ToolPluginDeclaration(
     input_schemas=_DECLARED_SCHEMAS_BY_ACTION,
     manual_input_schema=MANUAL_INPUT_SCHEMA,
     # The package-owned manual is installed at the established
-    # ``capabilities/file-manual`` path. ``_load_file_manual`` accepts
-    # ``capabilities/file`` only as a read-only stale-candidate fallback.
+    # ``capabilities/file-manual`` path.
     manual=_LEGACY_MANUAL_SKILL,
     description=get_description(),
     binder=_bind,
