@@ -6,8 +6,8 @@ description: |
   reply, check/read/search, media_path attachments (image/video/voice/file),
   contacts/accounts basics, and external-delivery side-effect caveats. Pulled on
   demand via action='manual'; you do not need to call it before every send.
-version: 1.2.0
-last_changed_at: "2026-07-29T01:00:00Z"
+version: 1.3.0
+last_changed_at: "2026-08-24T17:35:00-07:00"
 related_files:
 - src/lingtai/mcp_servers/wechat/manager.py
 - src/lingtai/mcp_servers/wechat/server.py
@@ -124,6 +124,14 @@ ATTACHMENTS below), not a mutually exclusive choice.
 
 - `send` and `reply` deliver to real users — external side effects. Confirm
   recipient and content before sending unsolicited messages.
+- A successful provider response requires an explicit integer `ret: 0`. The
+  result then says `delivery_status: provider_accepted` and
+  `delivery_confirmed: false`: iLink accepted the request, but recipient delivery
+  is not proven. Do not automatically replay an accepted request.
+- For text-plus-media partial outcomes, legacy `partial_delivery: true` is only a
+  replay-compatibility flag that a recipient-visible side effect may have occurred;
+  `partial_provider_acceptance` and `delivery_confirmed: false` carry the precise
+  meaning.
 - Actions return a result dict on success or `{'error': <message>}` on failure
   (e.g. missing `user_id`, unreadable `media_path`). Check for the `'error'` key
   and surface or act on it rather than assuming delivery.

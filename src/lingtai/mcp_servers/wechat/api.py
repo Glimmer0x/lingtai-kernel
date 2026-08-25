@@ -21,12 +21,11 @@ CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
 DEFAULT_LONG_POLL_TIMEOUT = 35.0
 DEFAULT_SEND_TIMEOUT = 15.0
 
-# iLink protocol identity. Mirrored from Hermes/OpenClaw adapters.
-# OpenClaw reads channel_version from package.json; Hermes currently uses 2.1.3.
-# ClientVersion is 0x00MMNNPP for 2.1.3 => 131331.
-_PKG_VERSION = "2.1.3"
+# iLink protocol identity, aligned with Tencent/openclaw-weixin 2.4.6.
+# ClientVersion is 0x00MMNNPP for 2.4.6 => 132102.
+_PKG_VERSION = "2.4.6"
 _ILINK_APP_ID = "bot"
-_ILINK_APP_CLIENT_VERSION = str((2 << 16) | (1 << 8) | 3)
+_ILINK_APP_CLIENT_VERSION = str((2 << 16) | (4 << 8) | 6)
 
 
 def _ensure_trailing_slash(url: str) -> str:
@@ -69,7 +68,7 @@ def _auth_headers(token: str | None) -> dict[str, str]:
 
 
 def _base_info() -> dict:
-    return {"channel_version": _PKG_VERSION}
+    return {"channel_version": _PKG_VERSION, "bot_agent": "LingTai"}
 
 
 async def get_qrcode(base_url: str = DEFAULT_BASE_URL) -> dict:
@@ -160,16 +159,11 @@ async def send_message(
     base_url: str,
     token: str,
     msg: WeixinMessage,
-) -> None:
-    """Send a message (text or media).
+) -> dict[str, int]:
+    """Submit one recipient-visible request and return a safe provider ack.
 
-    iLink occasionally returns HTTP 200 with a JSON body whose ``ret`` or
-    ``errcode`` indicates a logical failure (e.g. session expired,
-    rate-limited, malformed payload, target user blocked). The previous
-    implementation accepted any 2xx and silently let those reports bubble
-    up as success. Now we parse the body when it's JSON and raise on
-    obvious error fields so the caller can react instead of pretending
-    the send went through.
+    Success requires an explicit non-boolean integer ``ret == 0``.  This is
+    provider acceptance only; it does not confirm recipient delivery.
     """
     url = _ensure_trailing_slash(base_url) + "ilink/bot/sendmessage"
     body = {
@@ -184,31 +178,42 @@ async def send_message(
             timeout=DEFAULT_SEND_TIMEOUT,
         )
         resp.raise_for_status()
-        _raise_on_ilink_error(resp, "send_message")
+        return _parse_send_acknowledgement(resp)
 
 
-def _raise_on_ilink_error(resp: "httpx.Response", op: str) -> None:
-    """Raise if an iLink JSON response carries a non-zero ret/errcode.
+def _ack_code(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
-    HTTP 200 with ``ret != 0`` or ``errcode != 0`` is iLink's documented
-    way to report logical errors while keeping the transport layer happy.
-    Tolerant of non-JSON bodies — many CDN responses are plain text.
-    """
-    raw = resp.text
-    if not raw or not raw.strip().startswith("{"):
-        return
+
+def _parse_send_acknowledgement(resp: "httpx.Response") -> dict[str, int]:
+    """Require a strict JSON-object acknowledgement with explicit ``ret=0``."""
+    if not resp.text.strip():
+        raise RuntimeError("iLink send_message returned an empty response")
     try:
         body = resp.json()
-    except Exception:
-        return
+    except ValueError as exc:
+        raise RuntimeError("iLink send_message returned malformed JSON") from exc
+    if not isinstance(body, dict):
+        raise RuntimeError("iLink send_message returned non-object JSON")
+
     ret = body.get("ret")
-    errcode = body.get("errcode")
-    errmsg = body.get("errmsg")
-    if (ret is not None and ret != 0) or (errcode is not None and errcode != 0):
+    if not _ack_code(ret) or ret != 0:
+        detail = ret if _ack_code(ret) else "<missing-or-invalid>"
         raise RuntimeError(
-            f"iLink {op} reported logical error: "
-            f"ret={ret} errcode={errcode} errmsg={errmsg!r}"
+            f"iLink send_message returned invalid acknowledgement: ret={detail}"
         )
+
+    ack = {"ret": 0}
+    if "errcode" in body:
+        errcode = body.get("errcode")
+        if not _ack_code(errcode) or errcode != 0:
+            detail = errcode if _ack_code(errcode) else "<invalid>"
+            raise RuntimeError(
+                "iLink send_message returned invalid acknowledgement: "
+                f"errcode={detail}"
+            )
+        ack["errcode"] = 0
+    return ack
 
 
 async def get_upload_url(
