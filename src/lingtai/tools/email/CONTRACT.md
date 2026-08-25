@@ -291,11 +291,12 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | Cross-action smuggle rejected before side effects | `tests/test_tool_family_email_migration.py::test_send_fields_cannot_be_smuggled_through_a_read_call` | Call `read` with `address`/`message` in `input` | Mail could leave the agent via a read-shaped call |
 | Email manager requests use the typed domain port and reject foreign actions | `tests/test_email_official_tool_plugin.py::test_email_runtime_port_is_domain_specific_and_rejects_foreign_action` | Bind the runtime adapter and inspect its request | A generic dispatcher leaks unrelated capability vocabulary |
 | Official Email mount creates no dynamic capability or persisted manifest row | `tests/test_email_official_tool_plugin.py::test_official_email_mount_keeps_real_agent_runtime_and_package_manual`, `::test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refresh` | Inspect `_capabilities` and `_build_manifest()` after construction and refresh | Avatar replay/identity state gains a false Email capability |
+| `email.boot` runs exactly once per construction and per refresh | `tests/test_email_official_tool_plugin.py::test_email_official_boot_runs_exactly_once_per_construction_and_refresh` | Count official boots, Email registrar calls, and `EmailManager` constructions per phase | A second boot silently repeats manager/grant/bind/mount work behind one final surface |
 
 Run before merging email changes:
 
 ```bash
-python -m pytest tests/test_layers_email.py tests/test_email_identity.py tests/test_email_abs_reply_route.py tests/test_system_dismiss.py tests/test_tool_family_email_migration.py tests/test_tool_family_email_wire_parity.py -q
+python -m pytest tests/test_layers_email.py tests/test_email_identity.py tests/test_email_abs_reply_route.py tests/test_system_dismiss.py tests/test_tool_family_email_migration.py tests/test_tool_family_email_wire_parity.py tests/test_email_official_tool_plugin.py -q
 ```
 
 ## Schema and glossary ownership

@@ -221,6 +221,78 @@ def test_email_official_adapter_reads_replaced_manager_after_refresh(email_agent
     assert replacement.calls == [{"action": "check"}]
 
 
+def test_email_official_boot_runs_exactly_once_per_construction_and_refresh(
+    tmp_path, monkeypatch
+):
+    """Each official intrinsic boots once per phase; Email registers once.
+
+    Counts every ``official_plugin`` module's ``boot`` (the seam
+    ``BaseAgent._boot_official_intrinsics`` invokes) plus Email's registrar
+    call and ``EmailManager`` construction, on construction and again on a
+    real ``_setup_from_init`` refresh. A second boot repeats the
+    manager/grant/bind/mount work while the final surface still looks
+    singular, so only the counts expose it.
+    """
+    import lingtai.tools.email as email_module
+    from lingtai.adapters import tool_plugin_host
+    from lingtai.tools.email import DECLARATION
+    from lingtai.tools.registry import INTRINSICS
+
+    boots: dict[str, int] = {}
+    email_work = {"register": 0, "manager": 0}
+
+    def _counted_boot(name, real_boot):
+        def boot(agent):
+            boots[name] = boots.get(name, 0) + 1
+            real_boot(agent)
+
+        return boot
+
+    official = [name for name, info in INTRINSICS.items() if info.get("official_plugin")]
+    assert "email" in official
+    for name in official:
+        module = INTRINSICS[name]["module"]
+        monkeypatch.setattr(module, "boot", _counted_boot(name, module.boot))
+
+    real_register = tool_plugin_host.register_agent_tool_plugins
+
+    def counted_register(agent, declarations, **kwargs):
+        if any(declaration is DECLARATION for declaration in declarations):
+            email_work["register"] += 1
+        return real_register(agent, declarations, **kwargs)
+
+    monkeypatch.setattr(tool_plugin_host, "register_agent_tool_plugins", counted_register)
+
+    class CountedEmailManager(email_module.EmailManager):
+        def __init__(self, agent):
+            email_work["manager"] += 1
+            super().__init__(agent)
+
+    monkeypatch.setattr(email_module, "EmailManager", CountedEmailManager)
+
+    workdir = tmp_path / "agent"
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="email-exact-once",
+        working_dir=workdir,
+        capabilities={},
+    )
+    try:
+        _write_refresh_init(workdir, capabilities={}, disable=None)
+        for phase in ("construction", "refresh"):
+            if phase == "refresh":
+                boots.clear()
+                email_work["register"] = email_work["manager"] = 0
+                agent._setup_from_init()
+            assert boots == {name: 1 for name in official}, phase
+            assert email_work == {"register": 1, "manager": 1}, phase
+            assert isinstance(agent._email_manager, CountedEmailManager)
+            assert agent.official_tool_plugins["email"] is DECLARATION
+            assert [schema.name for schema in agent._tool_schemas].count("email") == 1
+    finally:
+        agent.stop(timeout=1.0)
+
+
 @pytest.mark.parametrize(
     ("capabilities", "disable"),
     [

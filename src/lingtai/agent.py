@@ -2145,7 +2145,8 @@ class Agent(BaseAgent):
             self.override_intrinsic("soul")
             _soul.setup(self)
 
-        # Reset capability-owned flags (email.boot below resets to "email box"/"email")
+        # Reset capability-owned flags (``email.boot``, run once by
+        # ``_boot_official_intrinsics()`` below, resets to "email box"/"email")
         self._mailbox_name = "email box"
         self._mailbox_tool = "email"
         if hasattr(self, "_post_molt_hooks"):
@@ -2249,13 +2250,12 @@ class Agent(BaseAgent):
         else:
             self._summarize_notification_threshold = 3000
 
-        # Re-boot email so a fresh EmailManager + scheduler thread are wired.
-        # ``email.boot`` stops the previous manager's scheduler before
-        # starting a new one — without that, the prior daemon thread keeps
-        # polling ``mailbox/schedules/*/schedule.json`` and races the new
-        # thread, double-sending the same due tick (issue #154).
-        from lingtai.tools import email as _email
-        _email.boot(self)
+        # Email is re-booted exactly once per refresh by
+        # ``_boot_official_intrinsics()`` below, together with the other
+        # ``official_plugin`` intrinsics. The historical early ``email.boot``
+        # here (issue #154's scheduler-thread reset) is gone: the manager no
+        # longer owns a scheduler, and a second boot would repeat the
+        # manager/grant/bind/mount work for the same declaration.
 
         # Decompress addons BEFORE capability setup so the `mcp` capability
         # sees the populated registry on its first reconcile.
