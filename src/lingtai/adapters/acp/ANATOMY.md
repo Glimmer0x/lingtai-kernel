@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/cli.py
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
+  - src/lingtai/kernel/turn_events.py
+  - src/lingtai/kernel/tool_executor.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -18,6 +20,8 @@ related_files:
   - tests/test_acp_stdio.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
+  - tests/test_turn_events.py
+  - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_process_match.py
   - tests/test_lifecycle_daemon_shutdown.py
@@ -40,8 +44,8 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 
 - `server.py` — `AcpStdioServer`: strict newline-delimited JSON-RPC reader,
   ACP initialize/session state machine, canonical workspace, strict stdio MCP
-  validation/lease ownership, Text/ResourceLink translation, one prompt
-  waiter thread so the reader remains available for cancel, and one bounded FIFO
+  validation/lease ownership, Text/ResourceLink translation, minimal turn-scoped
+  tool lifecycle projection, one prompt waiter thread so the reader remains available for cancel, and one bounded FIFO
   of atomic batches consumed only by a disposable daemon writer. Generation/start
   checks suppress not-yet-started prompt frames; framing/write failures abort the
   transport and active prompt without making stdout teardown authority. Implements
@@ -56,13 +60,14 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   reaches the unconditional process exit.
 - `../../kernel/process_match.py` — exact duplicate-host grammar for module,
   console, legacy, and quoted Windows `.exe` ACP launch forms.
-- `../../kernel/turns.py` and `../../kernel/execution_workspace.py` — inward Core boundary consumed by the Adapter:
+- `../../kernel/turns.py`, `../../kernel/execution_workspace.py`, `../../kernel/turn_events.py`, and `../../kernel/tool_executor.py` — inward Core boundary consumed by the Adapter:
   `TurnHandle`, `TurnResult`, terminal outcome, exact correlation, and matching
-  cooperative cancellation, immutable workspace metadata, and task-local scope.
-  They contain no ACP vocabulary.
+  cooperative cancellation, immutable workspace metadata, task-local scope, and
+  failure-isolated tool lifecycle observation. They contain no ACP vocabulary.
 - `../../services/session_mcp.py` — atomic outer stdio overlay: start/list all,
   collision preflight, one publication, explicit lease, and rollback/close.
 - `tests/test_acp_stdio.py` / `tests/test_correlated_turns.py` /
+  `tests/test_turn_events.py` / `tests/test_tool_executor.py` /
   `tests/test_process_match.py` — wire, Core settlement, and duplicate-host
   conformance evidence. `tests/test_tools_package_data.py` pins wheel/sdist
   inclusion of this component's governed docs.
@@ -71,7 +76,8 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 
 Inbound: a local ACP client launches `lingtai-agent acp --agent-dir <dir>` and
 exchanges one JSON-RPC object per stdio line. Outbound: the Adapter calls only the
-protocol-neutral `BaseAgent.submit_turn`/`TurnHandle` boundary. The CLI root
+protocol-neutral `BaseAgent.submit_turn`/`TurnHandle` boundary with an optional
+turn-scoped tool observer. The CLI root
 reuses `cli.load_init`, `cli.build_agent`, venv resolution, logging, lifecycle,
 and the workdir lease; the Adapter does not construct Core or provider objects.
 
@@ -86,8 +92,8 @@ or remote MCP bridge in this slice.
 ## State
 
 Process-local state only: initialized flag, one opaque session id, one canonical
-workspace, one session-MCP lease, one active
-prompt/handle, closing/aborted generation, a bounded 64-batch FIFO, one disposable
+workspace, one session-MCP lease, one active prompt/handle/observer with terminal tool-id ownership,
+closing/aborted generation, a bounded 64-batch FIFO, one disposable
 daemon writer, and short-lived waiter thread records. Active/busy ownership lasts
 through physical terminal-batch completion, close invalidation, or fatal abort.
 ACP session/correlation identifiers are not persisted. Durable agent state remains

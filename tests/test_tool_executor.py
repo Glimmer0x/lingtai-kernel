@@ -24,6 +24,11 @@ from lingtai.kernel.execution_workspace import (
     current_execution_workspace,
     reset_execution_workspace,
 )
+from lingtai.kernel.turn_events import (
+    ToolLifecycleState,
+    bind_turn_tool_observer,
+    reset_turn_tool_observer,
+)
 from pathlib import Path
 
 
@@ -61,6 +66,323 @@ def make_executor(
         max_result_chars=max_result_chars,
         tool_call_guard=tool_call_guard,
     )
+
+
+class _LifecycleObserver:
+    def __init__(self, *, raises=False):
+        self.events = []
+        self.raises = raises
+
+    def on_tool_lifecycle(self, event):
+        self.events.append(event)
+        if self.raises:
+            raise RuntimeError("projection broke")
+
+
+def _execute_observed(executor, calls, observer, **execute_kwargs):
+    token = bind_turn_tool_observer(observer)
+    try:
+        return executor.execute(calls, **execute_kwargs)
+    finally:
+        reset_turn_tool_observer(token)
+
+
+def test_tool_lifecycle_serial_success_failure_denial_and_observer_isolation():
+    success = _LifecycleObserver(raises=True)
+    executor = make_executor(known_tools={"ok"})
+    results, _, _ = _execute_observed(
+        executor,
+        [ToolCall(name="ok", args={"secret": "never-project"}, id="s1")],
+        success,
+    )
+    assert results[0]["result"]["status"] == "ok"
+    assert [(event.tool_call_id, event.tool_name, event.state) for event in success.events] == [
+        ("s1", "ok", ToolLifecycleState.STARTED),
+        ("s1", "ok", ToolLifecycleState.COMPLETED),
+    ]
+
+    failed = _LifecycleObserver()
+    raising = make_executor(
+        dispatch_fn=lambda _tc: (_ for _ in ()).throw(RuntimeError("private detail")),
+        known_tools={"boom"},
+    )
+    _execute_observed(raising, [ToolCall(name="boom", args={}, id="f1")], failed)
+    assert [event.state for event in failed.events] == [
+        ToolLifecycleState.STARTED,
+        ToolLifecycleState.FAILED,
+    ]
+
+    denied = _LifecycleObserver()
+    guard = ToolCallGuard([
+        lambda _proposal: GuardDecision.deny(
+            check_name="local_guard", reason="private denial"
+        )
+    ])
+    blocked = make_executor(known_tools={"write"}, tool_call_guard=guard)
+    _execute_observed(blocked, [ToolCall(name="write", args={}, id="d1")], denied)
+    assert [(event.tool_call_id, event.state) for event in denied.events] == [
+        ("d1", ToolLifecycleState.DENIED)
+    ]
+
+
+def test_tool_lifecycle_parallel_workers_inherit_observer_context():
+    observer = _LifecycleObserver()
+    executor = make_executor(
+        known_tools={"a", "b"},
+        parallel_safe={"a", "b"},
+    )
+    _execute_observed(
+        executor,
+        [
+            ToolCall(name="a", args={}, id="a1"),
+            ToolCall(name="b", args={}, id="b1"),
+        ],
+        observer,
+    )
+    by_id = {
+        tool_id: [event.state for event in observer.events if event.tool_call_id == tool_id]
+        for tool_id in ("a1", "b1")
+    }
+    assert by_id == {
+        "a1": [ToolLifecycleState.STARTED, ToolLifecycleState.COMPLETED],
+        "b1": [ToolLifecycleState.STARTED, ToolLifecycleState.COMPLETED],
+    }
+
+
+def test_parallel_future_exception_emits_one_failed_terminal_in_input_order(
+    monkeypatch,
+):
+    observer = _LifecycleObserver()
+    executor = make_executor(
+        known_tools={"broken", "ok"},
+        parallel_safe={"broken", "ok"},
+    )
+    original_stage_meta = executor._stage_meta
+    failed_once = False
+    failed_once_lock = threading.Lock()
+
+    def fail_one_worker_stage(tool_call_id, elapsed_ms, trace_id):
+        nonlocal failed_once
+        with failed_once_lock:
+            if tool_call_id == "broken-1" and not failed_once:
+                failed_once = True
+                raise RuntimeError("collector fallback")
+        return original_stage_meta(tool_call_id, elapsed_ms, trace_id)
+
+    monkeypatch.setattr(executor, "_stage_meta", fail_one_worker_stage)
+    results, intercepted, intercept_text = _execute_observed(
+        executor,
+        [
+            ToolCall(name="broken", args={}, id="broken-1"),
+            ToolCall(name="ok", args={}, id="ok-1"),
+        ],
+        observer,
+    )
+
+    assert not intercepted
+    assert intercept_text == ""
+    assert [result["name"] for result in results] == ["broken", "ok"]
+    assert results[0]["result"]["status"] == "error"
+    assert results[0]["result"]["error_phase"] == "parallel_future"
+    assert results[1]["result"]["status"] == "ok"
+    by_id = {
+        tool_id: [event.state for event in observer.events if event.tool_call_id == tool_id]
+        for tool_id in ("broken-1", "ok-1")
+    }
+    assert by_id == {
+        "broken-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
+        "ok-1": [ToolLifecycleState.STARTED, ToolLifecycleState.COMPLETED],
+    }
+
+
+def test_parallel_timeout_emits_one_failed_terminal_and_drops_late_completion(
+    monkeypatch,
+):
+    observer = _LifecycleObserver()
+    release = threading.Event()
+    all_started = threading.Event()
+    all_dispatch_returned = threading.Event()
+    state_lock = threading.Lock()
+    started_ids = set()
+    returned_ids = set()
+
+    def dispatch(tc):
+        with state_lock:
+            started_ids.add(tc.id)
+            if len(started_ids) == 2:
+                all_started.set()
+        assert release.wait(timeout=5)
+        with state_lock:
+            returned_ids.add(tc.id)
+            if len(returned_ids) == 2:
+                all_dispatch_returned.set()
+        return {"status": "ok", "result": tc.name}
+
+    def force_timeout(_futures, timeout):
+        assert timeout == 300.0
+        assert all_started.wait(timeout=5)
+        raise TimeoutError
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        known_tools={"slow-a", "slow-b"},
+        parallel_safe={"slow-a", "slow-b"},
+    )
+    monkeypatch.setattr(tool_executor_module, "as_completed", force_timeout)
+    try:
+        results, intercepted, intercept_text = _execute_observed(
+            executor,
+            [
+                ToolCall(name="slow-a", args={}, id="slow-a-1"),
+                ToolCall(name="slow-b", args={}, id="slow-b-1"),
+            ],
+            observer,
+        )
+    finally:
+        release.set()
+
+    assert all_dispatch_returned.wait(timeout=5)
+    time.sleep(0.05)
+    assert not intercepted
+    assert intercept_text == ""
+    assert [result["name"] for result in results] == ["slow-a", "slow-b"]
+    assert [result["result"]["error_phase"] for result in results] == [
+        "timeout",
+        "timeout",
+    ]
+    by_id = {
+        tool_id: [event.state for event in observer.events if event.tool_call_id == tool_id]
+        for tool_id in ("slow-a-1", "slow-b-1")
+    }
+    assert by_id == {
+        "slow-a-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
+        "slow-b-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
+    }
+
+
+def test_parallel_timeout_after_workers_return_still_owns_failed_terminal(
+    monkeypatch,
+):
+    observer = _LifecycleObserver()
+    all_dispatch_returned = threading.Event()
+    returned_ids = set()
+    state_lock = threading.Lock()
+
+    def dispatch(tc):
+        with state_lock:
+            returned_ids.add(tc.id)
+            if len(returned_ids) == 2:
+                all_dispatch_returned.set()
+        return {"status": "ok", "result": tc.name}
+
+    def timeout_at_collector_boundary(_futures, timeout):
+        assert timeout == 300.0
+        assert all_dispatch_returned.wait(timeout=5)
+        raise TimeoutError
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        known_tools={"boundary-a", "boundary-b"},
+        parallel_safe={"boundary-a", "boundary-b"},
+    )
+    monkeypatch.setattr(
+        tool_executor_module,
+        "as_completed",
+        timeout_at_collector_boundary,
+    )
+    results, intercepted, intercept_text = _execute_observed(
+        executor,
+        [
+            ToolCall(name="boundary-a", args={}, id="boundary-a-1"),
+            ToolCall(name="boundary-b", args={}, id="boundary-b-1"),
+        ],
+        observer,
+    )
+
+    assert not intercepted
+    assert intercept_text == ""
+    assert [result["name"] for result in results] == [
+        "boundary-a",
+        "boundary-b",
+    ]
+    assert [result["result"]["error_phase"] for result in results] == [
+        "timeout",
+        "timeout",
+    ]
+    by_id = {
+        tool_id: [event.state for event in observer.events if event.tool_call_id == tool_id]
+        for tool_id in ("boundary-a-1", "boundary-b-1")
+    }
+    assert by_id == {
+        "boundary-a-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
+        "boundary-b-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
+    }
+
+
+def test_parallel_cancel_collector_settles_started_calls_once(monkeypatch):
+    observer = _LifecycleObserver()
+    cancel = threading.Event()
+    release_workers = threading.Event()
+    all_started = threading.Event()
+    all_dispatch_returned = threading.Event()
+    state_lock = threading.Lock()
+    started_ids = set()
+    returned_ids = set()
+
+    def dispatch(tc):
+        with state_lock:
+            started_ids.add(tc.id)
+            if len(started_ids) == 2:
+                all_started.set()
+        assert release_workers.wait(timeout=5)
+        with state_lock:
+            returned_ids.add(tc.id)
+            if len(returned_ids) == 2:
+                all_dispatch_returned.set()
+        return {"status": "ok", "result": tc.name}
+
+    def cancel_on_first_collection(futures, timeout):
+        assert timeout == 300.0
+        assert all_started.wait(timeout=5)
+        cancel.set()
+        yield next(iter(futures))
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        known_tools={"cancel-fast", "cancel-slow"},
+        parallel_safe={"cancel-fast", "cancel-slow"},
+    )
+    monkeypatch.setattr(
+        tool_executor_module,
+        "as_completed",
+        cancel_on_first_collection,
+    )
+    try:
+        results, intercepted, intercept_text = _execute_observed(
+            executor,
+            [
+                ToolCall(name="cancel-fast", args={}, id="cancel-fast-1"),
+                ToolCall(name="cancel-slow", args={}, id="cancel-slow-1"),
+            ],
+            observer,
+            cancel_event=cancel,
+        )
+    finally:
+        release_workers.set()
+
+    assert all_dispatch_returned.wait(timeout=5)
+    time.sleep(0.05)
+    assert results == []
+    assert not intercepted
+    assert intercept_text == ""
+    by_id = {
+        tool_id: [event.state for event in observer.events if event.tool_call_id == tool_id]
+        for tool_id in ("cancel-fast-1", "cancel-slow-1")
+    }
+    assert by_id == {
+        "cancel-fast-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
+        "cancel-slow-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
+    }
 
 
 def test_parallel_dispatch_copies_workspace_without_leaking_to_caller(tmp_path):

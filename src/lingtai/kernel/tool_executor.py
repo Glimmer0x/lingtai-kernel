@@ -1,6 +1,7 @@
 """ToolExecutor — sequential and parallel tool call execution."""
 from __future__ import annotations
 
+import threading
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -42,6 +43,11 @@ from .tool_result_summary import (
 from .tool_timing import ToolTimer
 from .execution_workspace import copy_execution_context
 from .types import UnknownToolError
+from .turn_events import (
+    ToolLifecycleEvent,
+    ToolLifecycleState,
+    notify_tool_lifecycle,
+)
 
 
 # Legacy constructor default retained for API compatibility.  Primary tool
@@ -155,6 +161,14 @@ class ToolExecutor:
         if isinstance(tc_id, str) and tc_id:
             return tc_id
         return f"tool-{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _notify_tool_lifecycle(
+        tool_name: str,
+        trace_id: str,
+        state: ToolLifecycleState,
+    ) -> None:
+        notify_tool_lifecycle(ToolLifecycleEvent(trace_id, tool_name, state))
 
     def _log_lifecycle(
         self,
@@ -741,6 +755,7 @@ class ToolExecutor:
             guard_decision=decision.to_payload(proposal),
             reason=result["message"],
         )
+        self._notify_tool_lifecycle(tc.name, trace_id, ToolLifecycleState.DENIED)
         self._log_tool_result(
             tool_name=tc.name,
             tool_call_id=tc_id,
@@ -1133,6 +1148,9 @@ class ToolExecutor:
                     tool_trace_id=trace_id,
                     reason="unknown_tool",
                 )
+                self._notify_tool_lifecycle(
+                    tc.name, trace_id, ToolLifecycleState.FAILED
+                )
                 err_result = self._error_payload(
                     tool_name=tc.name,
                     tool_call_id=tc_id,
@@ -1193,6 +1211,9 @@ class ToolExecutor:
                 tool_trace_id=trace_id,
                 tool_args=args,
             )
+            self._notify_tool_lifecycle(
+                tc.name, trace_id, ToolLifecycleState.STARTED
+            )
             # Best-effort pre-dispatch hook — fires before the handler,
             # allows real-time progress projection. Exceptions are caught
             # and logged; they never block or fail the tool.
@@ -1230,6 +1251,13 @@ class ToolExecutor:
                 tool_trace_id=trace_id,
                 status=status,
                 elapsed_ms=timer.elapsed_ms,
+            )
+            self._notify_tool_lifecycle(
+                tc.name,
+                trace_id,
+                ToolLifecycleState.FAILED
+                if status == "error"
+                else ToolLifecycleState.COMPLETED,
             )
             self._log_tool_result(
                 tool_name=tc.name,
@@ -1295,6 +1323,9 @@ class ToolExecutor:
                 elapsed_ms=timer.elapsed_ms,
                 exception=type(e).__name__,
                 exception_message=str(e),
+            )
+            self._notify_tool_lifecycle(
+                tc.name, trace_id, ToolLifecycleState.FAILED
             )
             err_result = self._error_payload(
                 tool_name=tc.name,
@@ -1371,6 +1402,28 @@ class ToolExecutor:
         on_pre_dispatch_hook: Callable | None = None,
         cancel_event: Any | None = None,
     ) -> tuple[list, bool, str]:
+        lifecycle_lock = threading.Lock()
+        lifecycle_started: set[str] = set()
+        lifecycle_terminal: set[str] = set()
+
+        def emit_lifecycle(
+            tool_name: str,
+            trace_id: str,
+            state: ToolLifecycleState,
+        ) -> None:
+            """Emit one ordered start and at most one terminal per parallel call."""
+
+            with lifecycle_lock:
+                if trace_id in lifecycle_terminal:
+                    return
+                if state is ToolLifecycleState.STARTED:
+                    if trace_id in lifecycle_started:
+                        return
+                    lifecycle_started.add(trace_id)
+                else:
+                    lifecycle_terminal.add(trace_id)
+                self._notify_tool_lifecycle(tool_name, trace_id, state)
+
         # Phase 1: Pre-check duplicates (sequential — guard not thread-safe)
         to_execute: list[tuple[int, ToolCall, dict, str, Any, GuardDecision, ToolProposal]] = []
         tool_results: list[tuple[int, Any]] = []
@@ -1389,6 +1442,9 @@ class ToolExecutor:
                     tool_call_id=tc_id,
                     tool_trace_id=trace_id,
                     reason="unknown_tool",
+                )
+                emit_lifecycle(
+                    tc.name, trace_id, ToolLifecycleState.FAILED
                 )
                 result = self._error_payload(
                     tool_name=tc.name,
@@ -1455,6 +1511,11 @@ class ToolExecutor:
         results_map: dict[int, Any] = {}
         errors_map: dict[int, dict] = {}
         elapsed_map: dict[int, int] = {}
+        lifecycle_by_index = {
+            index: (tc.name, trace_id)
+            for index, tc, _args, trace_id, _verdict, _decision, _proposal
+            in to_execute
+        }
 
         def _run_one(
             index: int,
@@ -1479,6 +1540,9 @@ class ToolExecutor:
                 tool_call_id=tc_id,
                 tool_trace_id=trace_id,
                 tool_args=args,
+            )
+            emit_lifecycle(
+                tc.name, trace_id, ToolLifecycleState.STARTED
             )
             timer = ToolTimer()
             try:
@@ -1569,12 +1633,29 @@ class ToolExecutor:
             }
             for future in as_completed(futures, timeout=300.0):
                 if cancel_event is not None and cancel_event.is_set():
+                    for tool_name, trace_id in lifecycle_by_index.values():
+                        emit_lifecycle(
+                            tool_name, trace_id, ToolLifecycleState.FAILED
+                        )
                     pool.shutdown(wait=False, cancel_futures=True)
                     return [], False, ""
                 try:
                     idx, result, elapsed_ms = future.result()
                     results_map[idx] = result
                     elapsed_map[idx] = elapsed_ms
+                    tool_name, trace_id = lifecycle_by_index[idx]
+                    status = (
+                        result.get("status", "success")
+                        if isinstance(result, dict)
+                        else "success"
+                    )
+                    emit_lifecycle(
+                        tool_name,
+                        trace_id,
+                        ToolLifecycleState.FAILED
+                        if status == "error"
+                        else ToolLifecycleState.COMPLETED,
+                    )
                 except Exception as e:
                     idx = futures[future]
                     tc_entry = next(
@@ -1621,6 +1702,9 @@ class ToolExecutor:
                         elapsed_ms=0,
                         exception=type(e).__name__,
                         exception_message=str(e),
+                    )
+                    emit_lifecycle(
+                        tc_name, trace_id, ToolLifecycleState.FAILED
                     )
                     self._log_tool_result(
                         tool_name=tc_name,
@@ -1680,6 +1764,9 @@ class ToolExecutor:
                         elapsed_ms=0,
                         exception="TimeoutError",
                         exception_message="Timed out",
+                    )
+                    emit_lifecycle(
+                        tc_name, trace_id_t, ToolLifecycleState.FAILED
                     )
                     self._log_tool_result(
                         tool_name=tc_name,

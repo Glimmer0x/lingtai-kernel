@@ -7,11 +7,15 @@ related_files:
   - src/lingtai/cli_acp.py
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
+  - src/lingtai/kernel/turn_events.py
+  - src/lingtai/kernel/tool_executor.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_acp_stdio.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
+  - tests/test_turn_events.py
+  - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_lifecycle_daemon_shutdown.py
 maintenance: |
@@ -38,14 +42,15 @@ This slice supports exactly:
 - zero or more session-scoped stdio MCP servers mounted all-or-nothing;
 - one active `session/prompt` at a time;
 - baseline Text and ResourceLink prompt blocks;
+- minimal tool lifecycle projected as `tool_call` / `tool_call_update`;
 - one completed response projected as `agent_message_chunk`;
 - terminal `end_turn`, cooperative `cancelled`, or a fixed JSON-RPC failure;
 - `session/cancel` for the active turn.
 
 It deliberately does **not** provide session load/persistence, multiple sessions,
 remote MCP servers, additional workspace roots, permission requests,
-capability-gated image/audio/embedded-resource content, incremental event/tool
-projection, remote transport,
+capability-gated image/audio/embedded-resource content, message/usage streaming,
+tool arguments/results/content, remote transport,
 authentication, or ACP v2.
 
 Stable ACP v1 requires stdio session MCP and applying `cwd`. This slice implements
@@ -79,7 +84,8 @@ A minimal client sequence is:
 4. Send `session/prompt` with that id and a non-empty Text/ResourceLink block
    list. ResourceLink metadata is forwarded to Core as compact text; this slice
    does not fetch the URI.
-5. Read zero or one completed Text `session/update`, then the response carrying
+5. Read any minimal tool lifecycle `session/update` frames, then zero or one
+   completed Text `agent_message_chunk`, then the response carrying
    `stopReason: "end_turn"`.
 6. While step 4 is unresolved, a client may send the `session/cancel`
    notification for the same session. Keep reading: the original prompt request,
@@ -92,6 +98,24 @@ Example shapes (one compact object per real line in an actual transport):
 {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/absolute/client/cwd","mcpServers":[]}}
 {"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<returned-id>","prompt":[{"type":"text","text":"Hello"}]}}
 ```
+
+## Tool lifecycle projection
+
+For each observed tool call, the first lifecycle event uses `tool_call` with a
+session-unique `toolCallId`, the tool name as `title`, and current status. Later
+states use `tool_call_update` with that id and status. Status is only
+`in_progress`, `completed`, or `failed`; local guard denial is `failed` without
+executing the tool. For parallel dispatch, workers announce only start and the
+collector assigns the one terminal state from the outcome it actually accepts;
+future exceptions, timeout, or cancellation therefore cannot leave `in_progress`
+or be overwritten by a late completion. Accepted updates remain FIFO-before the prompt terminal
+response, while events after close, generation change, or terminal claim are
+dropped.
+
+This is deliberately metadata-only. The Adapter does not send tool arguments,
+results, content, locations, `rawInput`, `rawOutput`, or internal error text.
+Observer/projection exceptions cannot change Core tool execution; fatal bounded
+queue/framing failure still aborts the transport.
 
 ## Cancellation semantics
 

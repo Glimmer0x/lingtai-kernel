@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/kernel/base_agent/worker_recovery.py
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
+  - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -25,6 +26,7 @@ related_files:
   - tests/test_tool_result_restore_after_continuation_failure.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
+  - tests/test_turn_events.py
   - src/lingtai/adapters/acp/BEHAVIORS.md
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
@@ -125,14 +127,16 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
 - **estimate**: ≈ 3 minutes
 
 ### Steps
-1. From `<repo>`, run `python -m pytest -q -x tests/test_correlated_turns.py tests/test_execution_workspace.py` with the project Python.
+1. From `<repo>`, run `python -m pytest -q -x tests/test_turn_events.py tests/test_correlated_turns.py tests/test_execution_workspace.py tests/test_tool_executor.py` with the project Python.
 2. Inspect the normal test and confirm the submitted correlation id returns one `normal` result carrying the complete collected text.
 3. Inspect the active-cancel and two-queued-turn tests: cancel the matching active handle before releasing its fake provider, then cancel the pending second handle while the first is blocked.
 4. Inspect failure and shutdown tests and confirm AED terminal failure becomes `failed` while run-loop shutdown settles an unprocessed queued handle `cancelled`; a control already claimed during the dequeue/bind race makes its private envelope skip provider dispatch.
 5. Inspect the two unexpected-run-loop tests: a failure after dequeue but before `begin_turn` cancels the still-registered handle, while a failure after provider completion but before normal settlement fails the current handle with bounded detail; both exceptions remain visible to supervision rather than being swallowed.
 6. Inspect the cancel-vs-settle race and worker-hang context tests: exactly one settlement wins, a later cancel is false, and correlated request text uses the existing bounded/redacted request artifact shape.
-7. Inspect execution-workspace tests: task-local scope roots execution paths,
-   parallel workers inherit it, and reset leaves the caller/later turn unscoped.
+7. Inspect execution-workspace and turn-observer tests: task-local scope roots
+   execution paths, lifecycle observers reach serial/parallel tool workers, a
+   consecutive unobserved turn sees no stale observer, and observer failure does
+   not alter tool execution or settlement.
 
 ### Expected evidence
 - [ ] All focused tests pass without a provider or network call.
@@ -141,6 +145,7 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
 - [ ] Failure and shutdown each settle rather than leaving a waiter blocked; a terminal stale envelope never reaches provider work.
 - [ ] Pre-bind and post-provider unexpected exceptions both re-raise, leave no live control, and settle the affected waiter cancelled/failed respectively without requiring `Agent.stop()`.
 - [ ] Cancel/settle races leave exactly one terminal result, and WorkerStillRunning attribution records the correlated turn as a bounded/redacted request.
+- [ ] Tool lifecycle observation is turn-scoped, ordered per tool-call id, inherited by parallel workers, reset before later turns, and unable to fail Core execution.
 
 ### Pass / Fail
 Pass when every handle settles exactly once with the expected correlation and the

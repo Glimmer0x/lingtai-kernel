@@ -12,6 +12,8 @@ related_files:
   - src/lingtai/cli.py
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
+  - src/lingtai/kernel/turn_events.py
+  - src/lingtai/kernel/tool_executor.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/process_match.py
@@ -20,6 +22,8 @@ related_files:
   - tests/test_acp_stdio.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
+  - tests/test_turn_events.py
+  - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_process_match.py
   - tests/test_lifecycle_daemon_shutdown.py
@@ -64,7 +68,8 @@ therefore prohibited while ACP owns the transport.
 ## Port
 
 The Adapter consumes `BaseAgent.submit_turn(content, sender, correlation_id,
-execution_workspace) -> TurnHandle` and `TurnHandle.cancel()/result()` from
+execution_workspace, tool_observer) -> TurnHandle` and
+`TurnHandle.cancel()/result()` from
 `src/lingtai/kernel/turns.py`. The terminal `TurnResult` distinguishes
 `normal`, `cancelled`, and `failed` and carries the complete response text for
 normal settlement. This Port contains no ACP method, JSON-RPC object, session
@@ -106,8 +111,12 @@ library JSON/threading streams directly.
    Text/ResourceLink blocks. Text is concatenated in order; each validated
    ResourceLink is projected into the Core text boundary as compact JSON metadata
    without fetching it. Images/audio, embedded resources, permission requests,
-   tool/event projection, and rich streaming are unsupported. Normal output is
-   at most one completed-response
+   message/usage streaming, and rich tool content are unsupported. During the
+   correlated turn, the Adapter projects only minimal tool lifecycle metadata as
+   ACP v1 `tool_call`/`tool_call_update`: one session-unique id, the tool name as
+   title, and `in_progress`/`completed`/`failed` status. Arguments, results,
+   content, locations, `rawInput`, `rawOutput`, and internal errors never cross
+   the wire. Normal output is at most one completed-response
    `agent_message_chunk` followed by `{stopReason: "end_turn"}`; no hidden
    thoughts or tool internals are projected.
 4. `acp-local-stdio.cancel.v1` — `session/cancel` calls only the active
@@ -143,14 +152,27 @@ library JSON/threading streams directly.
    forms including quoted Windows `lingtai-agent.exe` before stale signal cleanup;
    the workdir lease remains authoritative.
 7. `acp-local-stdio.scope.v1` — local stdio and ACP v1 only. Multi-session
-   persistence/load, additional workspace roots, permission brokerage, event
-   streaming, remote MCP/transports, authentication, and ACP v2 are non-goals.
+   persistence/load, additional workspace roots, permission brokerage,
+   message/usage streaming, tool content/results, remote MCP/transports,
+   authentication, and ACP v2 are non-goals.
 8. `acp-local-stdio.workspace-mcp-lifecycle.v1` — relative/default File paths,
    Shell cwd validation/defaults, risky-action canonicalization, and parallel
    dispatch observe the canonical turn workspace. Parent and symlink escapes
    fail. Context is reset between turns and copied to worker threads. The ACP
    server owns one idempotent session-MCP lease and closes it on close, EOF,
    fatal abort, startup rollback, or Agent stop.
+
+9. `acp-local-stdio.tool-lifecycle.v1` — each first lifecycle event emits one
+   `tool_call`; later events for that id emit `tool_call_update`. Per-tool state is
+   monotonic and duplicate terminal events are dropped. For parallel dispatched
+   tools, workers emit only STARTED; the collector exclusively claims terminal
+   after incorporating a result or deciding exception, timeout, or cancellation,
+   so the returned outcome and projected terminal cannot diverge. The server state lock
+   linearizes lifecycle enqueue against terminal claim, the bounded FIFO preserves
+   accepted updates before the terminal response, and close/generation/terminal
+   invalidation drops later events. Observer or projection failure cannot fail the
+   underlying tool, but queue/framing failure still aborts the transport under rule
+   6. Tool-call ids are session-unique and no argument/result/raw payload is sent.
 
 ## Contract tests
 
@@ -160,7 +182,7 @@ session/busy/unsupported errors, strict JSON line framing, invalid UTF-8, EOF,
 blocked coordinator/prompt output, FIFO/generation/queue-full/write-failure paths,
 Agent-stop-with-open-stdin, Windows duplicate-before-cleanup, typed quiescence,
 and CLI Python-stdout quarantine/hard-exit ownership.
-`tests/test_execution_workspace.py`, `tests/test_session_mcp.py`, and the ACP
+`tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP
 wire tests pin workspace rooting/escape/isolation, stdio validation, atomic
 publication/rollback, collisions, and close/EOF ownership.
 `tests/test_correlated_turns.py` pins the consumed Core Port's normal, matching
