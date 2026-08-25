@@ -1,6 +1,7 @@
 ---
 name: daemon-dispatch-ledger
 version: 0.1.0
+last_changed_at: 2026-08-25T06:09:40Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
