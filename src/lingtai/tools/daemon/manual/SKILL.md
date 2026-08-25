@@ -214,6 +214,13 @@ Behavior notes:
   evidence and terminal notification instead of being replayed.
 - Phase 1 still spawns one execution child per active run (no reusable LLM
   worker yet); the reusable worker pool is a later phase.
+- **For large concurrent batches, strongly recommend delaying the `daemon`
+  notification channel** with `notification(action="delay", input={"channel":
+  "daemon", "seconds": <duration>})` so terminal arrivals do not repeatedly
+  wake the parent. Delay masks attention only: per-run mini-files, durable
+  receipts, `daemon.json`, and aggregate truth remain readable; choose a bounded
+  duration and let the delay-alarm mirror re-expose the channel. Read
+  `notification-manual` before selecting the duration or handling expiry.
 
 ## Core rules to keep resident
 

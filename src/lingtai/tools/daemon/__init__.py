@@ -497,10 +497,12 @@ _DAEMON_COMPACT_MANUAL_PROCEDURES = (
 DAEMON_ASYNC_HANDOFF = (
     "While waiting, go idle or call system(action='sleep'); the terminal result "
     "will arrive and wake you as a notification; read daemon-manual and "
-    "notification-manual for details. If Telegram is connected and a Task Card "
-    "is available for the current turn, use it to report progress; call "
-    "`telegram(action='manual')` and follow its `Programmable Task Card` "
-    "section for details."
+    "notification-manual for details. For large concurrent batches, strongly "
+    "recommend notification(action='delay') on the daemon channel to reduce wake "
+    "frequency; delay masks attention only, never daemon truth. If Telegram is "
+    "connected and a Task Card is available for the current turn, use it to report "
+    "progress; call `telegram(action='manual')` and follow its `Programmable Task "
+    "Card` section for details."
 )
 # A fleet (two or more daemons), or a single one whose caller explicitly asked
 # for a long ceiling, is work a human wants to follow. The default 3600s

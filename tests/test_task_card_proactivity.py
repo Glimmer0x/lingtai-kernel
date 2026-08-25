@@ -64,6 +64,12 @@ def _start_watch(manager: TaskCardManager, workdir: Path, *, max_refreshes: int)
 # --- Mechanism 1: daemon fleet nudge ---
 
 
+def test_async_handoff_recommends_daemon_delay_for_large_concurrency():
+    assert "For large concurrent batches, strongly recommend" in DAEMON_ASYNC_HANDOFF
+    assert "notification(action='delay') on the daemon channel" in DAEMON_ASYNC_HANDOFF
+    assert "delay masks attention only, never daemon truth" in DAEMON_ASYNC_HANDOFF
+
+
 def test_fleet_dispatch_without_a_watch_is_nudged(daemon):
     daemon._agent._task_card_manager = _StubCard(False)
     handoff = daemon._emanate_handoff(4, None)
