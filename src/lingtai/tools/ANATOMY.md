@@ -76,16 +76,14 @@ maintenance: |
   (`src/lingtai/kernel/tool_plugin/ANATOMY.md`, linked here); the curated
   descriptor/catalog route is the retained external-transport/launcher adapter
   over a declaration, and the Agent Plugins entry is the excluded external
-  standard kept only as the registration-versus-activation precedent. They are
-  not a claim that every shared-C target has merged: `mcp` is the base reference,
+  standard kept only as the registration-versus-activation precedent. Those
+  navigation entries do not themselves prove a declaration: `mcp` is the base reference,
   while the separately landed `avatar`, Context, Daemon, Email, File, Plugin,
-  Notification, Shell, Soul, System, Task Card, and Vision
-  vertical slices are actual declared evidence; only the remaining target names
-  stay candidates. The normative rules — including the selected form,
-  while the separately landed `avatar`, Context, Daemon, Email, and Notification
-  vertical slices are actual declared evidence; only the remaining target names stay candidates. The normative rules — including the selected form,
-  the reserved official-name rule, and the governed-surface classification — stay in the
-  Contract and in the kernel component's own Contract.
+  Notification, Shell, Soul, System, Task Card, Vision, and Web vertical slices
+  are actual declared evidence; the former later-family target register is empty.
+  The normative rules — including the selected form, the reserved official-name
+  rule, and the governed-surface classification — stay in the Contract and in
+  the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
 ---
@@ -106,7 +104,10 @@ capability names and lazy adapters.
 - `BEHAVIORS.md` — the paired LABT file: LP001 guards the closed LTP envelope,
   LP002 guards the Tool-to-MCP Plugin Contract's status, its two-class governed
   surface, its single selected wrapper form, the document graph, and the
-  current-evidence claims.
+  current inventory: fourteen static official families (`mcp`, `avatar`,
+  `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
+  `soul`, `system`, `task_card`, `vision`, `web`), twenty grantable host names,
+  and an empty former later-family target register.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
   (`src/lingtai/tools/registry.py:39-344`).
