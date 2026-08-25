@@ -333,3 +333,138 @@ def test_stop_releases_workdir_lease_when_manifest_write_raises(monkeypatch):
         lifecycle._stop(agent, timeout=0.01)
 
     assert released == [True]
+
+
+def test_stop_releases_workdir_lease_when_agent_service_teardown_raises(monkeypatch):
+    """Issue #661 also wraps the post-quiescence subclass service hook."""
+    from lingtai.kernel.base_agent import lifecycle
+
+    released = []
+
+    class FakeLease:
+        def release(self):
+            released.append(True)
+
+    def exploding_services():
+        raise RuntimeError("agent service close boom")
+
+    agent = SimpleNamespace(
+        _log=lambda event, **fields: None,
+        _cancel_soul_timer=lambda: None,
+        _shutdown=threading.Event(),
+        _thread=None,
+        _llm_worker_poison_future=None,
+        inbox=None,
+        _task_card_controller=None,
+        _task_card_manager=None,
+        _close_agent_owned_services_after_quiescence=exploding_services,
+        _session=SimpleNamespace(close=lambda: None),
+        _mail_service=None,
+        _event_journal=None,
+        _workdir=SimpleNamespace(write_manifest=lambda m: None),
+        _workdir_lease=FakeLease(),
+        _workdir_lease_acquired=True,
+        _build_manifest=lambda: {"agent": "test"},
+        get_capability=lambda name: None,
+    )
+
+    with pytest.raises(RuntimeError, match="agent service close boom"):
+        lifecycle._stop(agent, timeout=0.01)
+
+    assert released == [True]
+    assert not agent._workdir_lease_acquired
+
+
+def test_stop_timeout_retains_services_heartbeat_and_lease_until_execution_quiesces(
+    monkeypatch,
+):
+    from lingtai.kernel.base_agent import lifecycle
+
+    order: list[str] = []
+    release_provider = threading.Event()
+    provider_started = threading.Event()
+    provider_future = Future()
+
+    class FakeTaskCard:
+        def shutdown_for_agent_stop(self, *, reason):
+            order.append(f"task_card:{reason}")
+
+    class FakeWorkdir:
+        def write_manifest(self, manifest):
+            order.append("manifest")
+
+    class FakeLease:
+        released = False
+
+        def release(self):
+            self.released = True
+            order.append("lease")
+
+    lease = FakeLease()
+
+    def provider_run_loop():
+        provider_started.set()
+        assert release_provider.wait(timeout=5)
+        assert not lease.released, "provider must not write after lease release"
+        order.append("provider_state_write")
+        provider_future.set_result(None)
+
+    run_loop = threading.Thread(target=provider_run_loop, daemon=True)
+    run_loop.start()
+    assert provider_started.wait(timeout=1)
+
+    agent = SimpleNamespace(
+        _log=lambda event, **fields: order.append(event),
+        _cancel_soul_timer=lambda: None,
+        _shutdown=threading.Event(),
+        _thread=run_loop,
+        _llm_worker_poison_future=provider_future,
+        inbox=None,
+        _task_card_controller=FakeTaskCard(),
+        _task_card_manager=None,
+        _close_agent_owned_services_after_quiescence=lambda: order.append("services"),
+        _session=SimpleNamespace(close=lambda: order.append("session")),
+        _mail_service=None,
+        _event_journal=None,
+        _workdir=FakeWorkdir(),
+        _workdir_lease=lease,
+        _build_manifest=lambda: {"agent": "test"},
+        get_capability=lambda name: None,
+    )
+    monkeypatch.setattr(lifecycle, "_stop_heartbeat", lambda a: order.append("heartbeat"))
+
+    timed_out = lifecycle._stop(agent, timeout=0.01)
+
+    assert timed_out.status is lifecycle.StopStatus.TIMED_OUT
+    assert timed_out.run_loop_alive
+    assert timed_out.provider_worker_alive
+    assert not lease.released
+    assert not any(
+        step in order
+        for step in (
+            "task_card:agent_stop",
+            "services",
+            "session",
+            "manifest",
+            "heartbeat",
+            "lease",
+        )
+    )
+
+    release_provider.set()
+    run_loop.join(timeout=1)
+    assert not run_loop.is_alive()
+
+    stopped = lifecycle._stop(agent, timeout=1.0)
+
+    assert stopped.status is lifecycle.StopStatus.STOPPED
+    assert not stopped.run_loop_alive
+    assert not stopped.provider_worker_alive
+    assert lease.released
+    provider_i = order.index("provider_state_write")
+    services_i = order.index("services")
+    session_i = order.index("session")
+    manifest_i = order.index("manifest")
+    heartbeat_i = order.index("heartbeat")
+    lease_i = order.index("lease")
+    assert provider_i < services_i < session_i < manifest_i < heartbeat_i < lease_i

@@ -266,6 +266,28 @@ def test_wheel_ships_first_level_notification_manual(wheel_entries: set[str]):
     assert not missing, "notification manual files missing from wheel: %r" % missing
 
 
+_ACP_GOVERNED_FILES = (
+    "lingtai/adapters/acp/ANATOMY.md",
+    "lingtai/adapters/acp/CONTRACT.md",
+    "lingtai/adapters/acp/BEHAVIORS.md",
+    "lingtai/adapters/acp/MANUAL.md",
+)
+
+
+@pytest.mark.parametrize(
+    "entries_fixture",
+    ("wheel_entries", "sdist_entries"),
+    ids=("wheel", "sdist"),
+)
+def test_archives_ship_acp_governed_docs(request, entries_fixture: str):
+    entries = request.getfixturevalue(entries_fixture)
+    missing = [path for path in _ACP_GOVERNED_FILES if path not in entries]
+    assert not missing, "ACP governed docs missing from %s: %r" % (
+        entries_fixture,
+        missing,
+    )
+
+
 @pytest.mark.parametrize("entries_fixture", ("wheel_entries", "sdist_entries"), ids=("wheel", "sdist"))
 def test_archives_ship_system_manual_external_attach_diagnostic(request, entries_fixture: str):
     entries = request.getfixturevalue(entries_fixture)

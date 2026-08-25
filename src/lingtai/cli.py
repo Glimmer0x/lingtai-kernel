@@ -28,7 +28,7 @@ from lingtai.llm.service import (
     build_provider_defaults_from_manifest_llm,
 )
 from lingtai.agent import Agent
-from lingtai.kernel.process_match import match_agent_run
+from lingtai.kernel.process_match import match_agent_acp, match_agent_run
 
 
 def load_init(working_dir: Path) -> dict:
@@ -242,7 +242,7 @@ def _install_signal_handlers(working_dir: Path, agent: Agent) -> None:
 
 
 def _check_duplicate_process(working_dir: Path) -> None:
-    """Abort if another LingTai run process for ``working_dir`` is already alive.
+    """Abort if another LingTai run/ACP host for ``working_dir`` is alive.
 
     Defense-in-depth alongside the kernel's workdir lease — the lease prevents
     data corruption, but a duplicate process still shows up in the process
@@ -278,7 +278,10 @@ def _check_duplicate_process(working_dir: Path) -> None:
     for pid, command in scan.iter_process_commands():
         if pid in own_pids:
             continue
-        if match_agent_run(command, abs_dir) is None:
+        if (
+            match_agent_run(command, abs_dir) is None
+            and match_agent_acp(command, abs_dir) is None
+        ):
             continue
         print(
             f"error: another lingtai agent is already running in {abs_dir}\n"
@@ -356,30 +359,31 @@ def _force_exit_if_worker_poisoned(agent) -> None:
     A ``WorkerStillRunningError`` poison means an LLM worker thread is still
     alive inside the session's ``_timeout_pool`` ThreadPoolExecutor. The AED
     loop already skipped the unsafe chat save, put the agent ASLEEP, and
-    requested a refresh whose watcher will relaunch a fresh process; ``stop()``
-    then withdrew ``.agent.heartbeat`` and released ``.agent.lock``. But the
-    wedged worker is a non-daemon thread that ``session.close()`` cannot
+    requested a refresh whose watcher will relaunch a fresh process. A bounded
+    ``stop()`` may either retain heartbeat/lease because quiescence was not
+    proved, or prove quiescence and release them before this helper runs. The
+    wedged worker is still a non-daemon thread that ``session.close()`` cannot
     reclaim (``shutdown(wait=False)`` cannot cancel a thread stuck in the HTTP
-    call), so ``concurrent.futures``' atexit join blocks interpreter exit
-    indefinitely. The old process then lingers with no heartbeat/lock but still
-    visible in ``ps``, and the relaunch's duplicate-process guard refuses to
-    boot — stranding the agent as a stale ``asleep`` marker with no working
-    process.
+    call), so ``concurrent.futures``' atexit join can block interpreter exit
+    indefinitely and strand the watcher-owned relaunch.
 
     ``_stop`` already reclaims daemon workers / CLI process groups for exactly
     this reason; a wedged LLM worker is the one resource it cannot reclaim, so
-    the process owner force-exits after the graceful teardown. Guarded on the
-    poison flag, so ordinary stop/refresh shutdowns are unchanged.
+    the process owner force-exits after bounded teardown. The terminal event is
+    logged only while this process still owns the workdir lease; after release,
+    no Python path may append to workdir state. Guarded on the poison flag, so
+    ordinary stop/refresh shutdowns are unchanged.
     """
     if not getattr(agent, "_llm_worker_interface_poisoned", False):
         return
-    try:
-        agent._log(
-            "process_force_exit_after_worker_poison",
-            artifact=getattr(agent, "_llm_worker_poison_artifact", None),
-        )
-    except Exception:
-        pass
+    if getattr(agent, "_workdir_lease_acquired", True):
+        try:
+            agent._log(
+                "process_force_exit_after_worker_poison",
+                artifact=getattr(agent, "_llm_worker_poison_artifact", None),
+            )
+        except Exception:
+            pass
     try:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -542,6 +546,8 @@ def main() -> None:
 
     from lingtai.cli_daemon import add_daemon_parser
     add_daemon_parser(sub)
+    from lingtai.cli_acp import add_acp_parser
+    add_acp_parser(sub)
 
     maintenance_parser = sub.add_parser(
         "maintenance",
@@ -609,6 +615,10 @@ def main() -> None:
         from lingtai.cli_daemon import handle_daemon_command
 
         handle_daemon_command(args)
+    elif args.command == "acp":
+        from lingtai.cli_acp import handle_acp_command
+
+        handle_acp_command(args)
     elif args.command == "maintenance":
         _handle_maintenance_command(args)
     else:

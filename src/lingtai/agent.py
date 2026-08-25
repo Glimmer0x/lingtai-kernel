@@ -15,7 +15,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent, StopResult
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
 from lingtai.kernel.config import (
@@ -1879,7 +1879,12 @@ class Agent(BaseAgent):
             raise
         return self._mount_mcp_tools(client, tools, mcp_service)
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: float = 5.0) -> StopResult:
+        return super().stop(timeout=timeout)
+
+    def _close_agent_owned_services_after_quiescence(self) -> None:
+        """Close LICC/MCP transports only after execution can no longer use them."""
+
         # Stop LICC poller before closing MCP clients so any in-flight events
         # finish dispatching before subprocess teardown.
         poller = getattr(self, "_mcp_inbox_poller", None)
@@ -1889,7 +1894,6 @@ class Agent(BaseAgent):
             except Exception:
                 pass
 
-        # Close MCP clients
         for client in getattr(self, "_mcp_clients", []):
             try:
                 client.close()
@@ -1898,8 +1902,6 @@ class Agent(BaseAgent):
         # Advertised metadata describes those now-closed clients; drop it so a
         # stopped agent cannot report a live-looking MCP tool surface.
         self._mcp_tool_metadata = {}
-
-        super().stop(timeout=timeout)
 
     def has_capability(self, name: str) -> bool:
         """Check if a capability is registered."""

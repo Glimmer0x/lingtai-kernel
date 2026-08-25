@@ -18,12 +18,17 @@ __version__ = _pkg_version("lingtai")
 _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     # Core kernel re-exports
     "BaseAgent": ("lingtai.kernel.base_agent", "BaseAgent"),
+    "StopResult": ("lingtai.kernel.base_agent", "StopResult"),
+    "StopStatus": ("lingtai.kernel.base_agent", "StopStatus"),
     "Agent": ("lingtai.agent", "Agent"),
     "AgentConfig": ("lingtai.kernel.config", "AgentConfig"),
     "AgentState": ("lingtai.kernel.state", "AgentState"),
     "Message": ("lingtai.kernel.message", "Message"),
     "MSG_REQUEST": ("lingtai.kernel.message", "MSG_REQUEST"),
     "MSG_USER_INPUT": ("lingtai.kernel.message", "MSG_USER_INPUT"),
+    "TurnHandle": ("lingtai.kernel.turns", "TurnHandle"),
+    "TurnOutcome": ("lingtai.kernel.turns", "TurnOutcome"),
+    "TurnResult": ("lingtai.kernel.turns", "TurnResult"),
     "UnknownToolError": ("lingtai.kernel.types", "UnknownToolError"),
     # Tools
     "setup_capability": ("lingtai.tools.registry", "setup_capability"),
@@ -71,10 +76,11 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
 }
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent, StopResult, StopStatus
     from lingtai.kernel.config import AgentConfig
     from lingtai.kernel.message import MSG_REQUEST, MSG_USER_INPUT, Message
     from lingtai.kernel.state import AgentState
+    from lingtai.kernel.turns import TurnHandle, TurnOutcome, TurnResult
     from lingtai.kernel.types import UnknownToolError
     from lingtai.tools.avatar import AvatarManager
     from lingtai.tools.bash import BashManager, ShellManager
@@ -132,12 +138,17 @@ __all__ = [
     "__version__",
     # Core
     "BaseAgent",
+    "StopResult",
+    "StopStatus",
     "Agent",
     "Message",
     "AgentState",
     "MSG_REQUEST",
     "MSG_USER_INPUT",
     "AgentConfig",
+    "TurnHandle",
+    "TurnOutcome",
+    "TurnResult",
     "UnknownToolError",
     # Capabilities
     "setup_capability",

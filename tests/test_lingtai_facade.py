@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import get_type_hints
 
 import pytest
 
@@ -89,13 +90,16 @@ def test_facade_names_match_canonical_objects():
 
     # Pre-load canonical modules so the identity check is unambiguous.
     import lingtai.agent
+    import lingtai.kernel
     import lingtai.kernel.base_agent
+    import lingtai.kernel.base_agent.lifecycle
     import lingtai.kernel.config
     import lingtai.kernel.message
     import lingtai.kernel.services.logging
     import lingtai.kernel.mail_transport
     import lingtai.adapters.posix.mail
     import lingtai.kernel.state
+    import lingtai.kernel.turns
     import lingtai.kernel.types
     import lingtai.services.file_io
     import lingtai.services.file_io_sidecar
@@ -108,6 +112,20 @@ def test_facade_names_match_canonical_objects():
 
     assert lingtai.Agent is lingtai.agent.Agent
     assert lingtai.BaseAgent is lingtai.kernel.base_agent.BaseAgent
+    assert lingtai.StopResult is lingtai.kernel.base_agent.lifecycle.StopResult
+    assert lingtai.StopStatus is lingtai.kernel.base_agent.lifecycle.StopStatus
+    assert lingtai.kernel.StopResult is lingtai.StopResult
+    assert lingtai.kernel.StopStatus is lingtai.StopStatus
+    assert get_type_hints(lingtai.BaseAgent.stop)["return"] is lingtai.StopResult
+    assert get_type_hints(lingtai.Agent.stop)["return"] is lingtai.StopResult
+    assert lingtai.TurnHandle is lingtai.kernel.turns.TurnHandle
+    assert lingtai.TurnOutcome is lingtai.kernel.turns.TurnOutcome
+    assert lingtai.TurnResult is lingtai.kernel.turns.TurnResult
+    assert lingtai.kernel.TurnHandle is lingtai.TurnHandle
+    assert lingtai.kernel.TurnOutcome is lingtai.TurnOutcome
+    assert lingtai.kernel.TurnResult is lingtai.TurnResult
+    assert get_type_hints(lingtai.BaseAgent.submit_turn)["return"] is lingtai.TurnHandle
+    assert get_type_hints(lingtai.Agent.submit_turn)["return"] is lingtai.TurnHandle
     assert lingtai.AgentConfig is lingtai.kernel.config.AgentConfig
     assert lingtai.AgentState is lingtai.kernel.state.AgentState
     assert lingtai.Message is lingtai.kernel.message.Message

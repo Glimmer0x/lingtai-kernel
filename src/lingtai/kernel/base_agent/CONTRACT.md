@@ -13,6 +13,9 @@ related_files:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/base_agent/turn.py
+  - src/lingtai/kernel/base_agent/worker_recovery.py
+  - src/lingtai/kernel/turns.py
+  - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
   - tests/test_aed_recovery.py
@@ -23,6 +26,8 @@ related_files:
   - tests/test_karma.py
   - tests/test_perform_refresh_handshake.py
   - tests/test_tool_result_restore_after_continuation_failure.py
+  - tests/test_correlated_turns.py
+  - tests/test_acp_stdio.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/process_scan.py
   - src/lingtai/adapters/posix/process_scan.py
@@ -40,6 +45,7 @@ related_files:
   - docs/references/windows-support.md
   - tests/test_agent.py
   - tests/test_lifecycle_daemon_shutdown.py
+  - tests/test_lingtai_facade.py
   - tests/test_system_sleep_alarm.py
   - tests/test_process_scan.py
   - tests/test_process_match.py
@@ -92,9 +98,13 @@ truth. Construction acquires the workdir lease exactly once (10 s grace) and
 rolls back on any construction failure. A live agent's observability is
 manifest-first presence plus heartbeat freshness (`.agent.json`,
 `.agent.heartbeat`) — never process-table visibility or lock-file existence.
-Stop is ordered: daemon teardown → session/mail/journal close → final manifest
-write → heartbeat withdrawal → lease release, and the heartbeat stays fresh
-through teardown. Refresh is the `.refresh` → `.refresh.taken` handshake with
+Stop first requests execution quiescence and returns a typed `StopResult`. If
+the run loop or retained poisoned-provider Future survives the bounded deadline,
+`TIMED_OUT` retains Task Card, Agent services, daemon/session/mail/journal, final
+manifest, heartbeat, and lease ownership. Only a proved `STOPPED` path tears down
+Task Card → Agent services → daemon → session/mail/journal → final manifest →
+heartbeat withdrawal → lease release, with heartbeat fresh through teardown.
+Refresh is the `.refresh` → `.refresh.taken` handshake with
 exactly one detached watcher spawn; a refresh attempt that fails or raises
 before that handoff leaves the live process able to attempt refresh again,
 and only a completed handoff is terminal for the process
@@ -128,11 +138,13 @@ This contract owns one new Core Port and composes the linked ones:
   duplicate-launch guard. One operation, `iter_process_commands()`; yields
   nothing when the process table is unavailable. It is defense-in-depth beside
   the workdir lease, which remains the exclusion authority.
-- `match_agent_run(cmdline, working_dir)`
-  (`src/lingtai/kernel/process_match.py`) — the canonical pure matcher for
-  agent-run command lines (module/console/legacy forms; both path separators
-  as program anchors). The doctor skill carries a stdlib-only copy pinned to
-  the same test matrix.
+- `match_agent_run(cmdline, working_dir)` and
+  `match_agent_acp(cmdline, working_dir)`
+  (`src/lingtai/kernel/process_match.py`) — separate canonical pure matchers for
+  ordinary agent-run and local ACP-host command lines. Duplicate-launch guards
+  use both before stale signal cleanup; refresh-watcher stale-process recovery
+  deliberately uses only `match_agent_run`. The doctor skill carries a stdlib-
+  only run-matcher copy pinned to the run test matrix.
 - Composed Ports: `WorkdirLeasePort`, `AgentPresenceStorePort`,
   `RefreshWatcherPort`/`RefreshWatcherProcessPort`, `LifecycleClockPort`,
   `NotificationStorePort`, `EventJournalPort` — each normatively owned by its
@@ -184,12 +196,19 @@ Clause IDs are stable; each rule composes the linked normative source.
    the duplicate-launch scan observes a live same-workdir agent run
    (canonical matcher over `AgentProcessScanPort` observations, own PID
    excluded); an unavailable scan falls through to the lease.
-4. `agent-runtime.stop.v1` — Stop order is daemon teardown → session/journal
-   close → final manifest → heartbeat withdrawal → lease release; the
-   heartbeat file's lifetime equals the process's lifetime. Cooperative stop
-   arrives via signal files; the CLI host hooks each platform's real stop
-   signals (POSIX SIGTERM/SIGINT; Windows SIGINT/SIGBREAK) and translates
-   them into `.suspend` + shutdown, nothing else.
+4. `agent-runtime.stop.v1` — `BaseAgent.stop(timeout)` returns public immutable
+   `StopResult(status, run_loop_alive, provider_worker_alive)` with `StopStatus`
+   `STOPPED` or `TIMED_OUT`. One deadline covers the run-loop join and any retained
+   poisoned-provider Future. `TIMED_OUT` performs no Task Card, Agent-service,
+   daemon/session/mail/journal, manifest, heartbeat, or lease teardown. After
+   quiescence, stop order is Task Card → Agent services → daemon → session/mail/
+   journal → final manifest → heartbeat withdrawal → lease release; all post-proof
+   cleanup is inside the issue-661 release `finally`. Cooperative stop arrives via
+   signal files; the CLI host hooks each platform's real stop signals (POSIX
+   SIGTERM/SIGINT; Windows SIGINT/SIGBREAK) and translates them into `.suspend` +
+   shutdown, nothing else. Process hosts must retry after quiescence or terminate
+   while ownership remains held; they must never equate settled callers with
+   execution quiescence.
 5. `agent-runtime.refresh.v1` — Refresh is the `.refresh` → `.refresh.taken`
    handshake with exactly one detached watcher spawn per
    [`refresh_watcher/CONTRACT.md`](../refresh_watcher/CONTRACT.md), on every
@@ -278,19 +297,44 @@ Clause IDs are stable; each rule composes the linked normative source.
    an ASLEEP notification synchronization wake likewise MUST NOT clear it. The
    latch suppresses undispatched tool calls and post-tool continuation while
    preserving existing tool-result/history commits. It does not hard-abort a
-   provider, preempt a running tool, identify a request, promise stop-drain, or
-   create a terminal cancellation result. See the paired
-   [`ANATOMY.md`](ANATOMY.md) for ownership and code routes.
+   provider, preempt a running tool, or by itself identify a request or create a
+   terminal result. The correlated inbound-turn boundary in rule 12 composes on
+   this unchanged cooperative mechanism rather than strengthening it. See the
+   paired [`ANATOMY.md`](ANATOMY.md) for ownership and code routes.
+12. `agent-runtime.correlated-turn.v1` — Guarded by
+   [BA004](BEHAVIORS.md#behavior-ba004). `BaseAgent.submit_turn` accepts one text
+   turn plus optional caller correlation and returns a `TurnHandle`; the handle
+   settles exactly once as `normal`, `cancelled`, or `failed`, with completed
+   response text only on normal settlement. Correlated envelopes are distinct
+   from mergeable fire-and-forget text messages and retain inbox serialization.
+   Cancelling a pending handle marks only that control; it MUST NOT set the
+   process-global latch for the turn ahead. When the matching handle becomes
+   current, or is cancelled while current, it composes onto
+   `_request_turn_cancel`. Cancellation linearized before settlement wins over a
+   concurrently completing normal/failure candidate; after settlement it returns
+   false and cannot affect a later turn. Run-loop exit and Agent stop settle all
+   live handles so waiters cannot hang across teardown. An unexpected run-loop
+   exception after current ownership is published settles that exact control
+   `failed` with bounded rendered error detail and is re-raised for supervision;
+   the loop's terminal `finally` cancels every other live control, including a
+   registered envelope dequeued before `begin_turn`. Racing teardown claims remain
+   exactly once under the same registry lock. This inbound Port is protocol-neutral:
+   adapters may translate ACP or another driver into it, but
+   Core types and methods contain no session, JSON-RPC, workspace, permission,
+   MCP, or transport vocabulary. It still promises no hard provider abort or
+   running-tool preemption.
 
 ## Contract tests
 
 Composed behavior is pinned by the linked capability suites plus:
 `tests/test_agent.py` (construction/start/stop),
-`tests/test_lifecycle_daemon_shutdown.py` (stop ordering incl.
-heartbeat-before-release), `tests/test_workdir_lease.py` (lease composition
+`tests/test_lifecycle_daemon_shutdown.py` (typed timeout retains services/
+heartbeat/lease until run-loop/provider quiescence, then pins post-proof teardown
+order and issue-661 release), `tests/test_lingtai_facade.py` (public typed stop
+exports and resolvable annotations), `tests/test_workdir_lease.py` (lease composition
 at the CLI roots), `tests/test_perform_refresh_handshake.py` +
 `tests/test_refresh_watcher_windows.py` (refresh on both platforms),
-`tests/test_process_match.py` (canonical matcher matrix incl. Windows-shaped
+`tests/test_process_match.py` (canonical run/ACP matcher matrices incl. Windows-shaped
 command lines and doctor parity), `tests/test_process_scan.py` (scan Port,
 platform selector, CLI stop signals, CPR spawn kwargs, and the Windows
 scan→guard wiring), `tests/test_windows_import_graph.py` (the boot-path import

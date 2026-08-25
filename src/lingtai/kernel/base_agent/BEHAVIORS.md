@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/base_agent/turn.py
+  - src/lingtai/kernel/base_agent/worker_recovery.py
+  - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -20,6 +22,8 @@ related_files:
   - tests/test_karma.py
   - tests/test_perform_refresh_handshake.py
   - tests/test_tool_result_restore_after_continuation_failure.py
+  - tests/test_correlated_turns.py
+  - src/lingtai/adapters/acp/BEHAVIORS.md
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -33,10 +37,10 @@ Self-contained agent behavior tasks guarding the observable behavior clauses of
 construction, liveness, ordered stop, refresh handshake). Pinned pytest commands
 must run from the repo root with the project's Python.
 
-## Behavior BA001 — stop is ordered manifest-persist → heartbeat-withdraw → lease-release, and liveness is presence-plus-heartbeat, never process visibility
+## Behavior BA001 — stop retains ownership until execution quiescence, then orders manifest-persist → heartbeat-withdraw → lease-release
 
 - **id**: BA001
-- **title**: stop is ordered manifest-persist → heartbeat-withdraw → lease-release, and liveness is presence-plus-heartbeat, never process visibility
+- **title**: stop retains ownership until execution quiescence, then orders manifest-persist → heartbeat-withdraw → lease-release
 - **guards**: `agent-runtime` § Behavior
 - **runner**: any LingTai agent with `shell` and `file` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; no other agent process sharing the scratch working directory
@@ -45,15 +49,17 @@ must run from the repo root with the project's Python.
 ### Steps
 1. From `<repo>`, run `python -m pytest tests/test_lifecycle_daemon_shutdown.py -q` and capture the outcome.
 2. Run `python -m pytest tests/test_agent.py -q` and capture the outcome.
-3. Inspect `src/lingtai/kernel/base_agent/lifecycle.py` teardown and confirm the artifact order manifest-persist → heartbeat-withdraw → lease-release is preserved on the best-effort error path.
+3. Inspect `src/lingtai/kernel/base_agent/lifecycle.py`: one bounded deadline covers run loop plus retained poisoned-provider Future; `TIMED_OUT` returns before every service/liveness/lease teardown; only the quiescent branch enters the issue-661 release `finally`.
+4. Inspect public imports/type hints in `tests/test_lingtai_facade.py` and confirm callers can consume `StopResult`/`StopStatus` without importing an implementation-private module.
 
 ### Expected evidence
-- [ ] Step 1: the lifecycle shutdown suite passes, pinning heartbeat-before-release ordering and manifest persistence through teardown.
+- [ ] Step 1: the lifecycle shutdown suite passes, pinning typed timeout, provider-write-before-service-teardown, heartbeat-before-release ordering, and release on post-proof cleanup failure.
 - [ ] Step 2: the agent construction/start/stop suite passes, pinning construction, liveness, and stop behavior.
-- [ ] Step 3: the ordered teardown matches the contract's `agent-runtime.stop.v1` clause; no step reorders heartbeat withdrawal before the final manifest write.
+- [ ] Step 3: timed stop retains Task Card/services/heartbeat/lease; the successful retry orders provider quiescence → services → manifest → heartbeat → lease.
+- [ ] Step 4: `lingtai`, `lingtai.kernel`, and `lingtai.kernel.base_agent` expose one identical typed stop result/status and stop annotations resolve to it.
 
 ### Pass / Fail
-Pass when both suites pass and the teardown order matches the contract. Fail on any reordering, on heartbeat freshness lost before teardown completes, or on liveness being derived from process visibility; record the evidence trail in the task report.
+Pass when both suites pass, non-quiescent stop releases nothing, the typed public proof is usable, and post-proof teardown matches the contract. Fail if settled callers are mistaken for quiescence, any live provider can write after ownership release, heartbeat/lease is withdrawn on `TIMED_OUT`, or ordered release regresses; record the evidence trail in the task report.
 
 ## Behavior BA002 — a refresh that fails before the watcher handoff can be retried in the same process, and only a completed handoff is terminal
 
@@ -105,3 +111,36 @@ Pass when every failure before `spawn_detached` returns leaves the slot released
 
 ### Pass / Fail
 Pass when both focused groups pass and source ownership matches the contract. Fail if an async notification wake or inner response consumer clears cancellation, if merge-time cancellation is lost, if a producer bypasses the helper, or if the cooperative latch is represented as hard/per-request cancellation; record the evidence trail in the task report.
+
+## Behavior BA004 — correlated inbound turns settle exactly once and pending cancellation cannot affect the turn ahead
+
+- **id**: BA004
+- **title**: correlated inbound turns settle exactly once and pending cancellation cannot affect the turn ahead
+- **guards**: `agent-runtime` § Contract rules, rule 12 (`agent-runtime.correlated-turn.v1`) — see [CONTRACT.md](CONTRACT.md#contract-rules)
+- **supersedes**: `tests/test_correlated_turns.py` (retained as bottom asserts)
+- **runner**: any LingTai coding agent with shell access to this repository
+- **prerequisites**: a clean checkout of `<repo>` and a project Python with pytest; no live agent sharing pytest scratch state
+- **estimate**: ≈ 3 minutes
+
+### Steps
+1. From `<repo>`, run `python -m pytest -q -x tests/test_correlated_turns.py` with the project Python.
+2. Inspect the normal test and confirm the submitted correlation id returns one `normal` result carrying the complete collected text.
+3. Inspect the active-cancel and two-queued-turn tests: cancel the matching active handle before releasing its fake provider, then cancel the pending second handle while the first is blocked.
+4. Inspect failure and shutdown tests and confirm AED terminal failure becomes `failed` while run-loop shutdown settles an unprocessed queued handle `cancelled`; a control already claimed during the dequeue/bind race makes its private envelope skip provider dispatch.
+5. Inspect the two unexpected-run-loop tests: a failure after dequeue but before `begin_turn` cancels the still-registered handle, while a failure after provider completion but before normal settlement fails the current handle with bounded detail; both exceptions remain visible to supervision rather than being swallowed.
+6. Inspect the cancel-vs-settle race and worker-hang context tests: exactly one settlement wins, a later cancel is false, and correlated request text uses the existing bounded/redacted request artifact shape.
+
+### Expected evidence
+- [ ] All focused tests pass without a provider or network call.
+- [ ] Active cancellation wins before settlement, emits no late text, and a later cancel returns false.
+- [ ] Pending cancellation leaves the process-global latch clear while the first turn is current; the first settles normal and only the second settles cancelled without provider dispatch.
+- [ ] Failure and shutdown each settle rather than leaving a waiter blocked; a terminal stale envelope never reaches provider work.
+- [ ] Pre-bind and post-provider unexpected exceptions both re-raise, leave no live control, and settle the affected waiter cancelled/failed respectively without requiring `Agent.stop()`.
+- [ ] Cancel/settle races leave exactly one terminal result, and WorkerStillRunning attribution records the correlated turn as a bounded/redacted request.
+
+### Pass / Fail
+Pass when every handle settles exactly once with the expected correlation and the
+pending-cancel isolation assertion proves the turn ahead was untouched. Fail on
+a hanging/duplicate result, merged correlation, cancellation leaking to a later
+or earlier turn, failure represented as normal, or any hard provider-abort claim;
+record the evidence trail in the task report.
