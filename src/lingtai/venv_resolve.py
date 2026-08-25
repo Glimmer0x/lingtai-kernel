@@ -91,6 +91,12 @@ def resolve_venv(init_data: dict | None = None) -> Path:
         # cli.run writes the managed runtime path into init.json. Keep that path
         # on the managed branch so marker mismatches can self-heal by recreating it.
         if not _is_default_runtime_dir(venv):
+            # Fail closed with a precise diagnosis when the configured path
+            # names the venv's executable directory instead of its root. The
+            # path is never normalized: the operator owns the correction.
+            root_detail = _configured_venv_names_executable_dir(venv)
+            if root_detail is not None:
+                raise RuntimeError(f"Configured venv_path is not usable: {venv}: {root_detail}")
             ok, detail = _test_venv_detail(venv, warn_marker_error=True)
             if ok:
                 return venv
@@ -111,6 +117,40 @@ def venv_python(venv_dir: Path) -> str:
     if sys.platform == "win32":
         return str(venv_dir / "Scripts" / "python.exe")
     return str(venv_dir / "bin" / "python")
+
+
+def _configured_venv_names_executable_dir(venv_dir: Path) -> str | None:
+    """Diagnose a configured ``venv_path`` that names ``bin``/``Scripts``.
+
+    ``venv_path`` must name the venv ROOT (the directory that contains the
+    platform executable directory). When an operator instead configures the
+    executable directory itself, the generic check would only report a
+    missing ``<venv_path>/bin/bin/python`` — accurate but misleading. Return a
+    precise root-vs-executable-directory message in that case, or ``None``
+    when the path is not shaped like that. Windows path spelling is
+    case-insensitive, so ``Scripts`` is recognized case-insensitively there
+    (``scripts``, ``SCRIPTS``, ...); POSIX ``bin`` stays case-sensitive. A
+    directory that merely happens to be called ``bin``/``Scripts`` but really
+    is a venv root (it contains its own executable directory) is left to the
+    ordinary check. The path is never rewritten here.
+    """
+    if sys.platform == "win32":
+        executable_dir = "Scripts"
+        names_executable_dir = venv_dir.name.casefold() == executable_dir.casefold()
+    else:
+        executable_dir = "bin"
+        names_executable_dir = venv_dir.name == executable_dir
+    if not names_executable_dir:
+        return None
+    if os.path.isfile(venv_python(venv_dir)):
+        return None
+    return (
+        f"venv_path names the venv's {executable_dir!r} executable directory, "
+        f"but it must name the venv root (the directory that contains "
+        f"{executable_dir!r}); no python executable exists at "
+        f"{venv_python(venv_dir)}. Set venv_path to {venv_dir.parent} if that "
+        f"is the venv root"
+    )
 
 
 def _is_default_runtime_dir(venv_dir: Path) -> bool:

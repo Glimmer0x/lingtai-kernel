@@ -1479,6 +1479,173 @@ def test_two_refresh_requests_coalesce_to_one_watcher(tmp_path):
     ), "the second request must coalesce: log refresh_skipped(refresh_already_in_progress)"
 
 
+def test_launch_cmd_exception_releases_single_flight_slot_for_retry(tmp_path):
+    """Sticky-latch regression: `_perform_refresh` claims the process-lifetime
+    single-flight slot before any side effect and then calls the bound
+    `agent._build_launch_cmd()`. Before the fix, an exception raised there
+    (in production, the wrapper's `resolve_venv` configured-venv precheck)
+    propagated with the slot still claimed, so every corrected later refresh
+    silently logged `refresh_skipped(refresh_already_in_progress)` and the
+    agent could never refresh again without a process restart.
+
+    The invariant: before `spawn_detached` returns, every exception or
+    failure return leaves the slot released and signals no cancel/shutdown,
+    and a second, corrected refresh attempt reaches a real watcher handoff.
+    This test covers the builder (pre-handshake) failure specifically, where
+    additionally no watcher call and no `.refresh`/`.refresh.taken` mutation
+    can have happened; the raising-spawn test below covers the post-ACK
+    exception, where `.refresh.taken` may remain.
+    """
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    wd = agent._working_dir
+    watcher = agent._refresh_watcher
+    log_events = []
+    agent._log = lambda event, **kw: log_events.append((event, kw))
+
+    good_cmd = ["python", "-c", "print('relaunch sentinel')"]
+    builder_calls = []
+
+    def build_launch_cmd():
+        builder_calls.append(len(builder_calls) + 1)
+        if len(builder_calls) == 1:
+            raise RuntimeError(
+                "Configured venv_path is not usable: /x/.venv/bin: simulated precheck"
+            )
+        return good_cmd
+
+    # Bound-method dispatch is preserved: the fixture rebinds the instance
+    # attribute exactly as the production Agent subclass overrides it.
+    agent._build_launch_cmd = build_launch_cmd
+
+    with pytest.raises(RuntimeError, match="simulated precheck"):
+        agent._perform_refresh()
+
+    assert builder_calls == [1]
+    assert not watcher.spawned, "a failed launch-command build must not spawn a watcher"
+    assert not (wd / ".refresh").exists()
+    assert not (wd / ".refresh.taken").exists(), \
+        "launch-command failure precedes handshake mutation"
+    assert not agent._shutdown.is_set()
+    assert not agent._cancel_event.is_set()
+    assert agent._refresh_started is False, \
+        "the single-flight slot must be released when the launch-command build raises"
+    assert not any(event == "refresh_skipped" for event, _ in log_events)
+
+    # A corrected second attempt must not be coalesced away: it calls the
+    # builder again and completes a real (fake) watcher handoff.
+    agent._perform_refresh()
+
+    assert builder_calls == [1, 2]
+    assert len(watcher.calls) == 1, "the retry must reach exactly one watcher handoff"
+    assert tuple(good_cmd) == watcher.last_request.cmd
+    assert (wd / ".refresh.taken").exists()
+    assert agent._shutdown.is_set()
+    assert agent._cancel_event.is_set()
+    assert agent._refresh_started is True, \
+        "a successful handoff is terminal for this process: the slot stays claimed"
+    assert not any(
+        event == "refresh_skipped" and kw.get("reason") == "refresh_already_in_progress"
+        for event, kw in log_events
+    ), "the corrected retry must not be skipped as already-in-progress"
+    assert any(event == "refresh_deferred_relaunch" for event, _ in log_events)
+
+
+def test_raising_spawn_releases_slot_without_shutdown_and_retry_is_not_coalesced(tmp_path):
+    """Post-ACK exception: by the time `spawn_detached` is called the
+    `.refresh.taken` ACK has already been established, and `_perform_refresh`
+    does not roll it back. A raising spawn must still release the
+    single-flight slot and must not signal cancel/shutdown, so a corrected
+    retry is not coalesced away. The ACK artifact may remain on disk; the
+    retry then observes it as `handshake=preexisting_taken`.
+
+    This test proves only that the Port call raised (the fake records the
+    call, then raises). It makes no claim that a raising production adapter
+    started no watcher — the contract's handoff boundary is the Port's normal
+    return.
+    """
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    wd = agent._working_dir
+    log_events = []
+    agent._log = lambda event, **kw: log_events.append((event, kw))
+
+    class RaiseOnceWatcher(type(agent._refresh_watcher)):
+        def __init__(self):
+            super().__init__()
+            self.raised = 0
+
+        def spawn_detached(self, request):
+            if not self.raised:
+                self.raised += 1
+                self.calls.append((request, None, None))  # the call happened ...
+                raise OSError("simulated detached-spawn failure")  # ... and raised
+            return super().spawn_detached(request)
+
+    watcher = RaiseOnceWatcher()
+    agent._refresh_watcher = watcher
+
+    with pytest.raises(OSError, match="simulated detached-spawn failure"):
+        agent._perform_refresh()
+
+    assert len(watcher.calls) == 1, "the Port was called exactly once and that call raised"
+    assert agent._refresh_started is False, \
+        "a raising spawn must release the single-flight slot"
+    assert not agent._shutdown.is_set()
+    assert not agent._cancel_event.is_set()
+    assert not (wd / ".refresh").exists()
+    # Truthful state: the ACK established before the spawn is left in place.
+    assert (wd / ".refresh.taken").exists()
+    assert not any(event == "refresh_skipped" for event, _ in log_events)
+    assert not any(event == "refresh_deferred_relaunch" for event, _ in log_events)
+
+    agent._perform_refresh()  # corrected retry
+
+    assert len(watcher.calls) == 2, "the retry must not be coalesced away"
+    assert agent._refresh_started is True
+    assert agent._shutdown.is_set()
+    assert agent._cancel_event.is_set()
+    relaunch = [kw for event, kw in log_events if event == "refresh_deferred_relaunch"]
+    assert len(relaunch) == 1
+    assert relaunch[0].get("handshake") == "preexisting_taken"
+    assert not any(
+        event == "refresh_skipped" and kw.get("reason") == "refresh_already_in_progress"
+        for event, kw in log_events
+    )
+
+
+def test_successful_handoff_keeps_slot_claimed_even_if_post_handoff_logging_raises(tmp_path):
+    """The other half of the invariant: once `spawn_detached` has returned,
+    the refresh is terminal for this process. A failure in the logging that
+    follows the handoff must NOT release the slot — otherwise a later refresh
+    request would spawn a sibling watcher and the two `lingtai run` children
+    would mutually reject each other (the lingtai#624 failure mode)."""
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    watcher = agent._refresh_watcher
+    log_events = []
+
+    def log_capture(event, **kw):
+        log_events.append((event, kw))
+        if event == "refresh_deferred_relaunch":
+            raise OSError("simulated event-journal failure after handoff")
+
+    agent._log = log_capture
+
+    with pytest.raises(OSError, match="after handoff"):
+        agent._perform_refresh()
+
+    assert len(watcher.calls) == 1
+    assert agent._refresh_started is True, \
+        "a completed watcher handoff must keep the single-flight slot claimed"
+
+    agent._perform_refresh()  # a later request must coalesce, not re-spawn
+
+    assert len(watcher.calls) == 1, \
+        "no second watcher may be spawned after a completed handoff"
+    assert any(
+        event == "refresh_skipped" and kw.get("reason") == "refresh_already_in_progress"
+        for event, kw in log_events
+    )
+
+
 def test_concurrent_refresh_requests_spawn_exactly_one_watcher(tmp_path):
     """Threaded variant with a start barrier: even when two refresh requests
     arrive at the same instant from different threads (heartbeat thread vs

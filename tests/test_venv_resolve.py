@@ -102,6 +102,112 @@ def test_resolve_explicit_mismatched_marker_raises_without_deleting(
     assert (venv / "sentinel").is_file()
 
 
+@pytest.mark.parametrize(
+    ("sys_platform", "configured_name", "canonical_dir"),
+    [
+        ("linux", "bin", "bin"),
+        ("win32", "Scripts", "Scripts"),
+        # Windows path spelling is case-insensitive: a configured lowercase or
+        # mixed-case ``scripts`` is the same executable directory and must get
+        # the same immediate root-vs-executable-directory correction.
+        ("win32", "scripts", "Scripts"),
+        ("win32", "sCRIPTs", "Scripts"),
+    ],
+)
+def test_resolve_explicit_executable_dir_fails_closed_with_root_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sys_platform: str,
+    configured_name: str,
+    canonical_dir: str,
+) -> None:
+    """A configured ``venv_path`` that names the platform executable directory
+    (``<root>/bin`` on POSIX, ``<root>/Scripts`` in any letter case on Windows)
+    instead of the venv root must fail closed with a precise
+    root-vs-executable-directory error — not the misleading generic
+    ``python executable missing at <root>/bin/bin/python`` — and must neither
+    probe, normalize the path to the root, nor delete anything."""
+    monkeypatch.setattr(venv_resolve.sys, "platform", sys_platform)
+    root = tmp_path / "explicit"
+    _write_python_executable(root)  # creates <root>/<canonical_dir>/python[.exe]
+    assert Path(venv_resolve.venv_python(root)).parent == root / canonical_dir
+    configured = root / configured_name
+    # On a case-sensitive host filesystem a differently-cased spelling is a
+    # distinct directory; create it so the fail-closed path is exercised on
+    # exactly the configured spelling regardless of host filesystem.
+    configured.mkdir(exist_ok=True)
+    (configured / "sentinel").write_text("keep", encoding="utf-8")
+
+    def fail_run(*_args, **_kwargs):
+        raise AssertionError("executable-dir venv_path must be rejected before any probe")
+
+    monkeypatch.setattr(venv_resolve.subprocess, "run", fail_run)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        venv_resolve.resolve_venv({"venv_path": str(configured)})
+
+    message = str(exc_info.value)
+    assert message.startswith(f"Configured venv_path is not usable: {configured}: ")
+    assert f"names the venv's {canonical_dir!r} executable directory" in message
+    assert "must name the venv root" in message
+    assert f"Set venv_path to {root} if that is the venv root" in message
+    assert "python executable missing at" not in message
+    # Fail-closed: nothing normalized, nothing deleted.
+    assert (configured / "sentinel").is_file()
+    assert Path(venv_resolve.venv_python(root)).is_file()
+
+
+def test_resolve_explicit_posix_bin_stays_case_sensitive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POSIX ``bin`` remains case-sensitive: a configured ``<root>/BIN`` is not
+    the executable directory, so it takes the ordinary usability check (and
+    fails on the generic missing-interpreter detail), never the Windows-only
+    case-insensitive diagnostic."""
+    monkeypatch.setattr(venv_resolve.sys, "platform", "linux")
+    root = tmp_path / "explicit"
+    _write_python_executable(root)
+    configured = root / "BIN"
+    configured.mkdir(exist_ok=True)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        venv_resolve.resolve_venv({"venv_path": str(configured)})
+
+    message = str(exc_info.value)
+    assert "python executable missing at" in message
+    assert "names the venv's" not in message
+
+
+@pytest.mark.parametrize(
+    ("sys_platform", "root_name"),
+    [("linux", "bin"), ("win32", "Scripts")],
+)
+def test_resolve_explicit_root_named_like_executable_dir_uses_ordinary_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sys_platform: str,
+    root_name: str,
+) -> None:
+    """A genuine venv root that merely happens to be called ``bin`` (POSIX) or
+    ``Scripts`` (Windows) — it contains its own nested executable directory
+    with the interpreter — is not misdiagnosed: the ordinary usability check
+    runs and accepts it."""
+    monkeypatch.setattr(venv_resolve.sys, "platform", sys_platform)
+    root = tmp_path / root_name
+    _write_python_executable(root)  # <root>/<executable_dir>/python[.exe]
+    assert Path(venv_resolve.venv_python(root)).is_file()
+    (root / ".lingtai-env.json").write_text("{", encoding="utf-8")
+
+    def fake_run(args, **_kwargs):
+        assert args[2] == "import lingtai"
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
+
+    assert venv_resolve.resolve_venv({"venv_path": str(root)}) == root
+
+
 def test_resolve_explicit_marker_error_accepts_importable_venv_without_deleting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

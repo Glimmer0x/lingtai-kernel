@@ -29,6 +29,7 @@ related_files:
   - src/lingtai/cli.py
   - docs/references/windows-support.md
   - tests/test_agent.py
+  - tests/test_perform_refresh_handshake.py
   - tests/test_lifecycle_daemon_shutdown.py
   - tests/test_system_sleep_alarm.py
   - tests/test_process_scan.py
@@ -85,7 +86,10 @@ manifest-first presence plus heartbeat freshness (`.agent.json`,
 Stop is ordered: daemon teardown → session/mail/journal close → final manifest
 write → heartbeat withdrawal → lease release, and the heartbeat stays fresh
 through teardown. Refresh is the `.refresh` → `.refresh.taken` handshake with
-exactly one detached watcher spawn. Cooperative stop requests are the signal
+exactly one detached watcher spawn; a refresh attempt that fails or raises
+before that handoff leaves the live process able to attempt refresh again,
+and only a completed handoff is terminal for the process
+([BA002](BEHAVIORS.md#behavior-ba002)). Cooperative stop requests are the signal
 files (`.suspend`, `.sleep`, `.interrupt`), consumed by the agent's own
 heartbeat loop; OS signals and console events are translated into that channel
 by the CLI host, never handled ad hoc elsewhere. Capability support is a
@@ -182,6 +186,22 @@ Clause IDs are stable; each rule composes the linked normative source.
    [`refresh_watcher/CONTRACT.md`](../refresh_watcher/CONTRACT.md), on every
    supported platform. Permanent failure publishes the bounded, redacted
    artifact + high-priority notification; it never deletes `.agent.lock`.
+   Per-process refresh is single-flight: near-concurrent requests coalesce
+   into one watcher, and a request arriving after a completed handoff is
+   skipped (`refresh_skipped`, `refresh_already_in_progress`). That
+   single-flight claim is released by every ordinary failure or exception
+   before `spawn_detached` returns — including no launch command, a raising
+   launch-command build (the wrapper's configured-`venv_path` precheck), a
+   missing watcher Port, failed ACK setup, request construction, or a
+   raising spawn — so a corrected later refresh in the same process is not
+   skipped. Failures before handshake normalization leave no handshake or
+   cancel/shutdown mutation; failed ACK setup does not spawn or signal
+   shutdown. Once `.refresh.taken` has been established, a later pre-handoff
+   exception may leave that handshake artifact, but still releases the
+   claim and does not signal cancellation/shutdown. A completed handoff
+   (the Port's normal return) keeps the claim for the rest of the process
+   lifetime even if logging or shutdown signaling after it fails.
+   Guarded by: [BA002](BEHAVIORS.md#behavior-ba002)
 6. `agent-runtime.process-identity.v1` — An agent-run process is identified
    by its command line through the canonical matcher; runtime relaunches
    (watcher, CPR, avatar) always use the module form
