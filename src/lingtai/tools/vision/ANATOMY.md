@@ -33,30 +33,34 @@ Vision result shape.
 
 ## Components
 
-- `__init__.py:200-260` — strict declaration-owned input schemas: `analyze`
+- `__init__.py:129-144` — `_canonical_preset_path` resolves one allowed preset
+  reference (`~`, absolute, or workdir-relative spelling) to its canonical
+  physical path; `list` keys its rows on it so one file appears once.
+- `__init__.py:218-278` — strict declaration-owned input schemas: `analyze`
   requires `image_path` and nullable `question` and accepts nullable `preset`,
   `check` requires nullable `preset`, and `list` is strict empty input.
-- `__init__.py:263-361` — immutable `VisionConfiguration` (with
+- `__init__.py:281-379` — immutable `VisionConfiguration` (with
   `port_values`/`from_port_values`, the only translation to and from the kernel
   `ConfigurationPort` mapping), static description, and declaration-derived
   `_build_family`; import-time and host-bound families therefore expose the
   same three operational children plus `manual`.
-- `__init__.py:374-395` — `VisionManager` retains only the granted workdir and
+- `__init__.py:392-413` — `VisionManager` retains only the granted workdir and
   live active-provider ports, the resolved service/reason, and the installed
   manual child; it does not retain an Agent.
-- `__init__.py:401-482` — `_build_service_from_preset` checks
+- `__init__.py:419-500` — `_build_service_from_preset` checks
   `manifest.preset.allowed`, loads the authorized preset read-only, and passes
   that preset's provider/model/credential identity to the direct resolver.
-- `__init__.py:484-571` — `_dispatch_analyze` resolves relative image paths,
+- `__init__.py:502-589` — `_dispatch_analyze` resolves relative image paths,
   performs one request on either the default or explicitly borrowed service, and
   returns the exact success/error shapes.
-- `__init__.py:573-620` — `_dispatch_check` constructs/resolves the selected route
+- `__init__.py:591-638` — `_dispatch_check` constructs/resolves the selected route
   and reports provider/model without sending an image request.
-- `__init__.py:622-670` — `_dispatch_list` mechanically classifies the active route
-  and only the authorized preset definitions; it constructs no provider service.
-- `__init__.py:672-717` — `manual` reads the installed package manual through the
+- `__init__.py:640-693` — `_dispatch_list` mechanically classifies the active route
+  and only the authorized preset definitions, one row per physical preset in its
+  declared spelling; it constructs no provider service.
+- `__init__.py:695-740` — `manual` reads the installed package manual through the
   reserved child, then the host flattens its canonical body/path result once.
-- `__init__.py:721-785` — `_bind` and `DECLARATION` (with `setup` at the module
+- `__init__.py:744-808` — `_bind` and `DECLARATION` (with `setup` at the module
   tail) compose Vision through the official registrar with `workdir`,
   `active_provider`, and opaque `configuration` ports: `setup` hands the
   registrar `StaticConfigurationAdapter(VisionConfiguration(...).port_values())`

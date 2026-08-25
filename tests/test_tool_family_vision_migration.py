@@ -1111,6 +1111,65 @@ def test_list_action_enumerates_default_route_and_vision_capable_presets(tmp_pat
     assert result["count"] == 1
 
 
+def test_list_action_dedupes_tilde_and_absolute_aliases_of_one_preset(
+    tmp_path, monkeypatch
+):
+    """One physical allowed preset is one ``list`` row, however it is spelled.
+
+    Production allowlists use ``~/...`` spellings. ``list`` must not report the
+    raw ``~`` reference and its expanded absolute path as two presets (12
+    declared presets were enumerated as 24 rows), nor double-count an operator
+    who lists the same file under both spellings. Rows keep the declared
+    manifest spelling, which is exactly what ``analyze``/``check`` accept.
+    """
+    home = tmp_path / "home"
+    preset = home / "presets" / "codex-pool.json"
+    preset.parent.mkdir(parents=True)
+    preset.write_text(
+        """{
+          "name": "codex-pool",
+          "description": {"summary": "fixture preset with gpt-5.6 vision"},
+          "manifest": {
+            "llm": {"provider": "codex-pool", "model": "gpt-5.6"},
+            "capabilities": {"vision": {"provider": "codex-pool"}}
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    # ``Path.expanduser`` reads HOME on POSIX and USERPROFILE on Windows.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    tilde_ref = "~/presets/codex-pool.json"
+    assert Path(tilde_ref).expanduser() == preset
+    manifest = {"preset": {"allowed": [tilde_ref, str(preset)]}}
+    (tmp_path / "init.json").write_text(
+        '{"manifest": ' + __import__("json").dumps(manifest) + "}",
+        encoding="utf-8",
+    )
+    agent = _StubAgent(tmp_path)
+    agent.service = MagicMock()
+    agent.service.provider = "codex"
+    agent.service._model = "gpt-5.5"
+    mgr = _bound_manager(agent, service=None)
+
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        result = mgr.handle(
+            {"action": "list", "input": {}, "reasoning": "enumerate vision routes"}
+        )
+    mock_factory.assert_not_called()
+
+    assert result["status"] == "ok"
+    assert result["count"] == 1
+    assert len(result["presets"]) == 1
+    entry = result["presets"][0]
+    # The surviving row is the first declared spelling of that physical file.
+    assert entry["preset"] == tilde_ref
+    assert entry["provider"] == "codex-pool"
+    assert entry["model"] == "gpt-5.6"
+    assert entry["endpoint"] == "responses"
+
+
 @pytest.mark.parametrize(
     ("provider", "expected_endpoint", "expected_responses"),
     [

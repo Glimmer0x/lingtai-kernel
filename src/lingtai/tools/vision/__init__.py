@@ -126,6 +126,24 @@ def _responses_vision(provider: str | None) -> bool:
     return bool(provider and provider.lower() in _CODEX_FAMILY)
 
 
+def _canonical_preset_path(ref: str, working_dir: Path) -> str:
+    """Return the canonical physical path a preset reference denotes.
+
+    ``~/x.json``, its expanded absolute spelling, and a working-dir-relative
+    spelling all name one file, so ``list`` keys its rows on this value (the
+    same normalization the kernel's allowed-preset membership test applies).
+    A reference that cannot be resolved keys on its own spelling: it is never
+    dropped here, and it stays exactly as authorization-bounded as before.
+    """
+    try:
+        path = Path(ref).expanduser()
+        if not path.is_absolute():
+            path = Path(working_dir) / path
+        return str(path.resolve(strict=False))
+    except (ValueError, OSError, RuntimeError):
+        return ref
+
+
 def _normalize_codex_auth_path(raw: object) -> str | None:
     """Return a trimmed nonblank Codex auth path, or ``None``.
 
@@ -622,7 +640,7 @@ class VisionManager:
     def _dispatch_list(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
         # mechanical enumeration; never constructs a service or makes a provider call
         import json as _json
-        from lingtai.kernel.presets import load_preset, resolve_allowed_presets
+        from lingtai.kernel.presets import load_preset
 
         active_service = self._active_provider.service
         active_provider = getattr(active_service, "provider", None)
@@ -642,10 +660,15 @@ class VisionManager:
             try:
                 init_data = _json.loads(init_path.read_text(encoding="utf-8"))
                 manifest = init_data.get("manifest") or {}
-                allowed = sorted(
-                    {str(p) for p in resolve_allowed_presets(manifest, self._workdir.path)}
-                    | {str(p) for p in (manifest.get("preset", {}).get("allowed") or [])}
-                )
+                # One row per physical preset. A raw ``~/x.json`` entry and
+                # its expanded absolute path are the same file, so key on the
+                # canonical path and keep the first declared spelling, which
+                # is exactly what ``analyze``/``check`` accept as ``preset``.
+                by_path: dict[str, str] = {}
+                for ref in manifest.get("preset", {}).get("allowed") or []:
+                    if isinstance(ref, str) and ref:
+                        by_path.setdefault(_canonical_preset_path(ref, self._workdir.path), ref)
+                allowed = sorted(by_path.values())
             except Exception:
                 allowed = []
         presets: list[dict[str, Any]] = []
