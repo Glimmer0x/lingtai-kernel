@@ -608,3 +608,148 @@ def test_standard_port_table_grants_each_declaration_only_its_requires(plugin_ag
         mcp_host.plugin_catalog
     with pytest.raises(AttributeError):
         mcp_host.avatar_parent
+
+
+# ---------------------------------------------------------------------------
+# Kernel registrar: whole-batch name preflight, order, and name-only atomicity
+# (TP002). A recording mount keeps these assertions at the owning kernel seam.
+# ---------------------------------------------------------------------------
+
+
+def _kernel_declaration(name, *, calls, requires=("workdir",)):
+    """Return a minimal valid declaration whose bind and activate record calls."""
+    from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
+
+    def binder(host):
+        calls.append(("bind", name))
+        return BoundToolPlugin(
+            name=name,
+            schema={"properties": {"action": {"enum": ["ping", "manual"]}}},
+            handler=lambda _args: {"status": "ok"},
+            description=f"{name} kernel test plugin",
+            activate=lambda: calls.append(("activate", name)),
+        )
+
+    empty = {"type": "object", "properties": {}, "additionalProperties": False}
+    return ToolPluginDeclaration(
+        name=name,
+        actions=("ping",),
+        input_schemas={"ping": empty},
+        manual_input_schema=empty,
+        manual=f"{name}-manual",
+        description=f"{name} kernel test declaration",
+        binder=binder,
+        requires=requires,
+    )
+
+
+class _RecordingMount:
+    def __init__(self, calls):
+        self.calls = calls
+        self.transactions = []
+
+    def mount_tool(self, transaction):
+        self.calls.append(("mount", transaction.declaration.name))
+        self.transactions.append(transaction)
+
+
+def test_registrar_refuses_unreserved_duplicate_and_claimed_names_before_any_bind_or_mount():
+    """The whole batch is preflighted before bind, activation, or mount runs."""
+    from lingtai.kernel.tool_plugin import (
+        DuplicateToolPluginNameError,
+        UnreservedToolPluginNameError,
+        register_official_tool_plugins,
+    )
+
+    calls: list[tuple[str, str]] = []
+    mount = _RecordingMount(calls)
+    ports = {"workdir": object()}
+    live = _kernel_declaration("mcp", calls=calls)
+    claimed = {"mcp": live}
+
+    refused = [
+        (
+            [
+                _kernel_declaration("avatar", calls=calls),
+                _kernel_declaration("not_official", calls=calls),
+            ],
+            UnreservedToolPluginNameError,
+        ),
+        (
+            [
+                _kernel_declaration("avatar", calls=calls),
+                _kernel_declaration("avatar", calls=calls),
+            ],
+            DuplicateToolPluginNameError,
+        ),
+        (
+            [
+                _kernel_declaration("avatar", calls=calls),
+                _kernel_declaration("mcp", calls=calls),
+            ],
+            DuplicateToolPluginNameError,
+        ),
+    ]
+    for batch, error in refused:
+        with pytest.raises(error):
+            register_official_tool_plugins(
+                batch, ports_for=lambda _declaration: ports, mount=mount, claimed=claimed
+            )
+        assert calls == []
+        assert mount.transactions == []
+        assert claimed == {"mcp": live}
+
+
+def test_registrar_binds_then_activates_then_mounts_and_scopes_atomicity_to_names():
+    """Registration is ordered, same-object repeatable, and transactional only for names."""
+    from lingtai.kernel.tool_plugin import (
+        BoundToolPlugin,
+        HostPortError,
+        ToolPluginHost,
+        _OfficialMountTransaction,
+        register_official_tool_plugins,
+    )
+
+    calls: list[tuple[str, str]] = []
+    mount = _RecordingMount(calls)
+    ports = {"workdir": object()}
+    mcp = _kernel_declaration("mcp", calls=calls)
+    avatar = _kernel_declaration(
+        "avatar", calls=calls, requires=("workdir", "avatar_parent")
+    )
+    claimed: dict[str, object] = {}
+
+    bound = mcp.bind(ToolPluginHost.grant(mcp, ports))
+    assert isinstance(bound, BoundToolPlugin)
+    assert calls == [("bind", "mcp")]
+    assert mount.transactions == []
+    assert claimed == {}
+
+    calls.clear()
+    (mounted,) = register_official_tool_plugins(
+        [mcp], ports_for=lambda _declaration: ports, mount=mount, claimed=claimed
+    )
+    assert calls == [("bind", "mcp"), ("activate", "mcp"), ("mount", "mcp")]
+    assert claimed == {"mcp": mcp}
+    transaction = mount.transactions[-1]
+    assert transaction.declaration is mcp
+    assert transaction.plugin is mounted
+
+    calls.clear()
+    register_official_tool_plugins(
+        [mcp], ports_for=lambda _declaration: ports, mount=mount, claimed=claimed
+    )
+    assert calls == [("bind", "mcp"), ("activate", "mcp"), ("mount", "mcp")]
+    assert claimed == {"mcp": mcp}
+
+    with pytest.raises(PermissionError):
+        _OfficialMountTransaction(mcp, mounted)
+
+    calls.clear()
+    claimed.clear()
+    with pytest.raises(HostPortError):
+        register_official_tool_plugins(
+            [mcp, avatar], ports_for=lambda _declaration: ports, mount=mount, claimed=claimed
+        )
+    assert calls == [("bind", "mcp"), ("activate", "mcp"), ("mount", "mcp")]
+    assert claimed == {"mcp": mcp}
