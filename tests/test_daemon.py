@@ -2848,6 +2848,9 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
         terminal_notified=False,
     )
     workdir = tmp_path / "daemon-agent"
+    # A per-run daemon append must carry its daemon id so the Store routes it
+    # to the run's own `.notification/daemon/<id>.json` mini-file, exactly as
+    # the production terminal publishers stamp it.
     submit(
         store_agent_for(workdir),
         "daemon",
@@ -2855,6 +2858,7 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
         icon="🔔",
         priority="normal",
         data={
+            "daemon_id": "em-crash",
             "events": [{
                 "event_id": "evt_existing",
                 "source": "daemon",
@@ -2866,6 +2870,10 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
         },
     )
 
+    # Startup recovery retries only explicitly pending markers, never a
+    # lifetime scan of run directories; the crash left this one pending.
+    from lingtai.kernel.daemon_dispatch import mark_pending_terminal_notification
+    mark_pending_terminal_notification(workdir, "em-crash")
     agent = _make_agent(tmp_path, ["daemon"])
 
     events = snapshot_notifications(agent._working_dir)["daemon"]["data"]["events"]
@@ -3684,7 +3692,10 @@ def test_emanate_without_preset_persists_the_detached_effective_model(tmp_path, 
 
 def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     """Omitted preset inherits parent effective identity without allowlist reads."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    # Disable the resident central manager so dispatch goes through the
+    # patched supervisor adapter below instead of enqueueing to a real
+    # manager process the fake owner would never observe.
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}, "file": {}})
     agent.service.provider = "anthropic"
     agent.service.model = "claude-opus-4-8"
     agent.service._base_url = "https://api.anthropic.com"

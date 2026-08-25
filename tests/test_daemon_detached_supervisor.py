@@ -298,9 +298,17 @@ def test_parent_pool_and_cli_procs_never_track_detached_run(tmp_path):
 def test_fresh_manager_lists_and_checks_detached_run_after_registry_reset(tmp_path):
     """Acceptance test 3: fresh manager (empty in-memory registry) still sees the run."""
     from lingtai.tools import daemon as daemon_module
+    from lingtai.kernel.daemon_dispatch import append_dispatch
     from types import SimpleNamespace
 
     run_dir = _make_run_dir(tmp_path, task="say hi", timeout_s=30.0)
+    # `list` reads accepted dispatch records, never a directory scan; commit
+    # this run to the ledger before launch exactly as the parent manager does.
+    append_dispatch(
+        run_dir.path.parent.parent,
+        run_id=run_dir.run_id,
+        created_at=run_dir.state_snapshot()["started_at"],
+    )
     proc = _spawn_lingtai_supervisor(run_dir, task="say hi", timeout_s=30.0)
     try:
         _poll_until(lambda: _disk_state(run_dir).get("state") == "done", timeout=20.0)
@@ -321,8 +329,7 @@ def test_fresh_manager_lists_and_checks_detached_run_after_registry_reset(tmp_pa
         ids = [e.get("id") or e.get("run_id") for e in listing.get("emanations", listing.get("data", {}).get("emanations", []) if isinstance(listing.get("data"), dict) else [])]
         # _handle_list's exact top-level shape is exercised by other tests;
         # here we only need proof the run is discoverable post-refresh.
-        found = "em-test" in json.dumps(listing)
-        assert found
+        assert "em-test" in ids
     finally:
         if proc.poll() is None:
             proc.terminate()
