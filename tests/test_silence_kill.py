@@ -71,6 +71,11 @@ def test_cancel_event_always_created(tmp_path):
     assert isinstance(agent._cancel_event, threading.Event)
     assert not agent._cancel_event.is_set()
 
+    agent._request_turn_cancel()
+    agent._request_turn_cancel()
+
+    assert agent._cancel_event.is_set()
+
 
 # ---------------------------------------------------------------------------
 # Admin dict — new keys

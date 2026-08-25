@@ -1296,7 +1296,7 @@ def agent_system_runtime(agent: Any) -> AgentSystemRuntimeAdapter:
     def _transition_to_asleep() -> None:
         agent._set_state(AgentState.ASLEEP, reason="self-sleep")
         agent._asleep.set()
-        agent._cancel_event.set()
+        agent._request_turn_cancel()
 
     return AgentSystemRuntimeAdapter(
         admin=lambda: getattr(agent, "_admin", {}) or {},

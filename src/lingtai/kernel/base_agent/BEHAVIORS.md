@@ -9,7 +9,17 @@ related_files:
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/base_agent/turn.py
+  - src/lingtai/kernel/base_agent/__init__.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/tools/system/karma.py
+  - tests/test_aed_recovery.py
+  - tests/test_notification_sync.py
+  - tests/test_silence_kill.py
+  - tests/test_system.py
+  - tests/test_system_declared_plugin.py
+  - tests/test_karma.py
   - tests/test_perform_refresh_handshake.py
+  - tests/test_tool_result_restore_after_continuation_failure.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -73,3 +83,25 @@ Pass when both suites pass and the teardown order matches the contract. Fail on 
 
 ### Pass / Fail
 Pass when every failure before `spawn_detached` returns leaves the slot released with no cancel/shutdown signal and the corrected retry completes exactly one handoff; a failure before handshake normalization additionally leaves no watcher call and no `.refresh`/`.refresh.taken` mutation, while an exception after the ACK was established may leave `.refresh.taken` in place; and a completed handoff (the Port's normal return) keeps the slot claimed. Fail if a retry after a raising launch-command build or a raising spawn is skipped as already-in-progress, if a pre-handshake failure spawns a watcher or mutates `.refresh`/`.refresh.taken`, if any pre-handoff failure sets `_shutdown`/`_cancel_event`, or if a post-handoff logging failure lets a later request spawn a second watcher; record the evidence trail in the task report.
+
+## Behavior BA003 — one cooperative turn-cancel latch survives ACTIVE work and is consumed only by a fresh dequeue
+
+- **id**: BA003
+- **title**: one cooperative turn-cancel latch survives ACTIVE work and is consumed only by a fresh dequeue
+- **guards**: `agent-runtime.turn-cancel-latch.v1`
+- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **prerequisites**: a clean checkout of `<repo>`; no live agent process sharing any pytest scratch working directory
+- **estimate**: ≈ 10 minutes
+
+### Steps
+1. From `<repo>`, run `python -m pytest -q -x tests/test_tool_result_restore_after_continuation_failure.py tests/test_aed_recovery.py tests/test_notification_sync.py tests/test_silence_kill.py`.
+2. Run `python -m pytest -q -x tests/test_system.py tests/test_system_declared_plugin.py tests/test_karma.py tests/test_perform_refresh_handshake.py`.
+3. Inspect `BaseAgent._request_turn_cancel`, both `_run_loop` dequeue branches, `_sync_notifications`, and `_process_response`; confirm producer writes route through the helper, only the two post-shutdown fresh-dequeue sites clear, the awake clear precedes concatenation, and inner consumers never clear.
+
+### Expected evidence
+- [ ] Step 1: a normal preset `threading.Event` prevents tool dispatch and continuation while remaining set; awake and ASLEEP fresh dequeues clear stale state; an event-barrier cancellation during concatenation survives; an ASLEEP notification wake preserves the latch; repeated helper calls are harmless.
+- [ ] Step 2: official and direct System self-sleep publish ASLEEP state/event before latching; heartbeat interrupt/sleep consume their signal file before latching; successful refresh spawns its watcher before latching and sets shutdown afterward; failed setup remains unsignaled.
+- [ ] Step 3: source inspection finds one direct `.set()` inside the helper and exactly two `.clear()` calls in fresh-dequeue ownership. No provider abort, running-tool preemption, request identity, stop-drain guarantee, or terminal cancellation result has been introduced.
+
+### Pass / Fail
+Pass when both focused groups pass and source ownership matches the contract. Fail if an async notification wake or inner response consumer clears cancellation, if merge-time cancellation is lost, if a producer bypasses the helper, or if the cooperative latch is represented as hard/per-request cancellation; record the evidence trail in the task report.

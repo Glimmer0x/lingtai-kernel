@@ -47,14 +47,24 @@ def test_system_declaration_is_static_and_the_real_agent_mounts_it_once(tmp_path
         assert manual["manual"]
         assert manual["manual_path"].endswith("capabilities/system-manual/SKILL.md")
 
+        original_request_cancel = agent._request_turn_cancel
+        cancel_observations = []
+
+        def request_cancel():
+            cancel_observations.append((agent.state, agent._asleep.is_set()))
+            original_request_cancel()
+
+        agent._request_turn_cancel = request_cancel
         slept = handler({
             "action": "sleep",
             "input": {"reason": "runtime bridge"},
             "reasoning": "lifecycle",
         })
         assert slept["status"] == "ok"
+        assert cancel_observations == [(AgentState.ASLEEP, True)]
         assert agent.state is AgentState.ASLEEP
         assert agent._asleep.is_set()
+        assert agent._cancel_event.is_set()
     finally:
         agent.stop(timeout=1.0)
 

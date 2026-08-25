@@ -169,7 +169,7 @@ class _DirectSleepPort:
 
         self._agent._set_state(AgentState.ASLEEP, reason="self-sleep")
         self._agent._asleep.set()
-        self._agent._cancel_event.set()
+        self._agent._request_turn_cancel()
 
     def sleep_alarm_lock(self) -> Any:
         from lingtai.kernel.base_agent.lifecycle import _sleep_alarm_lock

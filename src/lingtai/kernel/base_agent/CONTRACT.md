@@ -4,6 +4,7 @@ contract_version: 1
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/base_agent/BEHAVIORS.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/config.py
   - src/lingtai/kernel/meta_block.py
@@ -12,7 +13,16 @@ related_files:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/base_agent/turn.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/tools/system/karma.py
   - tests/test_aed_recovery.py
+  - tests/test_notification_sync.py
+  - tests/test_silence_kill.py
+  - tests/test_system.py
+  - tests/test_system_declared_plugin.py
+  - tests/test_karma.py
+  - tests/test_perform_refresh_handshake.py
+  - tests/test_tool_result_restore_after_continuation_failure.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/process_scan.py
   - src/lingtai/adapters/posix/process_scan.py
@@ -29,7 +39,6 @@ related_files:
   - src/lingtai/cli.py
   - docs/references/windows-support.md
   - tests/test_agent.py
-  - tests/test_perform_refresh_handshake.py
   - tests/test_lifecycle_daemon_shutdown.py
   - tests/test_system_sleep_alarm.py
   - tests/test_process_scan.py
@@ -56,7 +65,7 @@ maintenance: |
 Stable entry: `lingtai.kernel.agent-runtime.v1`.
 
 ## Purpose
-Guarded by: [BA001](BEHAVIORS.md#behavior-ba001)
+Guarded by: [BA001](BEHAVIORS.md#behavior-ba001), [BA002](BEHAVIORS.md#behavior-ba002)
 
 
 Agent runtime is the composed lifecycle promise of one LingTai agent process:
@@ -254,6 +263,24 @@ Clause IDs are stable; each rule composes the linked normative source.
    output MUST acquire the stricter `_lingtai_partial_stream` flag before
    secondary account telemetry, retains priority when flags merge, and ends the
    turn without replay.
+11. `agent-runtime.turn-cancel-latch.v1` — Guarded by
+   [BA003](BEHAVIORS.md#behavior-ba003). `_cancel_event` is one private,
+   process-global, cooperative latch for the current logical turn. Producers
+   (`.interrupt`, `.suspend`, `.sleep`, successful refresh, and both official
+   and retained direct System self-sleep transitions) MUST request cancellation
+   through idempotent `BaseAgent._request_turn_cancel()` while preserving each
+   producer's existing file/state/watcher/shutdown ordering. Only a successful
+   fresh inbox dequeue may consume a stale latch: after its shutdown re-check
+   and before the dequeued message is published ACTIVE or merged. In the awake
+   branch, reset MUST precede queued-message concatenation so a cancellation
+   requested during merge remains latched. From ACTIVE until the logical turn
+   exits, response/tool consumers may observe the latch but MUST NOT clear it;
+   an ASLEEP notification synchronization wake likewise MUST NOT clear it. The
+   latch suppresses undispatched tool calls and post-tool continuation while
+   preserving existing tool-result/history commits. It does not hard-abort a
+   provider, preempt a running tool, identify a request, promise stop-drain, or
+   create a terminal cancellation result. See the paired
+   [`ANATOMY.md`](ANATOMY.md) for ownership and code routes.
 
 ## Contract tests
 
@@ -269,8 +296,16 @@ platform selector, CLI stop signals, CPR spawn kwargs, and the Windows
 scan→guard wiring), `tests/test_windows_import_graph.py` (the boot-path import
 graph survives missing POSIX mechanisms — the construction-gate proof), and
 `tests/test_cli.py` (duplicate-guard policy), and
-`tests/test_aed_recovery.py` (partial-output and exhausted provider-recovery
-terminal guards before transient/AED replay). The
+`tests/test_aed_recovery.py` (partial-output/exhausted provider-recovery
+terminal guards plus fresh-dequeue latch reset and merge-race survival),
+`tests/test_tool_result_restore_after_continuation_failure.py` (preset-latch
+non-dispatch/no-continuation with latch retention),
+`tests/test_notification_sync.py` (ASLEEP notification wake retention),
+`tests/test_silence_kill.py` (idempotent private producer),
+`tests/test_system.py` + `tests/test_system_declared_plugin.py` (direct and
+official self-sleep ordering), and `tests/test_karma.py` +
+`tests/test_perform_refresh_handshake.py` (signal-file and watcher-spawn
+producer ordering). The
 Windows release CI lane (`.github/workflows/kernel-windows-pr.yml`) executes the
 platform-marked tiers natively on `release.published`; routine pull requests do
 not spend a Windows runner. The capability matrix cites which rows carry native

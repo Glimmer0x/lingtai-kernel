@@ -19,6 +19,7 @@ no live agent is slept, suspended, cleared, or destroyed.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -885,8 +886,11 @@ def test_sleep_refuses_with_pending_notifications_and_force_overrides(
             self._config = type("C", (), {"language": "en"})()
             self.state = None
             self._asleep = type("E", (), {"set": lambda s: setattrs(s), "_v": False})()
-            self._cancel_event = type("E", (), {"set": lambda s: None})()
+            self._cancel_event = threading.Event()
             self._slept = False
+
+        def _request_turn_cancel(self) -> None:
+            self._cancel_event.set()
 
         def _set_state(self, state, reason=""):
             self.state = state
@@ -907,3 +911,4 @@ def test_sleep_refuses_with_pending_notifications_and_force_overrides(
     )
     assert result["status"] == "ok"
     assert forced.state == AgentState.ASLEEP
+    assert forced._cancel_event.is_set()

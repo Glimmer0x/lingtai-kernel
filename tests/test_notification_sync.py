@@ -1305,11 +1305,13 @@ def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
+    agent._cancel_event.set()
     publish_test_payload(tmp_path, "email", {"count": 1})
 
     agent._sync_notifications()
 
     assert agent._state == AgentState.IDLE
+    assert agent._cancel_event.is_set()
     assert AgentState.IDLE in state_history
     # MSG_TC_WAKE delivered — _handle_tc_wake will drive the wire forward.
     msg = agent.inbox.get_nowait()

@@ -1228,6 +1228,10 @@ class BaseAgent:
         from .lifecycle import _stop
         _stop(self, timeout)
 
+    def _request_turn_cancel(self) -> None:
+        """Latch cooperative cancellation for the current logical turn."""
+        self._cancel_event.set()
+
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
         """Transition to a new state.
 
@@ -1906,7 +1910,6 @@ class BaseAgent:
             # so the same failure does not replay until on-disk state
             # changes.
             self._asleep.clear()
-            self._cancel_event.clear()
             self._set_state(AgentState.IDLE, reason="notification_arrival")
             self._reset_uptime()
             # Old synthesized pairs are kept in history as placeholder
