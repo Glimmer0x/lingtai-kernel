@@ -6,6 +6,9 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from lingtai.adapters.posix import daemon_manager
 from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
 from lingtai.adapters.posix.daemon_manager import _DaemonManagerProcess
 from lingtai.adapters.posix.process_identity import process_identity
@@ -177,19 +180,125 @@ def _terminate_resident_manager(agent) -> None:
             pass
 
 
-def _write_live_manager_pid(agent, *, pid: int | None = None) -> None:
+def _manager_runtime_identity(code_head: str) -> dict[str, str]:
+    return {
+        "schema": "lingtai.daemon_manager_runtime.v1",
+        "loaded_code_head": code_head,
+        "source_root": "/test/source",
+        "daemon_notification_protocol": "per-run-mini-channel.v1",
+    }
+
+
+def _write_live_manager_pid(
+    agent,
+    *,
+    pid: int | None = None,
+    runtime_identity: dict[str, str] | None = None,
+) -> None:
     pid = os.getpid() if pid is None else pid
     root = agent._working_dir / MANAGER_DIR
     root.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": pid,
+        "state": "running",
+        "started_at": time.time(),
+        "manager_start_identity": process_identity(pid),
+    }
+    if runtime_identity is not None:
+        payload["manager_runtime_identity"] = runtime_identity
+    (root / "manager.pid").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_central_manager_persists_loaded_runtime_identity(tmp_path, monkeypatch):
+    expected = _manager_runtime_identity("current-head")
+    monkeypatch.setattr(daemon_manager, "_manager_runtime_identity", lambda: expected)
+
+    class FakeManager:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def start_capsule_server(self, _socket_path) -> None:
+            pass
+
+        def recover_interrupted_active_runs(self) -> None:
+            pass
+
+        def run(self, *, idle_exit_s=None) -> None:
+            assert idle_exit_s is None
+
+    monkeypatch.setattr(daemon_manager, "_DaemonManagerProcess", FakeManager)
+    agent_working_dir = tmp_path / "agent"
+
+    daemon_manager.run_manager(agent_working_dir, pool_size=1)
+
+    record = json.loads((agent_working_dir / MANAGER_DIR / "manager.pid").read_text(encoding="utf-8"))
+    assert record["manager_runtime_identity"] == expected
+
+
+def test_central_manager_reuses_only_matching_runtime_identity(tmp_path, monkeypatch):
+    agent = SimpleNamespace(_working_dir=tmp_path / "agent")
+    expected = _manager_runtime_identity("current-head")
+    _write_live_manager_pid(agent, runtime_identity=expected)
+    monkeypatch.setattr(daemon_manager, "_manager_runtime_identity", lambda: expected)
+
+    def unexpected_popen(*_args, **_kwargs):
+        raise AssertionError("matching central manager must be reused")
+
+    monkeypatch.setattr(daemon_manager.subprocess, "Popen", unexpected_popen)
+
+    daemon_manager._ensure_manager(agent._working_dir, pool_size=1)
+
+
+def test_central_manager_refuses_mismatched_runtime_before_queue_write(tmp_path, monkeypatch):
+    run_dir, request = _make_run(tmp_path, "em-stale-manager")
+    agent = SimpleNamespace(_working_dir=tmp_path / "agent")
+    _write_live_manager_pid(agent, runtime_identity=_manager_runtime_identity("old-head"))
+    monkeypatch.setattr(
+        daemon_manager,
+        "_manager_runtime_identity",
+        lambda: _manager_runtime_identity("current-head"),
+    )
+    monkeypatch.setattr(
+        daemon_manager,
+        "_send_capsule",
+        lambda *_args, **_kwargs: pytest.fail("mismatched manager must not receive a capsule"),
+    )
+
+    with pytest.raises(RuntimeError, match="runtime identity"):
+        daemon_manager.enqueue_manager_run(
+            agent_working_dir=agent._working_dir,
+            request=request,
+            capsule={"capability": "fresh"},
+            pool_size=1,
+        )
+
+    assert not (agent._working_dir / MANAGER_DIR / "queue").exists()
+    assert DaemonRunDir.read_state_from_disk(run_dir.path).get("owner") != "manager"
+
+
+def test_central_manager_refuses_mismatched_starting_identity(tmp_path, monkeypatch):
+    agent_working_dir = tmp_path / "agent"
+    root = agent_working_dir / MANAGER_DIR
+    root.mkdir(parents=True)
     (root / "manager.pid").write_text(
-        json.dumps({
-            "pid": pid,
-            "state": "running",
-            "started_at": time.time(),
-            "manager_start_identity": process_identity(pid),
-        }),
+        json.dumps(
+            {
+                "pid": None,
+                "started_at": time.time(),
+                "state": "starting",
+                "manager_runtime_identity": _manager_runtime_identity("old-head"),
+            }
+        ),
         encoding="utf-8",
     )
+    monkeypatch.setattr(
+        daemon_manager,
+        "_manager_runtime_identity",
+        lambda: _manager_runtime_identity("current-head"),
+    )
+
+    with pytest.raises(RuntimeError, match="runtime identity"):
+        daemon_manager._ensure_manager(agent_working_dir, pool_size=1)
 
 
 def test_central_manager_completes_run_and_notifies(tmp_path, monkeypatch):

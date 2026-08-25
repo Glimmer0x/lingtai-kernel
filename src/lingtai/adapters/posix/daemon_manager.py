@@ -31,6 +31,8 @@ from lingtai.kernel.daemon_supervisor import (
 
 MANAGER_DIR = Path("daemon") / "manager"
 ENTRYPOINT_MODULE = "lingtai.adapters.posix.daemon_manager_entrypoint"
+_MANAGER_RUNTIME_IDENTITY_SCHEMA = "lingtai.daemon_manager_runtime.v1"
+_DAEMON_NOTIFICATION_PROTOCOL = "per-run-mini-channel.v1"
 _POLL_INTERVAL_S = 0.05
 _PID_STALE_AFTER_S = 2.0
 _CAPSULE_SOCKET_NAME = "capsule.sock"
@@ -103,6 +105,22 @@ def _source_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _manager_runtime_identity() -> dict[str, str]:
+    """Return the compatibility identity of this process's central manager code."""
+    from lingtai.adapters.posix.git_cli import PosixGitCliAdapter
+    from lingtai.kernel.runtime_identity import runtime_identity
+
+    source_root = _source_root().resolve()
+    runtime = runtime_identity(PosixGitCliAdapter(source_root))
+    code_head = runtime.get("git_commit") or runtime.get("stamp") or "unknown"
+    return {
+        "schema": _MANAGER_RUNTIME_IDENTITY_SCHEMA,
+        "loaded_code_head": str(code_head),
+        "source_root": str(source_root),
+        "daemon_notification_protocol": _DAEMON_NOTIFICATION_PROTOCOL,
+    }
+
+
 def _manager_env() -> dict[str, str]:
     env = dict(os.environ)
     parts = [str(_source_root())]
@@ -115,6 +133,7 @@ def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
     root = _manager_dir(agent_working_dir)
     _private_dir(root)
     pid_path = root / "manager.pid"
+    expected_runtime_identity = _manager_runtime_identity()
     try:
         info = read_json(pid_path, default={}, expect=dict)
     except TypeError:
@@ -122,15 +141,27 @@ def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
     pid = info.get("pid") if isinstance(info, dict) else None
     started_at = info.get("started_at") if isinstance(info, dict) else None
     start_identity = info.get("manager_start_identity") if isinstance(info, dict) else None
-    if (
+    is_live = (
         isinstance(pid, int)
         and not isinstance(pid, bool)
         and _pid_alive(pid)
         and _process_identity_matches(pid, start_identity)
-    ):
-        return
+    )
+    if is_live:
+        if info.get("manager_runtime_identity") == expected_runtime_identity:
+            return
+        raise RuntimeError(
+            "resident central daemon manager runtime identity does not match the "
+            "current agent (loaded code head, source root, or daemon notification "
+            "protocol); refusing to submit new work"
+        )
     if isinstance(started_at, (int, float)) and time.time() - started_at < _PID_STALE_AFTER_S:
-        return
+        if info.get("manager_runtime_identity") == expected_runtime_identity:
+            return
+        raise RuntimeError(
+            "starting central daemon manager runtime identity does not match the "
+            "current agent; refusing to submit new work"
+        )
     token = uuid.uuid4().hex
     _write_private_json(
         pid_path,
@@ -140,6 +171,7 @@ def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
             "pool_size": pool_size,
             "state": "starting",
             "manager_token": token,
+            "manager_runtime_identity": expected_runtime_identity,
         },
     )
     env = _manager_env()
@@ -169,6 +201,7 @@ def enqueue_manager_run(
     if pool_size <= 0:
         raise ValueError("central daemon manager requires a positive pool size")
     root = _manager_dir(Path(agent_working_dir))
+    _ensure_manager(Path(agent_working_dir), pool_size=pool_size)
     queue_dir = root / "queue"
     _private_dir(queue_dir)
     _private_dir(root / "journal")
@@ -182,7 +215,6 @@ def enqueue_manager_run(
     }
     job_path = queue_dir / f"{request.run_id}.json"
     _write_private_json(job_path, payload)
-    _ensure_manager(Path(agent_working_dir), pool_size=pool_size)
     try:
         _send_capsule(root, request.run_id, capsule or {})
     except Exception:
@@ -212,6 +244,7 @@ def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
             "state": "running",
             "manager_start_identity": _process_identity(os.getpid()),
             "manager_token": os.environ.get("LINGTAI_DAEMON_MANAGER_TOKEN"),
+            "manager_runtime_identity": _manager_runtime_identity(),
         },
     )
     manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size)

@@ -609,10 +609,15 @@ environment value instead retains the explicit-capability/file resolution.
 `lingtai-agent daemon emanate` dispatches through the same `setup()` and manager
 resolution, not a CLI-specific parser, and loads the agent's configured
 `env_file` (non-overwriting, exactly as boot does) before constructing the
-manager, so an override configured there is visible at construction. If task
-or selected skill/MCP context
-would exceed the resolved budget, prompt construction fails before the LLM is
-scheduled and MUST NOT silently truncate any parent constraint.
+manager, so an override configured there is visible at construction. On POSIX,
+a fresh parent reuses a resident central manager only when its live process-start
+identity **and** its persisted loaded-code head, source root, and per-run daemon
+notification-protocol identity match. A missing, malformed, or mismatched stamp
+refuses the new submission before it is queue-owned or receives a capsule; it
+does not terminate or take over the old manager's active/capsule-backed runs.
+If task or selected skill/MCP context would exceed the resolved budget, prompt
+construction fails before the LLM is scheduled and MUST NOT silently truncate
+any parent constraint.
 
 Every LingTai daemon receives `compact` automatically, independent of provider.
 Its `action` is required and accepts only explicit `run` or `manual`. Execution
