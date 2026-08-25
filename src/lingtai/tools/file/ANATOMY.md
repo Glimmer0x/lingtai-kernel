@@ -7,7 +7,6 @@ related_files:
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/manual/SKILL.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/file/_read.py
@@ -28,9 +27,7 @@ maintenance: |
   parent link bidirectional. This package is the single owner of the file
   surface: schema, dispatch, all five operations, and the package-owned manual
   body. Do not reintroduce per-operation packages, contracts, or glossaries.
-  The retained intrinsic file-manual path is a compatibility marker only; it
-  must continue to point back to the package manual and never become a second
-  body owner. Update this map with structural code changes and verify citations.
+  Update this map with structural code changes and verify citations.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
 ---
@@ -39,20 +36,17 @@ maintenance: |
 The `file` package is the sole owner of the public `file` tool and its
 operational manual body. It exposes one model-facing handler over six canonical
 children — `read`, `write`, `edit`, `glob`, `grep`, `manual` — and owns their
-implementations outright. The old `file-manual` source path remains only as a
-compatibility marker; the integrated installer copies the package manual to that
-established runtime path and excludes the marker from standalone copying.
+implementations outright. The integrated installer copies the package manual to
+that established runtime path.
 
 ## Components
 
 - `__init__.py` — the static `DECLARATION`, six child input schemas, the one
-  declaration-derived family builder, the explicit manual path compatibility
-  loader, pure bind step, and official-registrar `setup()` wiring
-  (`src/lingtai/tools/file/__init__.py:142-198`, `:205-252`, `:311-345`).
-- `_load_file_manual()` / `_build_manual_child()` — prefer the established
-  `file-manual` installation, reject a retained redirect marker as an
-  operational body, and accept the candidate-era `file` installation only as
-  a transitional fallback (`src/lingtai/tools/file/__init__.py:142-198`).
+  declaration-derived family builder, established installed-manual loader, pure
+  bind step, and official-registrar `setup()` wiring
+  (`src/lingtai/tools/file/__init__.py:169-219`, `:262-293`, `:299-334`).
+- `_load_file_manual()` / `_build_manual_child()` — load the established
+  `file-manual` installation (`src/lingtai/tools/file/__init__.py:135-162`).
 - `_read.py` — the read operation plus paging/truncation math, per-call cap
   resolution, and spill-aware missing-file hint (`_apply_cap` and
   `_resolve_call_cap` at `src/lingtai/tools/file/_read.py:33-65`).
@@ -61,7 +55,7 @@ established runtime path and excludes the marker from standalone copying.
   discipline, sorted glob list, and grep match/traversal cap.
 - `_strip_nulls()` — the one boundary translating strict-schema `null` back to
   “absent” so each operation applies its historical defaults
-  (`src/lingtai/tools/file/__init__.py:293-295`).
+  (`src/lingtai/tools/file/__init__.py:257-259`).
 
 ## Connections
 
@@ -73,13 +67,9 @@ declaration once per setup; the bound family closes over only `WorkdirPort` and
 and resolves relative paths via `_file_paths.resolve_workdir_path`; this package
 performs no target-file I/O of its own.
 
-The reserved `manual` child reads the installed package-owned body through its
-explicit compatibility loader. Integrated agents return
+The reserved `manual` child reads the installed package-owned body from
 `.library/intrinsic/capabilities/file-manual/SKILL.md`, preserving the public
-path; a stale candidate installer may still expose `capabilities/file`, which
-is accepted only as a transition fallback. The retained source at
-`src/lingtai/intrinsic_skills/file-manual/SKILL.md` is a marker and is never a
-manual body owner.
+path.
 
 ## Composition
 
@@ -106,6 +96,5 @@ owns no installation mutation or duplicate manual cache.
 Per `../CONTRACT.md` “Implementation independence”, the six children share
 nothing but the family name and wire envelope: no operation module imports
 another, and each could change shape without touching its siblings. Their
-co-location in one package is ownership, not coupling. The package manual and
-its legacy-path marker are intentionally separate files with one operational
-body source, so a future edit cannot silently create two manuals.
+co-location in one package is ownership, not coupling. The package manual is
+the single operational body source.

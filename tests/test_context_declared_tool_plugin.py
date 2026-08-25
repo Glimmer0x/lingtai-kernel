@@ -40,37 +40,6 @@ def _write_skill(path: Path, body: str) -> None:
     (path / "SKILL.md").write_text(body, encoding="utf-8")
 
 
-def test_context_package_manual_wins_over_the_retained_legacy_source(tmp_path, monkeypatch):
-    tools_root = tmp_path / "tools"
-    skills_root = tmp_path / "intrinsic_skills"
-    _write_skill(tools_root / "context" / "manual", "CANONICAL CONTEXT PACKAGE\n")
-    _write_skill(
-        skills_root / "context-manual",
-        "legacy_redirect: src/lingtai/tools/context/manual\nLEGACY REDIRECT\n",
-    )
-    monkeypatch.setattr(tools_pkg, "__file__", str(tools_root / "__init__.py"))
-    monkeypatch.setattr(intrinsic_skills_pkg, "__file__", str(skills_root / "__init__.py"))
-
-    agent = _bare_manual_installer(tmp_path)
-    agent._install_intrinsic_manuals()
-
-    installed = agent._working_dir / ".library/intrinsic/capabilities/context-manual/SKILL.md"
-    assert installed.read_text(encoding="utf-8") == "CANONICAL CONTEXT PACKAGE\n"
-
-
-def test_documented_context_legacy_redirect_is_the_only_allowed_manual_collision(tmp_path, monkeypatch):
-    tools_root = tmp_path / "tools"
-    skills_root = tmp_path / "intrinsic_skills"
-    _write_skill(tools_root / "context" / "manual", "canonical\n")
-    _write_skill(
-        skills_root / "context-manual",
-        "legacy_redirect: src/lingtai/tools/context/manual\nredirect only\n",
-    )
-    monkeypatch.setattr(tools_pkg, "__file__", str(tools_root / "__init__.py"))
-    monkeypatch.setattr(intrinsic_skills_pkg, "__file__", str(skills_root / "__init__.py"))
-
-    _bare_manual_installer(tmp_path)._install_intrinsic_manuals()
-
 
 def test_unallowlisted_same_name_manual_collision_fails_loudly(tmp_path, monkeypatch):
     tools_root = tmp_path / "tools"
@@ -80,7 +49,7 @@ def test_unallowlisted_same_name_manual_collision_fails_loudly(tmp_path, monkeyp
     monkeypatch.setattr(tools_pkg, "__file__", str(tools_root / "__init__.py"))
     monkeypatch.setattr(intrinsic_skills_pkg, "__file__", str(skills_root / "__init__.py"))
 
-    with pytest.raises(RuntimeError, match="no canonical-to-legacy redirect allowlist applies"):
+    with pytest.raises(RuntimeError, match="collision"):
         _bare_manual_installer(tmp_path)._install_intrinsic_manuals()
 
 

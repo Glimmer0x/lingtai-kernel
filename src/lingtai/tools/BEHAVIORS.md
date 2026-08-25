@@ -217,7 +217,9 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    then `True`. All fourteen declarations construct at import with no Agent,
    server, transport, or catalog record. The two File focused suites pass, proving its narrow
    adapter/grant, one mount, unchanged operations, sole package manual body at
-   `file-manual`, absent `capabilities/file`, and package-data source routes;
+   `file-manual`, and absent `capabilities/file`;
+   `tests/test_tools_package_data.py::test_archives_ship_file_package_manual`
+   proves the package-data source route;
    Plugin's focused suite passes, proving its read-only action boundary, its
    protected-field skill projection with the vanilla skills catalog left closed,
    and its detached per-read catalog projection; Task Card's typed notification

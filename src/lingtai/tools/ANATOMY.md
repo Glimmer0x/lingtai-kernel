@@ -20,7 +20,6 @@ related_files:
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/manual/SKILL.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/CONTRACT.md
   - src/lingtai/tools/soul/ANATOMY.md
@@ -121,8 +120,7 @@ capability names and lazy adapters.
 - `file/` — sole owner of the public `file` capability: its static sixth
   official `DECLARATION`, composed schema/envelope dispatch, all five operation
   implementations in `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`,
-  and the one package manual body installed as `file-manual`; the retained
-  standalone source is only an excluded redirect marker
+  and the one package manual body installed as `file-manual`
   (`src/lingtai/tools/file/ANATOMY.md`).
 - `vision/` — public `vision` composition owner: one action-separated family
   with canonical `analyze`/`check`/`list`/`manual` children over the existing
@@ -290,9 +288,8 @@ sixth slice: its declaration composes the unchanged operations against
 `workdir`/`file_io`, and `setup` grants a typed `AgentFileIOAdapter` only through
 `extra_ports_for`; the adapter has no whole Agent, generic dispatch, or mount
 operation. The Agent installer maps the package-owned File manual body to the
-established `capabilities/file-manual` destination and excludes the standalone
-redirect marker, so no `capabilities/file` destination can overwrite or duplicate
-it. `src/lingtai/tools/plugin/__init__.py` is the seventh slice: its
+established `capabilities/file-manual` destination. `src/lingtai/tools/plugin/__init__.py`
+is the seventh slice: its
 `DECLARATION` binds `plugin` against `workdir`, its own protected prompt
 section, and the read-only `plugin_catalog` projection built by
 `AgentPluginCatalogAdapter`, so registration/discovery presentation is preserved

@@ -18,7 +18,6 @@ related_files:
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
   - src/lingtai/tools/context/manual/SKILL.md
-  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_context_ownership_redesign.py
@@ -51,10 +50,8 @@ The implementation is an official declared host plugin: its static
 binder receives only `workdir` and `context_runtime`, whose three narrow
 operations delegate the existing live molt/summarize/rebuild engines. The package
 manual under `tools/context/manual/` is the sole canonical source and is installed
-at the longstanding `context-manual` path. The retained
-`intrinsic_skills/context-manual/` tree is an explicit no-delete redirect only;
-the installer accepts exactly that documented canonical-to-legacy relation and
-fails every unrelated same-name collision loudly. No OLD
+at the longstanding `context-manual` path. Any same-name collision fails loudly.
+No OLD
 `psyche` action is reachable anywhere, and none is aliased here. A public
 root named `psyche` does exist again — it is the manual-only family for the four
 durable domains (`pad + lingtai + knowledge + skills = psyche`,

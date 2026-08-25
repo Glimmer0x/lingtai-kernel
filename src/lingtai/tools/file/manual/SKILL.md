@@ -13,7 +13,6 @@ related_files:
 - src/lingtai/tools/file/_glob.py
 - src/lingtai/tools/file/_grep.py
 - src/lingtai/intrinsic_skills/read-manual/SKILL.md
-- src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---

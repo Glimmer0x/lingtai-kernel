@@ -96,10 +96,8 @@ The injected Soul module remains available only for kernel lifecycle hooks.
 root through `register_agent_tool_plugins`; refresh repeats the controlled mount.
 The public name, six ordered actions, strict inputs, flow gate, persistence,
 results/errors, and historical `.library/intrinsic/capabilities/soul-manual/`
-manual path are unchanged. The retained standalone source bundle remains only as
-a marker-verified redirect to the package manual; it is not an operational
-fallback. An unmarked or wrong-target redirect, or any second operational owner
-for that destination, must fail loudly rather than be resolved by scan order.
+manual path are unchanged. Any second operational owner for that destination
+must fail loudly rather than be resolved by scan order.
 
 ## Tool surface
 

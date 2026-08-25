@@ -254,8 +254,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   consultation-lock, and notification semantics. Soul stays an injected
   intrinsic for kernel lifecycle hooks while its model-facing root mounts only
   through the registrar; the package manual is the sole operational body,
-  installed at the historical `soul-manual` destination, with the retained
-  intrinsic-skills source reduced to a marker-verified redirect.
+  installed at the historical `soul-manual` destination.
 - `src/lingtai/tools/system/__init__.py` is the eleventh accepted vertical
   slice. Its static `DECLARATION` preserves the public
   `refresh | sleep | lull | interrupt | suspend | cpr | clear | nirvana |
@@ -414,10 +413,10 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `lingtai.tools.tool_family.manual.build_manual_child`, which reads the
   installed manual through `src/lingtai/tools/_manual.py`. That loader accepts
   the live Agent (private `_working_dir`) or a `WorkdirPort` (`path`), so
-  migrated and unmigrated families share one loader. File's local manual child
-  adds only its explicit `file-manual` first / stale `file` fallback route; the
-  installer maps the package body to `file-manual` and excludes the standalone
-  redirect marker so the runtime still has one body and one destination.
+  migrated and unmigrated families share one loader. File keeps a local manual
+  child that reads the same installed body at `file-manual`; the installer maps
+  the package body to that destination, so the runtime has one body and one
+  destination.
 
 ## Composition
 

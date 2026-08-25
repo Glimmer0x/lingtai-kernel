@@ -9,7 +9,6 @@ related_files:
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/manual/SKILL.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/tools/file/_read.py
   - tests/test_read_continuation.py
   - tests/test_file_tool_family.py

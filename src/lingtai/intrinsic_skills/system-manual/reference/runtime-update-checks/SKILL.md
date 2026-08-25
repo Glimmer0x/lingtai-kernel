@@ -13,7 +13,7 @@ related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 - src/lingtai/tools/notification/manual/SKILL.md
-- src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
+- src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/kernel/nudge/__init__.py
 - src/lingtai/kernel/nudge/kernel_version.py
@@ -267,7 +267,7 @@ Python as a substitute.
 ## Boundaries
 
 `https://lingtai.ai/install.sh` owns install/update execution and release
-migration navigation (step 9). `notification-manual` owns channel allowlisting,
+migration navigation (step 9). The Notification package manual owns channel allowlisting,
 sync concepts, and dismissal safety. `reference/refresh-precheck/SKILL.md` owns
 the ordered pre-flight and post-refresh verification pass. This reference owns
 only kernel-local read-only diagnosis and refresh mechanics; `source_drift` stays

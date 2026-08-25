@@ -44,26 +44,6 @@ _TOOL_MANUAL_DESTINATION_NAMES: dict[str, str] = {
     "soul": "soul-manual",
 }
 
-# No-delete Context/Soul recuts only: each retained standalone manual source is
-# a documented redirect to its canonical tools/<owner>/manual package. It may
-# yield to that exact canonical source, and no other same-name collision may.
-_CANONICAL_TOOL_MANUAL_LEGACY_REDIRECTS: dict[str, str] = {
-    "context": "context-manual",
-    "soul": "soul-manual",
-}
-
-# Additional exact frontmatter markers a retained redirect must carry before it
-# may yield to its canonical owner. Soul's redirect declares its identity,
-# target, and non-operational status explicitly; a missing or wrong marker is a
-# collision, never a silent scan-order selection.
-_CANONICAL_TOOL_MANUAL_REDIRECT_MARKERS: dict[str, tuple[str, ...]] = {
-    "soul": (
-        "redirect_marker: soul-manual-legacy-redirect-v1",
-        "redirect_target: src/lingtai/tools/soul/manual/SKILL.md",
-        "operational_content: false",
-    ),
-}
-
 
 def _detached_spawn_kwargs() -> dict[str, Any]:
     """Platform kwargs for launching a detached agent-run child.
@@ -643,8 +623,7 @@ class Agent(BaseAgent):
         (intrinsic_dir / "capabilities").mkdir(parents=True, exist_ok=True)
 
         # The first installer records which canonical package owns every installed
-        # destination. The standalone installer below may yield only through the
-        # one reviewed canonical-to-legacy redirect relation declared above.
+        # destination so standalone same-name collisions fail closed.
         canonical_manual_owners: dict[tuple[str, str], str] = {}
 
         def install_tool_plugin(entry: Path, subdir: str) -> None:
@@ -734,74 +713,37 @@ class Agent(BaseAgent):
                 shutil.copytree(src, destination)
                 canonical_manual_owners[owner_key] = entry.name
 
-        def install_skills_from(
-            pkg, subdir: str, *, exclude: frozenset[str] = frozenset()
-        ) -> None:
-            """Install standalone skill bundles (no companion code, no manual/ wrapper).
+        def install_skills_from(pkg, subdir: str) -> None:
+            """Install standalone skill bundles with no companion tool package.
 
-            Each ``<pkg>/<entry>/`` directory IS the skill — copied verbatim into
-            ``intrinsic/<subdir>/<entry>/`` (manuals plus any sidecar scripts/assets,
-            e.g. the ``lingtai-kernel-anatomy`` checker and benchmark). ``exclude``
-            retains a legacy source bundle that is now packaged by its owning tool,
-            so the installed library has one canonical family-manual destination.
+            Each ``<pkg>/<entry>/`` directory is copied verbatim into
+            ``intrinsic/<subdir>/<entry>/``, including manuals and any sidecar
+            scripts/assets such as the ``lingtai-kernel-anatomy`` checker and
+            benchmark.
             """
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
                 return
             pkg_root = Path(pkg_file).parent
             for entry in sorted(pkg_root.iterdir()):
-                if (
-                    not entry.is_dir()
-                    or entry.name.startswith("_")
-                    or entry.name in exclude
-                ):
-                    continue
-                # Notification's retained intrinsic-skill source is migration
-                # history only. Its declared tool package owns the one canonical
-                # installed capabilities/notification/SKILL.md manual.
-                if entry.name == "notification-manual":
+                if not entry.is_dir() or entry.name.startswith("_"):
                     continue
                 destination = intrinsic_dir / subdir / entry.name
                 owner = canonical_manual_owners.get((subdir, entry.name))
                 if destination.exists():
-                    # Context's and Soul's old intrinsic trees remain in the
-                    # source package solely as documented redirects. The exact
-                    # allowlist and the redirect markers make this exception
-                    # auditable; a new, unrelated same-name collision fails
-                    # rather than silently choosing installer order.
-                    redirect_name = _CANONICAL_TOOL_MANUAL_LEGACY_REDIRECTS.get(owner)
-                    markers = (
-                        f"legacy_redirect: src/lingtai/tools/{owner}/manual",
-                    ) + _CANONICAL_TOOL_MANUAL_REDIRECT_MARKERS.get(owner, ())
-                    redirect_skill = entry / "SKILL.md"
-                    redirect_text = (
-                        redirect_skill.read_text(encoding="utf-8")
-                        if redirect_skill.is_file()
-                        else ""
-                    )
-                    is_documented_redirect = (
-                        redirect_name == entry.name
-                        and all(marker in redirect_text for marker in markers)
-                    )
-                    if is_documented_redirect:
-                        continue
                     raise RuntimeError(
                         "intrinsic manual destination collision: standalone skill "
                         f"{entry.name!r} conflicts with canonical owner {owner!r} at "
-                        f"{destination}; no canonical-to-legacy redirect allowlist applies"
+                        f"{destination}"
                     )
                 shutil.copytree(entry, destination)
 
         # Every tool package with a manual/ installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
         # namespace. Scanning the consolidated ``lingtai.tools`` package replaces the
-        # former core/ + capabilities/ dual scan. File now ships its own
-        # package manual; its retained intrinsic source is excluded below so it
-        # cannot become a second public manual destination.
+        # former core/ + capabilities/ dual scan.
         install_from(tools_pkg, "capabilities")
-        install_skills_from(
-            skills_pkg, "capabilities", exclude=frozenset({"file-manual"})
-        )
+        install_skills_from(skills_pkg, "capabilities")
 
         # If the skills capability is loaded, re-run its reconcile now that
         # the manuals are on disk — so the injected catalog reflects them on

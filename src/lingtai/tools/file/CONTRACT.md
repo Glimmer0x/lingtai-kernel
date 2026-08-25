@@ -6,7 +6,6 @@ related_files:
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/manual/SKILL.md
   - src/lingtai/tools/file/BEHAVIORS.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/file/_read.py
@@ -262,10 +261,7 @@ likewise stays false so exact procedure is not summarized away.
 The family owns exactly one manual body: `action="manual"` returns the
 package-owned `tools/file/manual/SKILL.md`, whose frontmatter remains
 `name: file-manual`. The integrated installer preserves the established public
-result/install path at `capabilities/file-manual/SKILL.md`; the File-local loader
-accepts `capabilities/file/SKILL.md` only as a read-only transition fallback for
-stale candidate worktrees. The retained `intrinsic_skills/file-manual/SKILL.md`
-is an explicit redirect marker, never a second body owner. The action performs no
+result/install path at `capabilities/file-manual/SKILL.md`. The action performs no
 target file operation and takes strict empty input. Its canonical child result
 carries the full body at `content[0].text` and the host-local path at
 `structuredContent.manual_path`, without double wrapping.

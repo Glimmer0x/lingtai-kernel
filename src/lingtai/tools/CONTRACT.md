@@ -16,7 +16,6 @@ related_files:
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/manual/SKILL.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - tests/test_file_tool_plugin_package.py
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/task_card/__init__.py
@@ -467,9 +466,7 @@ register is family-generic rather than MCP-only.
   and is never granted to a declaration.
 
 **The package owns the canonical manual and its submanuals.** Per root Design
-principles 3 and 4, a package-owned manual travels with the capability; a
-retained intrinsic manual tree is migration-compatible legacy/redirect material,
-not a competing authority:
+principles 3 and 4, a package-owned manual travels with the capability:
 
 - One declaration names its own manual alongside its public action inventory,
   and the family ships that manual with every submanual, reference, or asset
@@ -618,14 +615,14 @@ non-goal for third-party-versus-third-party mounts.
   vertical evidence. Soul's declaration binds only `workdir`/`soul_runtime`;
   its focused suites (`tests/test_tool_family_soul_migration.py`,
   `tests/test_soul_runtime_port_ab.py`) prove the explicit runtime port, exact
-  grant, preserved six-action surface, one mount, sole package manual body at
-  `soul-manual`, and marker-verified legacy redirect. Email's declaration
+  grant, preserved six-action surface, one mount, and sole package manual body at
+  `soul-manual`. Email's declaration
   binds only `workdir`/`email_runtime`; its focused suite proves the typed port,
   one mount/no capability row, canonical manual, and call-time replacement
   manager. File's declaration binds only `workdir`/`file_io`; its focused suites
   prove the typed adapter, exact grant, preserved operations, one mount, sole
-  package body at `file-manual`, excluded redirect marker, and wheel/sdist source
-  route. Task Card's declaration binds only
+  package body at `file-manual`, and wheel/sdist package-data route. Task Card's
+  declaration binds only
   `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications`; its
   focused suites (`tests/test_task_card_controller.py`,
   `tests/test_task_card_notifications.py`, plus the Task Card cases in
@@ -775,8 +772,7 @@ call time without intrinsic or official-handler dispatch (see
 `workdir` and kernel-owned `file_io`; `AgentFileIOAdapter` exposes only typed
 text/search operations plus traversal and result-cap facts, and setup supplies it
 only through `extra_ports_for`. The package manual is the one operational body,
-installed at `capabilities/file-manual`, with the standalone redirect marker
-excluded and no second `capabilities/file` destination (see
+installed at `capabilities/file-manual` (see
 `src/lingtai/tools/file/CONTRACT.md`).
 
 `web` is the fourteenth declared vertical slice. Its declaration binds exactly
