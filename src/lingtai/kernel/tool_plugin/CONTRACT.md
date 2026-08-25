@@ -461,6 +461,8 @@ This component never selects.
 ## Contract tests
 
 `tests/test_tool_plugin_declaration.py` is the shared primitive/slice suite;
+`tests/test_deep_refresh.py` owns init reconstruction, including the opt-in Web
+claim/schema/handler removal and re-add regression; and
 `tests/test_tool_family_avatar_migration.py` supplies Avatar's focused declared
 vertical proof; `tests/test_context_declared_tool_plugin.py` supplies Context's
 focused static-declaration, restricted-runtime-port, canonical-manual, and
@@ -493,8 +495,8 @@ preserve Notification Core delay/timer and Store behavior:
   port, missing-port failure, foreign-host refusal, and that neither the facade
   nor the bound plugin exposes the `Agent` on its public surface;
 - fail-fast names — unreserved name, duplicate within one batch, and a second
-  different declaration against a live claim, each asserting zero mounts, zero
-  binds, and an unchanged claim map;
+  different declaration against a live claim, each asserting zero binds,
+  activations, and mounts with an unchanged claim map;
 - boot-path observability — an official-name conflict raised out of
   `Agent._setup_capability`, an unreserved name and a missing host port each
   failing a real `Agent(...)` boot instead of being absorbed as
@@ -503,17 +505,15 @@ preserve Notification Core delay/timer and Store behavior:
   or no action enum is refused at `bind()` with nothing mounted or claimed, and
   `mcp`'s manual destination and per-action `input` schemas follow its
   declaration;
-- atomicity, stated exactly — a mid-batch host-port failure leaves the earlier
-  member mounted and claimed;
-- claim-map lifecycle — the claim is reachable through the public
-  `official_tool_plugins` property, whose view cannot be cleared or overwritten;
-  persistent declaration anchors prevent mutable backing-map tampering from
-  admitting a foreign declaration, the live claim is dropped when a refresh
-  disables the capability, and it is re-claimed (and still not overwritable)
-  when it does;
-- ordering — `bind` alone activates and mounts nothing;
-  `activate` runs before `mount`;
-- idempotent re-registration (the refresh path);
+- registrar ordering and issuance — `bind()` alone activates and mounts nothing;
+  each successful member runs bind, activate, mount, then claim; re-registering
+  the same declaration object repeats that controlled sequence; and only the
+  registrar can issue the transaction carrying the exact bound result;
+- name-check-only atomicity — a later host-port failure propagates after leaving
+  an earlier member mounted and claimed, because no unmount capability exists;
+- claim lifecycle across refresh — the deep-refresh owner proves that removing
+  and re-adding opt-in Web keeps its public claim, schema, and handler surface
+  synchronized.
 - the live slices — boot claims and mounts exactly one `mcp`, one `vision`,
   and one `web` tool; a post-seal mount raises, a foreign declaration cannot take a live
   name, and

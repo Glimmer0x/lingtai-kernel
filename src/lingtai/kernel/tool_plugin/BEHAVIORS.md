@@ -30,6 +30,7 @@ related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_deep_refresh.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
@@ -349,8 +350,7 @@ writes.
 
 - **id**: TP002
 - **title**: a reserved official name is claimed once and a conflict is refused before any bind or mount
-- **guards**: `declared-host-tool-plugin` §
-  [Contract rules](CONTRACT.md#contract-rules)
+- **guards**: `declared-host-tool-plugin` § [Contract rules](CONTRACT.md#contract-rules)
 - **runner**: any LingTai agent with `shell` and `file` access to a clean
   checkout of the `lingtai-kernel` repository
 - **prerequisites**: a clean checkout; a working `.venv/`
@@ -358,143 +358,66 @@ writes.
 
 ### Steps
 
-1. Read the kernel-owned reserved list and confirm it holds names only:
+1. Read `register_official_tool_plugins` in
+   `src/lingtai/kernel/tool_plugin/__init__.py`. Confirm its whole-batch name
+   preflight completes before the registration loop can grant a host, bind,
+   activate, mount, or claim a declaration.
 
-   ```bash
-   grep -n "OFFICIAL_TOOL_PLUGIN_NAMES" src/lingtai/kernel/tool_plugin/__init__.py
-   ```
-
-   Expect the module docstring, `__all__`, module-level tuple, and registrar check/error as the relevant matches.
-   Confirm the literal is exactly `('mcp', 'avatar', 'context', 'daemon',
-   'email', 'file', 'plugin', 'notification', 'shell', 'soul', 'system',
-   'task_card', 'vision', 'web')` in that order and contains bare names only —
-   no module path, import, or family behavior.
-
-2. Prove a conflicting declaration is refused with nothing bound and nothing
-   mounted:
+2. Run the direct preflight regression:
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_unreserved_name_is_refused_before_any_bind_or_mount \
-     tests/test_tool_plugin_declaration.py::test_duplicate_name_in_one_batch_is_refused_before_any_mount \
-     tests/test_tool_plugin_declaration.py::test_a_second_different_declaration_cannot_take_a_claimed_name \
-     tests/test_tool_plugin_declaration.py::test_repeat_registration_of_the_same_declaration_is_idempotent \
-     tests/test_tool_plugin_declaration.py::test_activation_runs_before_mount_and_only_after_the_name_checks
+     tests/test_tool_plugin_declaration.py::test_registrar_refuses_unreserved_duplicate_and_claimed_names_before_any_bind_or_mount
    ```
 
-   Expect `5 passed`.
+   Expect the selected test to pass. It refuses an unreserved name, an in-batch
+   duplicate, and a different declaration against a live claim while preserving
+   the call record, mounted transactions, and claim map.
 
-3. Prove the refusal reaches a live agent's tool surface, including the
-   review's forged transaction and mutable-claim-map attempts:
+3. Run the direct ordering, issuance, idempotency, and limited-atomicity
+   regression:
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_boot_claims_the_official_name_and_mounts_exactly_one_mcp_tool \
-     tests/test_tool_plugin_declaration.py::test_a_foreign_declaration_cannot_take_the_live_mcp_name \
-     tests/test_tool_plugin_declaration.py::test_registration_after_the_tool_surface_is_sealed_raises \
-     tests/test_tool_plugin_declaration.py::test_public_mount_bypass_cannot_publish_a_foreign_bound_plugin \
-     tests/test_tool_plugin_declaration.py::test_a_constructed_transaction_cannot_replace_the_canonical_mcp_binding \
-     tests/test_tool_plugin_declaration.py::test_clearing_the_backing_claim_cannot_admit_a_foreign_declaration \
-     tests/test_tool_plugin_declaration.py::test_public_claim_view_cannot_clear_the_live_claim_or_admit_a_foreign_declaration
+     tests/test_tool_plugin_declaration.py::test_registrar_binds_then_activates_then_mounts_and_scopes_atomicity_to_names
    ```
 
-   Expect `7 passed`: boot claims the official name, foreign registration and
-   post-seal registration are refused, an arbitrary bound plugin and a directly
-   constructed transaction cannot replace handler/schema/claim, clearing the
-   mutable backing map cannot admit a foreign declaration, and the public claim
-   view cannot be used to unlock one. The provenance promise is for ordinary
-   public/declared and extension paths; Python trusted internals are not an
-   absolute security boundary.
+   Expect the selected test to pass. `bind()` alone is side-effect-free; a
+   successful member runs bind → activate → mount → claim; the same declaration
+   object can be registered again through that controlled route; and the
+   registrar alone issues the transaction carrying its exact bound result. A
+   later host-port failure propagates after retaining the earlier mount and
+   claim, so atomicity applies only to name checks.
 
-4. Prove the whole reserved namespace still mounts exactly once together:
+4. Run the refresh-owner regression for the opt-in Web surface:
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_all_fourteen_official_families_mount_exactly_once_together
+     tests/test_deep_refresh.py::test_deep_refresh_drops_and_reclaims_web_official_surface
    ```
 
-   Expect `1 passed`: every name in `OFFICIAL_TOOL_PLUGIN_NAMES` is claimed by
-   one declaration and appears exactly once in the live schema list, with no
-   family displacing another.
-
-5. Confirm the registrar's ordering is structural, not incidental: read
-   `register_official_tool_plugins` in
-   `src/lingtai/kernel/tool_plugin/__init__.py` and verify the name-checking
-   loop over the whole batch completes before the second loop performs the
-   first `ToolPluginHost.grant` / `bind` / `activate` / `mount_tool`; verify
-   issuance records the exact bind result and claims receive only the mounted
-   transaction.
-
-6. Prove the refusal is *observable* — that it fails the boot instead of being
-   absorbed as a skipped capability:
-
-   ```bash
-   grep -n "class ToolPluginError" src/lingtai/kernel/tool_plugin/__init__.py
-   grep -n "except (ValueError, ImportError, TypeError)" src/lingtai/agent.py
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_an_official_name_conflict_is_not_swallowed_as_capability_skipped \
-     tests/test_tool_plugin_declaration.py::test_an_unreserved_official_name_fails_the_boot_rather_than_skipping_mcp \
-     tests/test_tool_plugin_declaration.py::test_a_missing_host_port_fails_the_boot_rather_than_skipping_mcp \
-     tests/test_tool_plugin_declaration.py::test_only_name_conflicts_are_all_or_nothing_across_a_batch \
-     tests/test_tool_plugin_declaration.py::test_a_refresh_that_disables_the_capability_drops_its_official_claim \
-     tests/test_tool_plugin_declaration.py::test_a_refresh_that_keeps_the_capability_re_claims_the_official_name
-   ```
-
-   Expect `ToolPluginError(Exception)` — **not** `ValueError` — beside the two
-   Composition-Root capability guards that catch
-   `(ValueError, ImportError, TypeError)` and log `capability_skipped`, then
-   `6 passed`: a conflict, an unreserved name, and a missing host port each
-   reach the caller of `_setup_capability` (two of them failing a real
-   `Agent(...)` boot), a mid-batch host-port failure is *not* rolled back, and
-   the claim map tracks the live namespace across refresh.
-
-7. Confirm the non-official mount path is untouched:
-
-   ```bash
-   grep -n "Remove any existing schema with same name" src/lingtai/kernel/base_agent/tools.py
-   ```
-
-   Expect one match inside `_add_tool`,
-   immediately followed by the line rebuilding `agent._tool_schemas` with
-   `s.name != name`. The reserved-name check is at this common model-facing
-   boundary: generic `add_tool` refuses `mcp`, while the registrar-issued
-   canonical one-use transaction is the sole official route. External
-   stdio/HTTP catalogs are preflighted and rejected before publication, and
-   same-name replacement remains for nonreserved tools.
+   Expect the selected test to pass. Removing Web from `init.json` removes its
+   claim, schema, and handler; re-adding the capability restores the static
+   declaration with one schema and handler.
 
 ### Expected evidence
 
-- [ ] Step 1: `OFFICIAL_TOOL_PLUGIN_NAMES` is the exact ordered static tuple
-      `mcp, avatar, context, daemon, email, file, plugin, notification, shell,
-      soul, system, task_card, vision, web` of bare names.
-- [ ] Step 2: `5 passed` — an unreserved name, an in-batch duplicate, and a
-      second declaration against a live claim are each refused with zero binds,
-      zero mounts, and an unchanged claim map; the same declaration re-registers
-      idempotently; `activate` precedes `mount`.
-- [ ] Step 3: `7 passed` — boot claims `mcp` and mounts exactly one `mcp` tool,
-      a foreign declaration cannot take it, a post-seal mount raises, the old
-      public adapter/factory bypass and a forged transaction are unavailable,
-      backing-map tampering cannot admit a foreign declaration, and the public
-      claim view cannot unlock one.
-- [ ] Step 4: `1 passed` — all fourteen reserved names mount exactly once in
-      one live composition.
-- [ ] Step 5: the batch-wide check loop precedes the bind/mount loop in source
-      order.
-- [ ] Step 6: `6 passed` — official-plugin failures propagate past the
-      capability skip-guard, the all-or-nothing promise is scoped to names, and
-      the claim map matches the live namespace across refresh and disable.
-- [ ] Step 7: `_add_tool`'s same-name replacement is still present and
-      unmodified.
+- [ ] The registrar preflights every name before bind, activation, mount, or
+      claim and leaves a refused batch unchanged.
+- [ ] Registration uses bind → activate → mount → claim; same-object
+      re-registration remains controlled; and only the registrar can issue an
+      official mount transaction.
+- [ ] A failure after the name checks does not imply rollback of an earlier
+      member; name checks are the only atomic phase.
+- [ ] The refresh owner observes the opt-in Web claim, schema, and handler
+      disappear together and return together after re-add.
 
 ### Pass / Fail
 
 Pass when every box above is observed. **Fail loudly** if a name conflict is
-detected only after a bind, an activate, or a mount; if a second declaration can
-overwrite a claimed official name; if a refused batch leaves any tool mounted or
-any claim recorded; if any of these failures is downgraded to a
-`capability_skipped` log line instead of failing the boot; if a claim outlives
-the tool it claims across a refresh; if the reserved list grows a module path,
-an import, or a discovery mechanism; or if third-party mount semantics in
-`_add_tool` changed.
+noticed after any bind, activation, or mount; a second declaration replaces a
+live official claim; a caller can manufacture an official mount transaction; a
+post-name-check failure rolls back or conceals an earlier member; or a refresh
+leaves a Web claim, schema, or handler out of sync with its opt-in capability.
 Record the exact command output in the task report. This task performs no
 writes.

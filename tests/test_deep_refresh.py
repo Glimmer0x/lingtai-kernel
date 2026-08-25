@@ -408,6 +408,34 @@ def test_deep_refresh_removes_old_capabilities(tmp_path):
     assert "web" not in cap_names_after
 
 
+def test_deep_refresh_drops_and_reclaims_web_official_surface(tmp_path):
+    """An opt-in Web refresh leaves claims, schemas, and handlers in sync."""
+    from lingtai.tools.web_search import DECLARATION
+
+    agent = _make_agent(tmp_path, _make_init(capabilities={"web": {}}))
+    try:
+        agent._setup_from_init()
+        assert agent.official_tool_plugins["web"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("web") == 1
+        assert "web" in agent._tool_handlers
+
+        (tmp_path / "init.json").write_text(json.dumps(_make_init(capabilities={})))
+        agent._setup_from_init()
+        assert "web" not in agent.official_tool_plugins
+        assert "web" not in [schema.name for schema in agent._tool_schemas]
+        assert "web" not in agent._tool_handlers
+
+        (tmp_path / "init.json").write_text(
+            json.dumps(_make_init(capabilities={"web": {}}))
+        )
+        agent._setup_from_init()
+        assert agent.official_tool_plugins["web"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("web") == 1
+        assert "web" in agent._tool_handlers
+    finally:
+        agent._workdir_lease.release()
+
+
 def test_deep_refresh_preserves_chat_history(tmp_path):
     """ChatInterface is passed through to _rebuild_session after refresh."""
     agent = _make_agent(tmp_path, _make_init())
