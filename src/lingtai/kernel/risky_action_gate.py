@@ -823,6 +823,12 @@ def build_risky_action_check(working_dir: str | os.PathLike[str]):
     workdir = Path(working_dir).expanduser().resolve()
 
     def risky_action_check(proposal: ToolProposal) -> GuardDecision:
+        from .execution_workspace import (
+            current_execution_workspace,
+            resolve_execution_path,
+        )
+        workspace = current_execution_workspace()
+        execution_root = workspace.root if workspace is not None else workdir
         try:
             config = load_gate_config(workdir)
         except Exception as exc:
@@ -834,7 +840,9 @@ def build_risky_action_check(working_dir: str | os.PathLike[str]):
             return GuardDecision.allow()
         reason: str | None = None
         if proposal.tool_name == "file":
-            file_result = _file_risk_reason(proposal.tool_args, config, base_cwd=str(workdir))
+            file_result = _file_risk_reason(
+                proposal.tool_args, config, base_cwd=str(execution_root)
+            )
             if file_result is not None:
                 reason = file_result[0]
         elif proposal.tool_name in ("shell", "bash"):
@@ -848,7 +856,21 @@ def build_risky_action_check(working_dir: str | os.PathLike[str]):
                 # The executor uses the agent workdir when working_dir is
                 # omitted, so the gate must resolve targets against the same
                 # effective cwd rather than the gate process cwd.
-                effective_cwd = action_input.get("working_dir") or str(workdir)
+                raw_cwd = action_input.get("working_dir") or str(execution_root)
+                if workspace is None:
+                    # Preserve the historical guard input for ordinary turns;
+                    # the shell capability remains the canonical sandbox check.
+                    effective_cwd = str(raw_cwd)
+                else:
+                    try:
+                        effective_cwd = str(resolve_execution_path(
+                            raw_cwd, fallback_root=execution_root
+                        ))
+                    except (ValueError, OSError):
+                        return GuardDecision.deny(
+                            check_name=GATE_CHECK_NAME,
+                            reason="shell working_dir escapes execution workspace",
+                        )
                 reason = _shell_risk_reason(
                     str(action_input.get("command", "")),
                     config,

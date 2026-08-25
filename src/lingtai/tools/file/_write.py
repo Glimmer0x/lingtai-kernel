@@ -32,8 +32,8 @@ def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
         if "content" not in args:
             return {"status": "error", "message": "content is required"}
         content = args["content"]
-        path = resolve_workdir_path(workdir.path, path)
         try:
+            path = resolve_workdir_path(workdir.path, path)
             file_io.write(path, content)
             return {"status": "ok", "path": path, "bytes": len(content.encode("utf-8"))}
         except Exception as e:

@@ -9,6 +9,10 @@ from types import SimpleNamespace
 import pytest
 
 from lingtai.kernel.base_agent import turn
+from lingtai.kernel.execution_workspace import (
+    ExecutionWorkspace,
+    current_execution_workspace,
+)
 from lingtai.kernel.message import MSG_TC_WAKE, _make_message
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.turns import (
@@ -110,6 +114,47 @@ def test_correlated_turn_settles_normal_with_collected_text(tmp_path, monkeypatc
 
     assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
     assert handle.result().text == "answer"
+
+
+def test_consecutive_correlated_turns_reset_execution_workspace(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    first = submit_turn(
+        agent,
+        "workspace",
+        correlation_id="turn-workspace",
+        execution_workspace=ExecutionWorkspace(workspace),
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    seen = []
+
+    def fake_handle(current, msg):
+        scope = current_execution_workspace()
+        seen.append((msg.content, None if scope is None else scope.root))
+        if msg.content == "workspace":
+            entered.set()
+            assert release.wait(timeout=5)
+        else:
+            current._shutdown.set()
+        return {"text": msg.content, "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    assert entered.wait(timeout=5)
+    second = submit_turn(agent, "unscoped", correlation_id="turn-unscoped")
+    release.set()
+
+    assert first.result(timeout=5).outcome is TurnOutcome.NORMAL
+    assert second.result(timeout=5).outcome is TurnOutcome.NORMAL
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert seen == [
+        ("workspace", workspace.resolve()),
+        ("unscoped", None),
+    ]
 
 
 def test_matching_active_cancel_wins_before_terminal_settlement(tmp_path, monkeypatch):

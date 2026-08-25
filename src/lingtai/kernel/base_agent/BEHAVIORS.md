@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/kernel/base_agent/worker_recovery.py
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -23,6 +24,7 @@ related_files:
   - tests/test_perform_refresh_handshake.py
   - tests/test_tool_result_restore_after_continuation_failure.py
   - tests/test_correlated_turns.py
+  - tests/test_execution_workspace.py
   - src/lingtai/adapters/acp/BEHAVIORS.md
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
@@ -123,12 +125,14 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
 - **estimate**: ≈ 3 minutes
 
 ### Steps
-1. From `<repo>`, run `python -m pytest -q -x tests/test_correlated_turns.py` with the project Python.
+1. From `<repo>`, run `python -m pytest -q -x tests/test_correlated_turns.py tests/test_execution_workspace.py` with the project Python.
 2. Inspect the normal test and confirm the submitted correlation id returns one `normal` result carrying the complete collected text.
 3. Inspect the active-cancel and two-queued-turn tests: cancel the matching active handle before releasing its fake provider, then cancel the pending second handle while the first is blocked.
 4. Inspect failure and shutdown tests and confirm AED terminal failure becomes `failed` while run-loop shutdown settles an unprocessed queued handle `cancelled`; a control already claimed during the dequeue/bind race makes its private envelope skip provider dispatch.
 5. Inspect the two unexpected-run-loop tests: a failure after dequeue but before `begin_turn` cancels the still-registered handle, while a failure after provider completion but before normal settlement fails the current handle with bounded detail; both exceptions remain visible to supervision rather than being swallowed.
 6. Inspect the cancel-vs-settle race and worker-hang context tests: exactly one settlement wins, a later cancel is false, and correlated request text uses the existing bounded/redacted request artifact shape.
+7. Inspect execution-workspace tests: task-local scope roots execution paths,
+   parallel workers inherit it, and reset leaves the caller/later turn unscoped.
 
 ### Expected evidence
 - [ ] All focused tests pass without a provider or network call.

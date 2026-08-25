@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/kernel/base_agent/worker_recovery.py
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -27,6 +28,7 @@ related_files:
   - tests/test_perform_refresh_handshake.py
   - tests/test_tool_result_restore_after_continuation_failure.py
   - tests/test_correlated_turns.py
+  - tests/test_execution_workspace.py
   - tests/test_acp_stdio.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/process_scan.py
@@ -303,7 +305,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    paired [`ANATOMY.md`](ANATOMY.md) for ownership and code routes.
 12. `agent-runtime.correlated-turn.v1` — Guarded by
    [BA004](BEHAVIORS.md#behavior-ba004). `BaseAgent.submit_turn` accepts one text
-   turn plus optional caller correlation and returns a `TurnHandle`; the handle
+   turn plus optional caller correlation and generic immutable execution
+   workspace metadata, and returns a `TurnHandle`; the handle
    settles exactly once as `normal`, `cancelled`, or `failed`, with completed
    response text only on normal settlement. Correlated envelopes are distinct
    from mergeable fire-and-forget text messages and retain inbox serialization.
@@ -318,10 +321,13 @@ Clause IDs are stable; each rule composes the linked normative source.
    `failed` with bounded rendered error detail and is re-raised for supervision;
    the loop's terminal `finally` cancels every other live control, including a
    registered envelope dequeued before `begin_turn`. Racing teardown claims remain
-   exactly once under the same registry lock. This inbound Port is protocol-neutral:
+   exactly once under the same registry lock. While the correlated turn is
+   current, Core binds its workspace through task-local context and resets it at
+   settlement/loop teardown; parallel tool workers receive explicit context
+   copies. This inbound Port is protocol-neutral:
    adapters may translate ACP or another driver into it, but
-   Core types and methods contain no session, JSON-RPC, workspace, permission,
-   MCP, or transport vocabulary. It still promises no hard provider abort or
+   Core types and methods contain no ACP session, JSON-RPC, MCP configuration,
+   permission, or transport vocabulary. It still promises no hard provider abort or
    running-tool preemption.
 
 ## Contract tests

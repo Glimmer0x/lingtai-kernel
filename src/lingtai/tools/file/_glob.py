@@ -30,9 +30,9 @@ def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
         pattern = args.get("pattern", "")
         if not pattern:
             return {"status": "error", "message": "pattern is required"}
-        search_dir = args.get("path", str(workdir.path))
-        search_dir = resolve_workdir_path(workdir.path, search_dir)
+        search_dir = args.get("path", ".")
         try:
+            search_dir = resolve_workdir_path(workdir.path, search_dir)
             matches = file_io.glob(pattern, root=search_dir)
             result: dict = {"matches": matches, "count": len(matches)}
             # Issue #164: surface traversal budget / exclusion info so the

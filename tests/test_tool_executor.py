@@ -18,6 +18,13 @@ from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
 from lingtai.kernel.tool_executor import ToolExecutor
 from lingtai.kernel.types import UnknownToolError
+from lingtai.kernel.execution_workspace import (
+    ExecutionWorkspace,
+    bind_execution_workspace,
+    current_execution_workspace,
+    reset_execution_workspace,
+)
+from pathlib import Path
 
 
 def make_executor(
@@ -54,6 +61,25 @@ def make_executor(
         max_result_chars=max_result_chars,
         tool_call_guard=tool_call_guard,
     )
+
+
+def test_parallel_dispatch_copies_workspace_without_leaking_to_caller(tmp_path):
+    roots = []
+    executor = make_executor(
+        dispatch_fn=lambda tc: roots.append(current_execution_workspace().root) or {"status": "ok"},
+        known_tools={"a", "b"},
+        parallel_safe={"a", "b"},
+    )
+    token = bind_execution_workspace(ExecutionWorkspace(Path(tmp_path).resolve()))
+    try:
+        executor.execute([
+            ToolCall(name="a", args={}, id="1"),
+            ToolCall(name="b", args={}, id="2"),
+        ])
+        assert roots == [Path(tmp_path).resolve(), Path(tmp_path).resolve()]
+    finally:
+        reset_execution_workspace(token)
+    assert current_execution_workspace() is None
 
 
 def _log_index(logs, event_type, *, trace_id=None):

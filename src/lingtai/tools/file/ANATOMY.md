@@ -15,12 +15,14 @@ related_files:
   - src/lingtai/tools/file/_glob.py
   - src/lingtai/tools/file/_grep.py
   - src/lingtai/tools/_file_paths.py
+  - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
   - src/lingtai/tools/file/glossary-en.md
   - src/lingtai/tools/file/glossary-wen.md
   - src/lingtai/tools/file/glossary-zh.md
   - tests/test_file_tool_family.py
+  - tests/test_execution_workspace.py
   - tests/test_file_tool_plugin_package.py
 maintenance: |
   Keep this public file Anatomy and its Contract reciprocal, and keep the
@@ -64,8 +66,9 @@ for the five pre-migration names: `read`, `write`, `edit`, `glob`, and `grep`
 are unknown capabilities and fail loudly. The kernel registrar binds the static
 declaration once per setup; the bound family closes over only `WorkdirPort` and
 `FileIOPort`. Every operation reaches the working tree through that narrow port
-and resolves relative paths via `_file_paths.resolve_workdir_path`; this package
-performs no target-file I/O of its own.
+and resolves relative paths via `_file_paths.resolve_workdir_path`; that helper
+uses the task-local execution root when bound and enforces canonical containment.
+This package performs no target-file I/O of its own.
 
 The reserved `manual` child reads the installed package-owned body from
 `.library/intrinsic/capabilities/file-manual/SKILL.md`, preserving the public

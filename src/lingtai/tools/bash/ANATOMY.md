@@ -10,6 +10,7 @@ related_files:
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/tools/bash/BEHAVIORS.md
   - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -33,6 +34,7 @@ related_files:
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/manual/SKILL.md
   - tests/test_bash_async.py
+  - tests/test_execution_workspace.py
   - tests/test_shell_tool_plugin_declaration.py
   - tests/test_layers_bash.py
   - src/lingtai/tools/bash/glossary-en.md
@@ -165,7 +167,7 @@ bash/__init__.py
 
 - **Two policy modes:** Allowlist mode (when `allow` key is present in policy) — only listed commands permitted, everything else blocked. Denylist mode (only `deny` key) — everything allowed except denied commands. The mode is implicit.
 - **Pipe-aware POSIX command extraction:** `PosixBashDialect` parses `|`, `&&`, `||`, `;`, newlines, `$()`, backticks, and env-var prefixes to find every command name in a compound expression. Future dialects provide their own extractor.
-- **Working directory sandbox:** `working_dir` is validated to be under the agent's working directory. Paths are resolved and checked with the `_working_dir_contained` helper, `resolved == sandbox or resolved.startswith(sandbox + os.sep)` — the boundary separator is the live platform `os.sep` (POSIX `/`, Windows `\`), read at call time, since `Path.resolve()` yields platform-native separators.
+- **Working directory sandbox:** `working_dir` is validated beneath the active task-local execution workspace when bound, otherwise beneath the agent workdir. Relative/default cwd uses that same canonical root; parent and symlink escapes fail. Persistent async job records remain under the agent workdir.
 - **Result fidelity is additive, never status-changing:** A completed command always returns top-level `status: "ok"`/`"done"` regardless of `exit_code`. The pass/fail signal lives in additive `ok`/`command_status`/`warning` fields. `status: "error"` is reserved for the shell failing to run the command at all (empty/denied command, timeout, spawn failure) — this preserves the `tool_executor` contract that branches on `status == "error"` for error enrichment, lifecycle logging, and `collected_errors`.
 - **Output truncation:** `max_output = 50_000` chars. Both stdout and stderr are truncated with a note showing total length.
 - **Subprocess isolation:** Commands run in the agent's working directory with captured output and an in-process supervisor timeout. On Windows the child is contained in a kill-on-close Job Object (`_run_sync_contained`, win32_job); on POSIX every command is spawned with `start_new_session=True` so it owns a process group, and timeout/cancellation signals the whole group SIGTERM then SIGKILL after a short grace (`_run_sync_posix_grouped` / `PosixBashAsyncProcessAdapter.wait`). This never relies on an external `/usr/bin/timeout` binary (which macOS lacks).

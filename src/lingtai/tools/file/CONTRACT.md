@@ -15,12 +15,14 @@ related_files:
   - src/lingtai/tools/file/_grep.py
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/_file_paths.py
+  - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/services/file_io_sidecar.py
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
   - tests/test_file_tool_family.py
+  - tests/test_execution_workspace.py
   - tests/test_file_tool_plugin_package.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Contract is normative
@@ -219,7 +221,10 @@ Errors: `pattern is required`; `Grep failed: <exc>`.
 - **Path handling:** a relative `file_path`/`path` resolves against the granted
   `WorkdirPort.path` via `resolve_workdir_path`
   (`src/lingtai/tools/_file_paths.py`); absolute paths pass through unchanged to
-  preserve the historical error strings.
+  preserve the historical error strings. When Core binds an execution workspace,
+  relative/default paths use that canonical root and targets must remain within
+  it; parent/symlink escapes return ordinary operation errors. The
+  persistence-oriented WorkdirPort is unchanged.
 - **Byte I/O:** every operation reaches the tree only through granted
   `FileIOPort` methods. The Rust search sidecar delegates
   read/write/edit verbatim to `LocalFileIOBackend`; `default_file_io_service`

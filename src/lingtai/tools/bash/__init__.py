@@ -668,9 +668,23 @@ class ShellManager:
     def _validate_working_dir(self, cwd: str) -> dict | None:
         """Validate cwd is under the agent sandbox. Returns error dict or None."""
         try:
-            resolved = str(Path(cwd).resolve())
-            sandbox = str(Path(self._working_dir).resolve())
+            from lingtai.kernel.execution_workspace import (
+                current_execution_workspace,
+                resolve_execution_path,
+            )
+            workspace = current_execution_workspace()
+            if workspace is None:
+                resolved = str(Path(cwd).resolve())
+                sandbox = str(Path(self._working_dir).resolve())
+            else:
+                resolved = str(resolve_execution_path(cwd, fallback_root=workspace.root))
+                sandbox = str(workspace.root)
             if not _working_dir_contained(resolved, sandbox):
+                if workspace is not None:
+                    return {
+                        "status": "error",
+                        "message": f"working_dir must stay within execution workspace: {sandbox}",
+                    }
                 return {
                     "status": "error",
                     "message": (
@@ -784,9 +798,19 @@ class ShellManager:
         err = self._validate_command(command)
         if err:
             return err
-        cwd = args.get("working_dir") or self._working_dir
+        from lingtai.kernel.execution_workspace import current_execution_workspace
+        workspace = current_execution_workspace()
+        cwd = args.get("working_dir") or (
+            str(workspace.root) if workspace is not None else self._working_dir
+        )
         if isinstance(cwd, str) and not cwd.strip():
-            cwd = self._working_dir
+            cwd = str(workspace.root) if workspace is not None else self._working_dir
+        if workspace is not None:
+            from lingtai.kernel.execution_workspace import resolve_execution_path
+            try:
+                cwd = str(resolve_execution_path(cwd, fallback_root=workspace.root))
+            except (ValueError, OSError):
+                return {"status": "error", "message": "Invalid working_dir path"}
         err = self._validate_working_dir(cwd)
         if err:
             return err

@@ -35,7 +35,10 @@ def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
             return {"status": "error", "message": "old_string is required"}
         if "new_string" not in args:
             return {"status": "error", "message": "new_string is required"}
-        path = resolve_workdir_path(workdir.path, path)
+        try:
+            path = resolve_workdir_path(workdir.path, path)
+        except Exception as e:
+            return {"status": "error", "message": f"Cannot read {path}: {e}"}
         old = args["old_string"]
         new = args["new_string"]
         replace_all = args.get("replace_all", False)

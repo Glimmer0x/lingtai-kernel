@@ -10,10 +10,12 @@ import threading
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
 from .message import MSG_CORRELATED_TURN, Message, _make_message
+from .execution_workspace import ExecutionWorkspace
 
 
 class TurnOutcome(str, Enum):
@@ -40,6 +42,7 @@ class _TurnControl:
     correlation_id: str
     content: str
     sender: str
+    execution_workspace: ExecutionWorkspace | None = None
     cancel_requested: threading.Event = field(default_factory=threading.Event)
     future: Future[TurnResult] = field(default_factory=Future)
     cancel_callback: Callable[[str], bool] | None = None
@@ -103,6 +106,7 @@ def submit_turn(
     *,
     sender: str = "user",
     correlation_id: str | None = None,
+    execution_workspace: str | Path | ExecutionWorkspace | None = None,
 ) -> TurnHandle:
     """Queue one text turn and return its correlated terminal handle."""
 
@@ -120,10 +124,15 @@ def submit_turn(
         raise RuntimeError("agent is stopping")
 
     lock, controls = _ensure_turn_state(agent)
+    if execution_workspace is not None and not isinstance(
+        execution_workspace, ExecutionWorkspace
+    ):
+        execution_workspace = ExecutionWorkspace(Path(execution_workspace))
     control = _TurnControl(
         correlation_id=correlation_id,
         content=content,
         sender=sender,
+        execution_workspace=execution_workspace,
     )
     control.cancel_callback = lambda requested_id: cancel_turn(agent, requested_id)
     with lock:
