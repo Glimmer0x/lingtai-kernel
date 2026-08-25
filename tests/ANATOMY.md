@@ -40,6 +40,7 @@ related_files:
   - tests/integration_test_kimi_code.py
   - tests/opencode
   - tests/test_activate_preset.py
+  - tests/test_acp_stdio.py
   - tests/test_active_stuck_watchdog.py
   - tests/test_adapter_registry.py
   - tests/test_aed_recovery.py
@@ -99,6 +100,7 @@ related_files:
   - tests/test_codex_ws_tool_result_freeze.py
   - tests/test_compaction.py
   - tests/test_config_resolve_jsonc.py
+  - tests/test_correlated_turns.py
   - tests/test_context.py
   - tests/test_context_ownership_redesign.py
   - tests/test_context_pressure_reminder.py

@@ -1,0 +1,990 @@
+"""ACP v1 local-stdio wire, settlement, and composition tests."""
+from __future__ import annotations
+
+import io
+import json
+import queue
+import threading
+import time
+from concurrent.futures import Future
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from lingtai.adapters.acp.server import AcpStdioServer
+from lingtai.kernel.base_agent import StopResult, StopStatus
+from lingtai.kernel.turns import TurnOutcome, TurnResult
+
+
+class _Handle:
+    def __init__(self, correlation_id: str, result: TurnResult | None = None):
+        self.correlation_id = correlation_id
+        self._future = Future()
+        if result is not None:
+            self._future.set_result(result)
+
+    def cancel(self):
+        if self._future.done():
+            return False
+        self._future.set_result(
+            TurnResult(self.correlation_id, TurnOutcome.CANCELLED)
+        )
+        return True
+
+    def result(self, timeout=None):
+        return self._future.result(timeout=timeout)
+
+
+class _Agent:
+    def __init__(self, handle: _Handle):
+        self.handle = handle
+        self.submissions: list[dict] = []
+        self._shutdown = threading.Event()
+
+    def submit_turn(self, content, *, sender, correlation_id):
+        self.submissions.append({
+            "content": content,
+            "sender": sender,
+            "correlation_id": correlation_id,
+        })
+        self.handle.correlation_id = correlation_id
+        return self.handle
+
+
+def _messages(output: io.StringIO):
+    return [json.loads(line) for line in output.getvalue().splitlines()]
+
+
+def _wait_for(output: io.StringIO, count: int):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        messages = _messages(output)
+        if len(messages) >= count:
+            return messages
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {count} frames: {output.getvalue()!r}")
+
+
+def _request(server, request_id, method, params):
+    server._dispatch({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "params": params,
+    })
+
+
+def _open_session(server, output):
+    _request(server, 1, "initialize", {"protocolVersion": 1})
+    _request(server, 2, "session/new", {"cwd": "/tmp", "mcpServers": []})
+    messages = _wait_for(output, 2)
+    assert messages[0]["result"] == {
+        "protocolVersion": 1,
+        "agentCapabilities": {},
+        "agentInfo": {
+            "name": "lingtai",
+            "title": "LingTai",
+            "version": messages[0]["result"]["agentInfo"]["version"],
+        },
+        "authMethods": [],
+    }
+    return messages[1]["result"]["sessionId"]
+
+
+def test_acp_normal_turn_emits_one_message_update_then_end_turn():
+    handle = _Handle(
+        "placeholder",
+        TurnResult("placeholder", TurnOutcome.NORMAL, text="hello from LingTai"),
+    )
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+
+    _request(server, "prompt-1", "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [
+            {"type": "text", "text": "hello"},
+            {"type": "text", "text": " world"},
+        ],
+    })
+    messages = _wait_for(output, 4)
+
+    assert agent.submissions[0]["content"] == "hello world"
+    assert messages[2] == {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "hello from LingTai"},
+            },
+        },
+    }
+    assert messages[3] == {
+        "jsonrpc": "2.0",
+        "id": "prompt-1",
+        "result": {"stopReason": "end_turn"},
+    }
+    # Every stdout line is independently parseable JSON and the serializer
+    # escaped content instead of emitting embedded physical newlines.
+    for line in output.getvalue().splitlines():
+        assert json.loads(line)["jsonrpc"] == "2.0"
+    server.close()
+
+
+def test_session_cancel_notification_settles_original_prompt_cancelled():
+    handle = _Handle("placeholder")
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    session_id = _open_session(server, output)
+
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "wait"}],
+    })
+    server._dispatch({
+        "jsonrpc": "2.0",
+        "method": "session/cancel",
+        "params": {"sessionId": session_id},
+    })
+
+    messages = _wait_for(output, 3)
+    assert messages[-1] == {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {"stopReason": "cancelled"},
+    }
+    assert all(message.get("id") is not None for message in messages)
+    server.close()
+
+
+def test_failure_busy_second_session_and_unsupported_inputs_are_explicit():
+    handle = _Handle("placeholder")
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    session_id = _open_session(server, output)
+
+    _request(server, 3, "session/new", {"cwd": "/tmp", "mcpServers": []})
+    _request(server, 4, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "wait"}],
+    })
+    _request(server, 5, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "second"}],
+    })
+    messages = _wait_for(output, 4)
+    errors = {message.get("id"): message.get("error") for message in messages}
+    assert errors[3]["code"] == -32004
+    assert errors[5]["code"] == -32000
+
+    handle._future.set_result(
+        TurnResult(handle.correlation_id, TurnOutcome.FAILED, error="secret detail")
+    )
+    messages = _wait_for(output, 5)
+    assert messages[-1] == {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "error": {"code": -32603, "message": "LingTai turn failed"},
+    }
+    assert "secret detail" not in output.getvalue()
+    server.close()
+
+    for request_id, new_params in (
+        (10, {"cwd": "/tmp", "mcpServers": [{"name": "x"}]}),
+        (11, {"cwd": "relative", "mcpServers": []}),
+    ):
+        out = io.StringIO()
+        fresh = AcpStdioServer(_Agent(_Handle("x")), io.StringIO(), out)
+        _request(fresh, 1, "initialize", {"protocolVersion": 1})
+        _request(fresh, request_id, "session/new", new_params)
+        assert _wait_for(out, 2)[-1]["error"]["code"] in {-32004, -32602}
+        fresh.close()
+
+
+def test_initialize_negotiates_v1_and_enforces_rpc_method_kinds():
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(_Handle("x")), io.StringIO(), output)
+
+    # Stable ACP negotiation returns the Agent's latest supported version when
+    # the requested integer version is unsupported; this process remains v1-only.
+    _request(server, 1, "initialize", {"protocolVersion": 2})
+    assert _wait_for(output, 1)[0]["result"]["protocolVersion"] == 1
+
+    _request(server, 2, "session/cancel", {"sessionId": "missing"})
+    assert _wait_for(output, 2)[-1] == {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+            "code": -32600,
+            "message": "session/cancel must be a notification",
+        },
+    }
+    server.close()
+
+    # A request-only method sent as a notification gets no JSON-RPC response and
+    # must not mutate initialization state.
+    fresh_output = io.StringIO()
+    fresh = AcpStdioServer(_Agent(_Handle("x")), io.StringIO(), fresh_output)
+    fresh._dispatch({
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {"protocolVersion": 1},
+    })
+    _request(fresh, 3, "session/new", {"cwd": "/tmp", "mcpServers": []})
+    assert _wait_for(fresh_output, 1) == [{
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {"code": -32002, "message": "server is not initialized"},
+    }]
+    fresh.close()
+
+
+def test_serve_uses_newline_delimited_strict_json_and_clean_eof():
+    input_stream = io.StringIO(
+        "not json\n"
+        + json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": 1},
+        })
+        + "\n"
+    )
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(_Handle("x")), input_stream, output)
+
+    server.serve()
+
+    messages = _wait_for(output, 2)
+    assert messages[0] == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32700, "message": "Parse error"},
+    }
+    assert messages[1]["result"]["protocolVersion"] == 1
+    assert output.getvalue().endswith("\n")
+
+
+def test_cli_composition_quarantines_application_stdout_and_stops_agent(
+    tmp_path, monkeypatch
+):
+    import lingtai.adapters.acp as acp_package
+    import lingtai.cli as cli
+    import lingtai.cli_acp as cli_acp
+    import lingtai.kernel.logging as kernel_logging
+    import lingtai.venv_resolve as venv_resolve
+
+    class FakeAgent:
+        def __init__(self):
+            self.started = False
+            self.stopped = False
+            self._llm_worker_interface_poisoned = False
+
+        def start(self):
+            self.started = True
+            print("boot noise")
+
+        def stop(self, timeout=0):
+            self.stopped = True
+            print("stop noise")
+            return StopResult(StopStatus.STOPPED, False, False)
+
+    fake_agent = FakeAgent()
+
+    class FakeServer:
+        def __init__(self, agent, input_stream, output_stream):
+            self.agent = agent
+            self.output = output_stream
+
+        def serve(self):
+            print("runtime noise")
+            self.output.write('{"jsonrpc":"2.0","id":1,"result":{}}\n')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
+    monkeypatch.setattr(cli, "load_init", lambda _path: {})
+    monkeypatch.setattr(cli, "build_agent", lambda _data, _path: fake_agent)
+    monkeypatch.setattr(cli, "_force_exit_if_worker_poisoned", lambda _agent: None)
+    monkeypatch.setattr(kernel_logging, "setup_logging", lambda **_kw: None)
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: tmp_path / "venv")
+    monkeypatch.setattr(acp_package, "AcpStdioServer", FakeServer)
+
+    wire = io.StringIO()
+    stderr = io.StringIO()
+    monkeypatch.setattr(cli_acp.sys, "stderr", stderr)
+    cli_acp.run_acp(tmp_path, input_stream=io.StringIO(), output_stream=wire)
+
+    assert fake_agent.started and fake_agent.stopped
+    assert _messages(wire) == [{"jsonrpc": "2.0", "id": 1, "result": {}}]
+    assert "boot noise" in stderr.getvalue()
+    assert "runtime noise" in stderr.getvalue()
+    assert "stop noise" in stderr.getvalue()
+
+    class BrokenPipeServer(FakeServer):
+        def serve(self):
+            raise BrokenPipeError("client closed stdout")
+
+    fake_agent.started = False
+    fake_agent.stopped = False
+    monkeypatch.setattr(acp_package, "AcpStdioServer", BrokenPipeServer)
+    cli_acp.run_acp(
+        tmp_path,
+        input_stream=io.StringIO(),
+        output_stream=io.StringIO(),
+    )
+    assert fake_agent.started and fake_agent.stopped
+
+
+def test_cli_poison_force_exit_skips_log_after_successful_stop_releases_lease(
+    tmp_path, monkeypatch
+):
+    import lingtai.adapters.acp as acp_package
+    import lingtai.cli as cli
+    import lingtai.cli_acp as cli_acp
+    import lingtai.kernel.logging as kernel_logging
+    import lingtai.venv_resolve as venv_resolve
+
+    class FakeAgent:
+        def __init__(self):
+            self._llm_worker_interface_poisoned = True
+            self._llm_worker_poison_artifact = "history/unfinished_turns/test.json"
+            self._workdir_lease_acquired = True
+            self.stopped = False
+            self.log_attempts = 0
+
+        def start(self):
+            return None
+
+        def stop(self, timeout=0):
+            self.stopped = True
+            self._workdir_lease_acquired = False
+            return StopResult(StopStatus.STOPPED, False, False)
+
+        def _log(self, _name, **_fields):
+            self.log_attempts += 1
+            if not self._workdir_lease_acquired:
+                raise AssertionError("workdir log attempted after lease release")
+
+    fake_agent = FakeAgent()
+
+    class FakeServer:
+        def __init__(self, _agent, _input_stream, _output_stream):
+            pass
+
+        def serve(self):
+            return None
+
+        def close(self):
+            return None
+
+    exit_codes: list[int] = []
+
+    def fake_exit(code):
+        exit_codes.append(code)
+        raise SystemExit(code)
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
+    monkeypatch.setattr(cli, "load_init", lambda _path: {})
+    monkeypatch.setattr(cli, "build_agent", lambda _data, _path: fake_agent)
+    monkeypatch.setattr(cli.os, "_exit", fake_exit)
+    monkeypatch.setattr(kernel_logging, "setup_logging", lambda **_kw: None)
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: tmp_path / "venv")
+    monkeypatch.setattr(acp_package, "AcpStdioServer", FakeServer)
+    monkeypatch.setattr(cli_acp.sys, "stderr", io.StringIO())
+
+    original_stdout = cli_acp.sys.stdout
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            cli_acp.run_acp(
+                tmp_path,
+                input_stream=io.StringIO(),
+                output_stream=io.StringIO(),
+            )
+    finally:
+        # Production os._exit never returns; the sentinel must not leave the
+        # test process with run_acp's deliberate stdout quarantine installed.
+        cli_acp.sys.stdout = original_stdout
+
+    assert exc_info.value.code == 0
+    assert exit_codes == [0]
+    assert fake_agent.stopped
+    assert not fake_agent._workdir_lease_acquired
+    assert fake_agent.log_attempts == 0
+
+
+def test_resource_link_baseline_is_validated_and_projected_into_core_text():
+    handle = _Handle(
+        "placeholder",
+        TurnResult("placeholder", TurnOutcome.NORMAL, text="linked"),
+    )
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{
+            "type": "resource_link",
+            "uri": "file:///tmp/example.py",
+            "name": "example.py",
+            "mimeType": "text/x-python",
+            "size": 42,
+        }],
+    })
+    _wait_for(output, 4)
+
+    projected = json.loads(agent.submissions[0]["content"].strip())
+    assert projected == {
+        "type": "resource_link",
+        "uri": "file:///tmp/example.py",
+        "name": "example.py",
+        "mimeType": "text/x-python",
+        "size": 42,
+    }
+    server.close()
+
+    invalid_output = io.StringIO()
+    invalid_server = AcpStdioServer(
+        _Agent(_Handle("invalid")),
+        io.StringIO(),
+        invalid_output,
+    )
+    invalid_session = _open_session(invalid_server, invalid_output)
+    _request(invalid_server, 4, "session/prompt", {
+        "sessionId": invalid_session,
+        "prompt": [{"type": "resource_link", "uri": "file:///tmp/missing-name"}],
+    })
+    assert _wait_for(invalid_output, 3)[-1]["error"]["code"] == -32602
+    invalid_server.close()
+
+
+def test_agent_shutdown_unblocks_open_stdin_and_suppresses_late_prompt_output():
+    class BlockingInput:
+        def __init__(self):
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            self.entered.set()
+            assert self.release.wait(timeout=5)
+            raise StopIteration
+
+    blocking_input = BlockingInput()
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, blocking_input, output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "wait"}],
+    })
+
+    worker = threading.Thread(target=server.serve)
+    worker.start()
+    assert blocking_input.entered.wait(timeout=5)
+    # Production ordering is shutdown first, then correlated-handle settlement,
+    # before the server's 100ms poll necessarily observes either condition.
+    agent._shutdown.set()
+    handle.cancel()
+    worker.join(timeout=2)
+    blocking_input.release.set()
+
+    assert not worker.is_alive(), "Agent stop must not wait for client EOF"
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+    time.sleep(0.05)
+    assert all(message.get("id") != 3 for message in _messages(output))
+
+
+def test_invalid_utf8_reader_failure_returns_parse_error_without_traceback():
+    class InvalidUtf8Input:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    output = io.StringIO()
+    server = AcpStdioServer(
+        _Agent(_Handle("invalid-utf8")),
+        InvalidUtf8Input(),
+        output,
+    )
+
+    server.serve()
+
+    assert _wait_for(output, 1) == [{
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32700, "message": "Parse error"},
+    }]
+
+
+def test_blocked_terminal_stdout_does_not_hold_close_or_agent_teardown_lock():
+    class BlockingOutput(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.write_count = 0
+            self.blocked = threading.Event()
+            self.release = threading.Event()
+
+        def write(self, value):
+            self.write_count += 1
+            if self.write_count >= 3:
+                self.blocked.set()
+                assert self.release.wait(timeout=5)
+            return super().write(value)
+
+    handle = _Handle(
+        "placeholder",
+        TurnResult("placeholder", TurnOutcome.NORMAL, text="blocking output"),
+    )
+    output = BlockingOutput()
+    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "respond"}],
+    })
+    assert output.blocked.wait(timeout=5)
+
+    closer = threading.Thread(target=server.close)
+    closer.start()
+    closer.join(timeout=1)
+    output.release.set()
+
+    assert not closer.is_alive(), "blocked client output must not hold state teardown"
+    messages = _wait_for(output, 3)
+    assert any(message.get("method") == "session/update" for message in messages)
+    assert all(message.get("id") != 3 for message in messages)
+
+
+class _QueuedInput:
+    def __init__(self):
+        self._items: queue.Queue[str | None] = queue.Queue()
+
+    def send(self, message):
+        line = message if isinstance(message, str) else json.dumps(message)
+        self._items.put(line if line.endswith("\n") else line + "\n")
+
+    def eof(self):
+        self._items.put(None)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        item = self._items.get(timeout=5)
+        if item is None:
+            raise StopIteration
+        return item
+
+
+class _BlockingOutput(io.StringIO):
+    def __init__(self, *, block_on: int):
+        super().__init__()
+        self.block_on = block_on
+        self.write_count = 0
+        self.blocked = threading.Event()
+        self.release = threading.Event()
+
+    def write(self, value):
+        self.write_count += 1
+        if self.write_count == self.block_on:
+            self.blocked.set()
+            assert self.release.wait(timeout=5)
+        return super().write(value)
+
+
+def _wait_until(predicate, *, timeout=5, message="condition"):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {message}")
+
+
+def test_blocked_coordinator_initialize_write_cannot_hold_shutdown():
+    input_stream = _QueuedInput()
+    output = _BlockingOutput(block_on=1)
+    agent = _Agent(_Handle("unused"))
+    server = AcpStdioServer(agent, input_stream, output)
+    coordinator = threading.Thread(target=server.serve)
+    coordinator.start()
+    input_stream.send({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {"protocolVersion": 1},
+    })
+    assert output.blocked.wait(timeout=5)
+
+    agent._shutdown.set()
+    coordinator.join(timeout=1)
+
+    assert not coordinator.is_alive(), "coordinator must never wait on stdout"
+    assert not output.release.is_set(), "test must prove return while write is blocked"
+    output.release.set()
+
+
+def test_blocked_prompt_write_does_not_block_later_coordinator_response_or_shutdown():
+    handle = _Handle(
+        "placeholder",
+        TurnResult("placeholder", TurnOutcome.NORMAL, text="first frame blocks"),
+    )
+    agent = _Agent(handle)
+    output = _BlockingOutput(block_on=3)
+    input_stream = _QueuedInput()
+    server = AcpStdioServer(agent, input_stream, output)
+    session_id = _open_session(server, output)
+    coordinator = threading.Thread(target=server.serve)
+    coordinator.start()
+
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "respond"}],
+    })
+    assert output.blocked.wait(timeout=5)
+    input_stream.send({
+        "jsonrpc": "2.0",
+        "id": 99,
+        "method": "unknown/method",
+        "params": {},
+    })
+    _wait_until(lambda: server._outbound.qsize() >= 1, message="queued coordinator error")
+
+    agent._shutdown.set()
+    coordinator.join(timeout=1)
+    assert not coordinator.is_alive()
+    assert not output.release.is_set()
+
+    output.release.set()
+    messages = _wait_for(output, 4)
+    assert any(message.get("id") == 99 for message in messages)
+    assert all(message.get("id") != 3 for message in messages)
+
+
+def test_prompt_terminal_batch_is_fifo_adjacent_before_later_coordinator_response():
+    handle = _Handle(
+        "placeholder",
+        TurnResult("placeholder", TurnOutcome.NORMAL, text="atomic update"),
+    )
+    output = _BlockingOutput(block_on=3)
+    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    session_id = _open_session(server, output)
+
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "respond"}],
+    })
+    assert output.blocked.wait(timeout=5)
+    _request(server, 99, "unknown/method", {})
+    _wait_until(
+        lambda: server._outbound.qsize() >= 1,
+        message="later coordinator response queued",
+    )
+
+    output.release.set()
+    messages = _wait_for(output, 5)
+
+    assert messages[2]["method"] == "session/update"
+    assert messages[3] == {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {"stopReason": "end_turn"},
+    }
+    assert messages[4]["id"] == 99
+    assert messages[4]["error"]["code"] == -32601
+    server.close()
+
+
+def test_close_after_terminal_claim_before_enqueue_suppresses_entire_prompt_batch(monkeypatch):
+    handle = _Handle("placeholder")
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    session_id = _open_session(server, output)
+    claimed = threading.Event()
+    proceed = threading.Event()
+    original_enqueue = server._enqueue_messages
+
+    def gated_enqueue(messages, *, generation=None, active=None):
+        if active is not None:
+            claimed.set()
+            assert proceed.wait(timeout=5)
+        return original_enqueue(messages, generation=generation, active=active)
+
+    monkeypatch.setattr(server, "_enqueue_messages", gated_enqueue)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "respond"}],
+    })
+    handle._future.set_result(
+        TurnResult(handle.correlation_id, TurnOutcome.NORMAL, text="late")
+    )
+    assert claimed.wait(timeout=5)
+
+    server.close()
+    proceed.set()
+    _wait_until(lambda: not server._prompt_threads, message="prompt waiter exit")
+
+    assert len(_messages(output)) == 2
+    assert all(message.get("id") != 3 for message in _messages(output))
+
+
+def test_outbound_queue_full_aborts_transport_and_cancels_active_prompt(monkeypatch):
+    monkeypatch.setattr(AcpStdioServer, "_OUTBOUND_QUEUE_BATCHES", 1)
+    output = _BlockingOutput(block_on=1)
+    handle = _Handle("placeholder")
+    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+
+    _request(server, 1, "initialize", {"protocolVersion": 1})
+    assert output.blocked.wait(timeout=5)
+    _request(server, 2, "session/new", {"cwd": "/tmp", "mcpServers": []})
+    _request(server, 3, "session/prompt", {
+        "sessionId": server._session_id,
+        "prompt": [{"type": "text", "text": "wait"}],
+    })
+    _request(server, 4, "unknown/method", {})
+
+    assert server._aborted and server._closing
+    assert server._active is None
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+    output.release.set()
+
+
+def test_serialization_failure_aborts_transport_and_cancels_active_prompt():
+    handle = _Handle("placeholder")
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "wait"}],
+    })
+    _wait_until(lambda: server._active is not None, message="active prompt")
+
+    accepted = server._enqueue_messages(({
+        "jsonrpc": "2.0",
+        "id": 99,
+        "result": {"not_json": object()},
+    },))
+
+    assert not accepted
+    assert server._aborted and server._closing
+    assert server._active is None
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+
+
+@pytest.mark.parametrize("failure", ("write", "flush"))
+def test_stdout_write_or_flush_failure_aborts_and_cancels_active_prompt(failure):
+    class FailingOutput(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.write_count = 0
+            self.flush_count = 0
+
+        def write(self, value):
+            self.write_count += 1
+            if failure == "write" and self.write_count == 3:
+                raise OSError("ACP stdout write failed")
+            return super().write(value)
+
+        def flush(self):
+            self.flush_count += 1
+            if failure == "flush" and self.flush_count == 3:
+                raise OSError("ACP stdout flush failed")
+            return super().flush()
+
+    handle = _Handle("placeholder")
+    output = FailingOutput()
+    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "wait"}],
+    })
+    _wait_until(lambda: server._active is not None, message="active prompt")
+
+    _request(server, 99, "unknown/method", {})
+
+    _wait_until(lambda: server._aborted, message=f"{failure} abort")
+    assert server._closing
+    assert server._active is None
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+
+
+def test_short_stdout_write_fatally_aborts_transport():
+    class ShortWriteOutput(io.StringIO):
+        def write(self, value):
+            super().write(value[:-1])
+            return len(value) - 1
+
+    server = AcpStdioServer(
+        _Agent(_Handle("unused")),
+        io.StringIO(),
+        ShortWriteOutput(),
+    )
+    _request(server, 1, "initialize", {"protocolVersion": 1})
+    _wait_until(lambda: server._aborted, message="short-write abort")
+    assert server._closing
+
+
+def test_cli_real_server_reaches_typed_stop_while_stdout_writer_is_blocked(
+    tmp_path, monkeypatch
+):
+    import lingtai.adapters.acp as acp_package
+    import lingtai.cli as cli
+    import lingtai.cli_acp as cli_acp
+    import lingtai.kernel.logging as kernel_logging
+    import lingtai.venv_resolve as venv_resolve
+
+    class FakeAgent:
+        def __init__(self):
+            self._shutdown = threading.Event()
+            self._llm_worker_interface_poisoned = False
+            self.stop_called = threading.Event()
+
+        def start(self):
+            pass
+
+        def stop(self, timeout=0):
+            self.stop_called.set()
+            return StopResult(StopStatus.STOPPED, False, False)
+
+    fake_agent = FakeAgent()
+    input_stream = _QueuedInput()
+    output = _BlockingOutput(block_on=1)
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
+    monkeypatch.setattr(cli, "load_init", lambda _path: {})
+    monkeypatch.setattr(cli, "build_agent", lambda _data, _path: fake_agent)
+    monkeypatch.setattr(cli, "_force_exit_if_worker_poisoned", lambda _agent: None)
+    monkeypatch.setattr(kernel_logging, "setup_logging", lambda **_kw: None)
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: tmp_path / "venv")
+    monkeypatch.setattr(acp_package, "AcpStdioServer", AcpStdioServer)
+
+    def feed_and_stop():
+        input_stream.send({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": 1},
+        })
+        assert output.blocked.wait(timeout=5)
+        fake_agent._shutdown.set()
+
+    feeder = threading.Thread(target=feed_and_stop)
+    feeder.start()
+    cli_acp.run_acp(tmp_path, input_stream=input_stream, output_stream=output)
+    feeder.join(timeout=1)
+
+    assert fake_agent.stop_called.is_set()
+    assert not output.release.is_set(), "CLI stop must be reachable with stdout blocked"
+    output.release.set()
+
+
+def test_cli_timeout_stop_hard_exits_before_releasing_ownership(tmp_path, monkeypatch):
+    import lingtai.adapters.acp as acp_package
+    import lingtai.cli as cli
+    import lingtai.cli_acp as cli_acp
+    import lingtai.kernel.logging as kernel_logging
+    import lingtai.venv_resolve as venv_resolve
+
+    class ForceExit(BaseException):
+        def __init__(self, code):
+            self.code = code
+
+    class FakeAgent:
+        _llm_worker_interface_poisoned = False
+
+        def __init__(self):
+            self.lease_released = False
+            self.logged = []
+
+        def start(self):
+            pass
+
+        def stop(self, timeout=0):
+            return StopResult(StopStatus.TIMED_OUT, True, True)
+
+        def _log(self, event, **fields):
+            self.logged.append((event, fields))
+
+    class FakeServer:
+        def __init__(self, *args):
+            pass
+
+        def serve(self):
+            return
+
+        def close(self):
+            return
+
+    fake_agent = FakeAgent()
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
+    monkeypatch.setattr(cli, "load_init", lambda _path: {})
+    monkeypatch.setattr(cli, "build_agent", lambda _data, _path: fake_agent)
+    monkeypatch.setattr(cli, "_force_exit_if_worker_poisoned", lambda _agent: None)
+    monkeypatch.setattr(kernel_logging, "setup_logging", lambda **_kw: None)
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: tmp_path / "venv")
+    monkeypatch.setattr(acp_package, "AcpStdioServer", FakeServer)
+    monkeypatch.setattr(cli_acp.os, "_exit", lambda code: (_ for _ in ()).throw(ForceExit(code)))
+
+    original_stdout = cli_acp.sys.stdout
+    try:
+        try:
+            cli_acp.run_acp(
+                tmp_path,
+                input_stream=io.StringIO(),
+                output_stream=io.StringIO(),
+            )
+        except ForceExit as exc:
+            assert exc.code == 70
+        else:  # pragma: no cover - safety failure
+            raise AssertionError("incomplete ACP stop must process-terminate")
+    finally:
+        cli_acp.sys.stdout = original_stdout
+
+    assert not fake_agent.lease_released
+    assert fake_agent.logged[-1][0] == "acp_force_exit_after_incomplete_stop"
+
+
+def test_incomplete_stop_skips_workdir_log_after_lease_release(monkeypatch):
+    import lingtai.cli_acp as cli_acp
+
+    class ForceExit(BaseException):
+        pass
+
+    def forbidden_log(*_args, **_kwargs):
+        raise AssertionError("must not write workdir state after lease release")
+
+    agent = SimpleNamespace(
+        _workdir_lease_acquired=False,
+        _log=forbidden_log,
+    )
+    monkeypatch.setattr(
+        cli_acp.os,
+        "_exit",
+        lambda _code: (_ for _ in ()).throw(ForceExit()),
+    )
+
+    with pytest.raises(ForceExit):
+        cli_acp._force_exit_after_incomplete_stop(
+            agent,
+            stop_result=None,
+            stop_error=RuntimeError("cleanup failed after quiescence"),
+        )

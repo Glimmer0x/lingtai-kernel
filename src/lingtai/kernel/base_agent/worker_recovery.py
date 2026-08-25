@@ -16,7 +16,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..message import MSG_REQUEST, MSG_TC_WAKE, MSG_USER_INPUT, Message
+from ..message import (
+    MSG_CORRELATED_TURN,
+    MSG_REQUEST,
+    MSG_TC_WAKE,
+    MSG_USER_INPUT,
+    Message,
+)
 from ..trace_redaction import redact_text
 
 
@@ -121,7 +127,7 @@ def build_worker_hang_context(agent, msg: Message, exc: BaseException) -> dict:
     ChatInterface — so it cannot race the still-alive worker thread.
     """
     message_type = getattr(msg, "type", "unknown")
-    if message_type in (MSG_REQUEST, MSG_USER_INPUT):
+    if message_type in (MSG_REQUEST, MSG_USER_INPUT, MSG_CORRELATED_TURN):
         entry = "request"
     elif message_type == MSG_TC_WAKE:
         entry = "tc_wake_wire"
@@ -142,7 +148,7 @@ def build_worker_hang_context(agent, msg: Message, exc: BaseException) -> dict:
             "agent_name": getattr(exc, "agent_name", getattr(agent, "agent_name", None)),
         },
     }
-    if message_type in (MSG_REQUEST, MSG_USER_INPUT):
+    if message_type in (MSG_REQUEST, MSG_USER_INPUT, MSG_CORRELATED_TURN):
         context["request"] = _message_preview(msg)
     elif message_type == MSG_TC_WAKE:
         context["tc_wake"] = {
@@ -218,6 +224,10 @@ def mark_worker_interface_poisoned(
     context = context or {}
     poisoned_at = _now_iso()
     agent._llm_worker_interface_poisoned = True
+    # Retain the detached provider Future as an execution-quiescence witness.
+    # Correlated handle settlement cannot prove that this worker stopped touching
+    # the shared ChatInterface, so lifecycle teardown must also wait/check it.
+    agent._llm_worker_poison_future = getattr(exc, "future", None)
     agent._llm_worker_poison_reason = (str(exc) or repr(exc))[:500]
     agent._llm_worker_poison_artifact = artifact_relpath
     agent._llm_worker_poisoned_at = poisoned_at

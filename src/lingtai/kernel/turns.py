@@ -1,0 +1,299 @@
+"""Protocol-neutral correlated inbound-turn values and BaseAgent helpers.
+
+This module is the small synchronous boundary used by driving adapters that need
+one terminal result for one submitted text turn.  It deliberately knows nothing
+about ACP, JSON-RPC, sessions, workspaces, or transport framing.
+"""
+from __future__ import annotations
+
+import threading
+from concurrent.futures import Future
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable
+from uuid import uuid4
+
+from .message import MSG_CORRELATED_TURN, Message, _make_message
+
+
+class TurnOutcome(str, Enum):
+    """Terminal classification of a correlated inbound turn."""
+
+    NORMAL = "normal"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class TurnResult:
+    """The exactly-once terminal receipt returned by :class:`TurnHandle`."""
+
+    correlation_id: str
+    outcome: TurnOutcome
+    text: str = ""
+    error: str | None = None
+    errors: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
+class _TurnControl:
+    correlation_id: str
+    content: str
+    sender: str
+    cancel_requested: threading.Event = field(default_factory=threading.Event)
+    future: Future[TurnResult] = field(default_factory=Future)
+    cancel_callback: Callable[[str], bool] | None = None
+    settlement_claimed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnEnvelope:
+    control: _TurnControl
+
+
+class TurnHandle:
+    """Caller-owned handle for one correlated turn.
+
+    ``cancel()`` requests cooperative cancellation.  It does not claim provider
+    abort or running-tool preemption; ``result()`` remains the settlement point.
+    """
+
+    __slots__ = ("_control",)
+
+    def __init__(self, control: _TurnControl):
+        self._control = control
+
+    @property
+    def correlation_id(self) -> str:
+        return self._control.correlation_id
+
+    def cancel(self) -> bool:
+        callback = self._control.cancel_callback
+        return False if callback is None else callback(self.correlation_id)
+
+    def cancel_requested(self) -> bool:
+        return self._control.cancel_requested.is_set()
+
+    def done(self) -> bool:
+        return self._control.future.done()
+
+    def result(self, timeout: float | None = None) -> TurnResult:
+        return self._control.future.result(timeout=timeout)
+
+
+def _ensure_turn_state(agent) -> tuple[threading.Lock, dict[str, _TurnControl]]:
+    """Return turn state, lazily installing it for narrow test doubles."""
+
+    lock = getattr(agent, "_turn_controls_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        agent._turn_controls_lock = lock
+    controls = getattr(agent, "_turn_controls", None)
+    if controls is None:
+        controls = {}
+        agent._turn_controls = controls
+    if not hasattr(agent, "_current_turn_control"):
+        agent._current_turn_control = None
+    return lock, controls
+
+
+def submit_turn(
+    agent,
+    content: str,
+    *,
+    sender: str = "user",
+    correlation_id: str | None = None,
+) -> TurnHandle:
+    """Queue one text turn and return its correlated terminal handle."""
+
+    if not isinstance(content, str):
+        raise TypeError("turn content must be a string")
+    if not isinstance(sender, str) or not sender:
+        raise ValueError("turn sender must be a non-empty string")
+    if correlation_id is None:
+        correlation_id = f"turn_{uuid4().hex}"
+    if not isinstance(correlation_id, str) or not correlation_id:
+        raise ValueError("correlation_id must be a non-empty string")
+
+    shutdown = getattr(agent, "_shutdown", None)
+    if shutdown is not None and shutdown.is_set():
+        raise RuntimeError("agent is stopping")
+
+    lock, controls = _ensure_turn_state(agent)
+    control = _TurnControl(
+        correlation_id=correlation_id,
+        content=content,
+        sender=sender,
+    )
+    control.cancel_callback = lambda requested_id: cancel_turn(agent, requested_id)
+    with lock:
+        # Linearize registration against lifecycle.stop: if stop set shutdown
+        # before acquiring this lock, reject; if it sets shutdown afterward,
+        # cancel_all_turns will observe and settle this registered control.
+        if shutdown is not None and shutdown.is_set():
+            raise RuntimeError("agent is stopping")
+        if correlation_id in controls:
+            raise ValueError(f"duplicate live correlation_id: {correlation_id}")
+        controls[correlation_id] = control
+
+    try:
+        agent.inbox.put(
+            _make_message(
+                MSG_CORRELATED_TURN,
+                sender,
+                _TurnEnvelope(control),
+            )
+        )
+    except BaseException:
+        with lock:
+            if controls.get(correlation_id) is control:
+                controls.pop(correlation_id, None)
+            control.cancel_callback = None
+        raise
+
+    wake = getattr(agent, "_wake_nap", None)
+    if callable(wake):
+        try:
+            wake("correlated_turn_received")
+        except Exception:
+            # Inbox publication is the acceptance boundary. Nap wake is an
+            # optimization and cannot be allowed to orphan an already queued
+            # envelope by making submit appear to fail.
+            pass
+    return TurnHandle(control)
+
+
+def cancel_turn(agent, correlation_id: str) -> bool:
+    """Request cancellation only for the matching live correlated turn."""
+
+    lock, controls = _ensure_turn_state(agent)
+    with lock:
+        control = controls.get(correlation_id)
+        if control is None or control.settlement_claimed:
+            return False
+        control.cancel_requested.set()
+        if getattr(agent, "_current_turn_control", None) is control:
+            # Latch while holding the same lock that protects settlement/current
+            # identity. Otherwise settlement could claim this turn, the next turn
+            # could clear its fresh-dequeue latch, and this delayed set could leak
+            # cancellation into that unrelated next turn.
+            agent._request_turn_cancel()
+    return True
+
+
+def control_from_message(msg: Message) -> _TurnControl | None:
+    """Extract the private correlated control from a turn inbox message."""
+
+    envelope = msg.content
+    if msg.type != MSG_CORRELATED_TURN or not isinstance(envelope, _TurnEnvelope):
+        return None
+    return envelope.control
+
+
+def begin_turn(agent, msg: Message) -> _TurnControl | None:
+    """Bind a freshly dequeued correlated turn as the current logical turn."""
+
+    control = control_from_message(msg)
+    if control is None:
+        return None
+    lock, controls = _ensure_turn_state(agent)
+    with lock:
+        if (
+            controls.get(control.correlation_id) is not control
+            or control.settlement_claimed
+        ):
+            return None
+        agent._current_turn_control = control
+        cancelled = control.cancel_requested.is_set()
+    if cancelled:
+        # The normal fresh-dequeue stale-latch clear has already happened.  A
+        # pending handle's own cancellation now becomes the current cooperative
+        # latch and is never allowed to leak into a later turn.
+        agent._request_turn_cancel()
+    return control
+
+
+def correlated_message_text(msg: Message) -> Message:
+    """Translate a bound envelope to the existing request-processing shape."""
+
+    control = control_from_message(msg)
+    if control is None:
+        return msg
+    return _make_message(MSG_CORRELATED_TURN, control.sender, control.content)
+
+
+def settle_turn(
+    agent,
+    control: _TurnControl,
+    *,
+    outcome: TurnOutcome,
+    text: str = "",
+    error: str | None = None,
+    errors: tuple[str, ...] = (),
+    cooperative_cancelled: bool = False,
+) -> bool:
+    """Linearize one terminal receipt; cancellation wins until this claim."""
+
+    lock, controls = _ensure_turn_state(agent)
+    with lock:
+        if control.settlement_claimed:
+            return False
+        control.settlement_claimed = True
+        control.cancel_callback = None
+        cancelled = control.cancel_requested.is_set() or cooperative_cancelled
+        if controls.get(control.correlation_id) is control:
+            controls.pop(control.correlation_id, None)
+        if getattr(agent, "_current_turn_control", None) is control:
+            agent._current_turn_control = None
+
+    if cancelled:
+        result = TurnResult(
+            correlation_id=control.correlation_id,
+            outcome=TurnOutcome.CANCELLED,
+        )
+    else:
+        result = TurnResult(
+            correlation_id=control.correlation_id,
+            outcome=outcome,
+            text=text,
+            error=error,
+            errors=errors,
+        )
+    control.future.set_result(result)
+    return True
+
+
+def cancel_all_turns(agent, *, reason: str = "agent stopped") -> int:
+    """Settle every live handle during terminal process teardown."""
+
+    lock, controls = _ensure_turn_state(agent)
+    claimed: list[_TurnControl] = []
+    had_current = False
+    with lock:
+        current = getattr(agent, "_current_turn_control", None)
+        for control in list(controls.values()):
+            if control.settlement_claimed:
+                continue
+            control.cancel_requested.set()
+            control.settlement_claimed = True
+            control.cancel_callback = None
+            claimed.append(control)
+            if control is current:
+                had_current = True
+        controls.clear()
+        agent._current_turn_control = None
+
+    if had_current:
+        agent._request_turn_cancel()
+    for control in claimed:
+        control.future.set_result(
+            TurnResult(
+                correlation_id=control.correlation_id,
+                outcome=TurnOutcome.CANCELLED,
+                error=reason,
+            )
+        )
+    return len(claimed)
+
+
+__all__ = ["TurnHandle", "TurnOutcome", "TurnResult"]

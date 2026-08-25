@@ -63,6 +63,8 @@ from ..token_ledger import append_token_entry
 from .._fsutil import atomic_write_json, atomic_write_text
 from ..trace_redaction import redact_for_trajectory
 from ..runtime_identity import runtime_identity_event_fields
+from ..turns import TurnHandle
+from .lifecycle import StopResult, StopStatus
 
 logger = get_logger()
 
@@ -509,6 +511,11 @@ class BaseAgent:
         # distinct (see kernel/lifecycle_clock/CONTRACT.md).
         self._lifecycle_clock = lifecycle_clock
         self._cancel_event = threading.Event()
+        # Correlated inbound-turn state is process-local and protected separately
+        # from the legacy process-global cooperative latch.
+        self._turn_controls_lock = threading.Lock()
+        self._turn_controls: dict[str, Any] = {}
+        self._current_turn_control: Any | None = None
         self._state = AgentState.IDLE
         self._idle_since_monotonic: float | None = self._lifecycle_clock.monotonic_seconds()
         self._started_at: str = ""
@@ -1223,10 +1230,13 @@ class BaseAgent:
         from .lifecycle import _reset_uptime
         _reset_uptime(self)
 
-    def stop(self, timeout: float = 5.0) -> None:
-        """Signal shutdown and wait for the agent thread to exit."""
+    def stop(self, timeout: float = 5.0) -> StopResult:
+        """Request shutdown and return proof of execution quiescence/timeout."""
         from .lifecycle import _stop
-        _stop(self, timeout)
+        return _stop(self, timeout)
+
+    def _close_agent_owned_services_after_quiescence(self) -> None:
+        """Subclass hook run only after run-loop/provider quiescence is proven."""
 
     def _request_turn_cancel(self) -> None:
         """Latch cooperative cancellation for the current logical turn."""
@@ -2858,6 +2868,27 @@ class BaseAgent:
     def send(self, content: str | dict, sender: str = "user") -> None:
         from .messaging import _send
         _send(self, content, sender)
+
+    def submit_turn(
+        self,
+        content: str,
+        *,
+        sender: str = "user",
+        correlation_id: str | None = None,
+    ) -> TurnHandle:
+        """Queue one text turn and return its protocol-neutral terminal handle."""
+        from ..turns import submit_turn
+        return submit_turn(
+            self,
+            content,
+            sender=sender,
+            correlation_id=correlation_id,
+        )
+
+    def cancel_turn(self, correlation_id: str) -> bool:
+        """Request cooperative cancellation for one matching live turn."""
+        from ..turns import cancel_turn
+        return cancel_turn(self, correlation_id)
 
     # ------------------------------------------------------------------
     # Session persistence (delegates to SessionManager)

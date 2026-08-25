@@ -8,7 +8,14 @@ import json
 import queue
 import time
 
-from ..message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
+from ..message import (
+    Message,
+    _make_message,
+    MSG_CORRELATED_TURN,
+    MSG_REQUEST,
+    MSG_USER_INPUT,
+    MSG_TC_WAKE,
+)
 from ..i18n import t as _t
 from ..logging import get_logger
 from ..loop_guard import LoopGuard
@@ -842,8 +849,96 @@ def _close_pending_tool_calls_after_poll_backoff(
         agent._log("heal_pending_tool_calls_failed", **fields)
 
 
+def _settle_correlated_after_turn(
+    agent,
+    control,
+    handler_result,
+    terminal_error: Exception | None,
+    terminal_failure: str | None,
+) -> None:
+    """Translate the existing turn engine's terminal facts exactly once."""
+
+    if control is None:
+        return
+    from ..turns import TurnOutcome, settle_turn
+
+    outcome = TurnOutcome.NORMAL
+    text = ""
+    error = None
+    errors: tuple[str, ...] = ()
+    if terminal_error is not None:
+        outcome = TurnOutcome.FAILED
+        error = safe_exception_description(terminal_error)[:300]
+    elif terminal_failure is not None:
+        outcome = TurnOutcome.FAILED
+        error = terminal_failure[:300]
+    elif isinstance(handler_result, dict):
+        text = str(handler_result.get("text") or "")
+        raw_errors = handler_result.get("errors") or ()
+        if isinstance(raw_errors, (str, bytes)):
+            raw_errors = (raw_errors,)
+        else:
+            try:
+                raw_errors = tuple(raw_errors)
+            except TypeError:
+                raw_errors = (raw_errors,)
+        errors = tuple(str(item)[:300] for item in raw_errors[:8])
+        if bool(handler_result.get("failed")):
+            outcome = TurnOutcome.FAILED
+            error = errors[0] if errors else "turn processing failed"
+    elif not control.cancel_requested.is_set():
+        outcome = TurnOutcome.FAILED
+        error = "turn ended without a result"
+
+    settle_turn(
+        agent,
+        control,
+        outcome=outcome,
+        text=text,
+        error=error,
+        errors=errors,
+        cooperative_cancelled=agent._cancel_event.is_set(),
+    )
+
+
 def _run_loop(agent) -> None:
-    """Wait for messages, process them. Agent persists between messages."""
+    """Process messages and terminally settle callers on every loop escape."""
+
+    try:
+        _run_loop_body(agent)
+    except Exception as exc:
+        # Once begin_turn publishes current ownership, any unexpected exception
+        # outside the AED path must still terminally settle that exact caller.
+        # The exception is re-raised so thread/process supervision keeps seeing
+        # the run-loop failure instead of mistaking settlement for recovery.
+        control = getattr(agent, "_current_turn_control", None)
+        if control is not None:
+            try:
+                error = safe_exception_description(exc)
+            except Exception:
+                error = type(exc).__name__
+            from ..turns import TurnOutcome, settle_turn
+
+            settle_turn(
+                agent,
+                control,
+                outcome=TurnOutcome.FAILED,
+                error=str(error or type(exc).__name__)[:300],
+                cooperative_cancelled=agent._cancel_event.is_set(),
+            )
+        raise
+    finally:
+        # This also covers failures after dequeue but before begin_turn: the
+        # control remains registered even though current ownership was never
+        # published. Lifecycle stop may race this claim; both paths are exactly
+        # once under the registry lock.
+        from ..turns import cancel_all_turns
+
+        cancel_all_turns(agent, reason="agent run loop stopped")
+
+
+def _run_loop_body(agent) -> None:
+    """Wait for messages and process them; :func:`_run_loop` owns teardown."""
     from ..state import AgentState
 
     while True:
@@ -928,8 +1023,37 @@ def _run_loop(agent) -> None:
                 msg = _concat_queued_messages(agent, msg)
                 agent._set_state(AgentState.ACTIVE, reason=f"received {msg.type}")
 
+            # Bind correlated identity only after the existing fresh-dequeue
+            # stale-latch reset and message-merge boundary. Pending cancellation
+            # then becomes the current cooperative latch without affecting the
+            # turn ahead of it in the same inbox.
+            from ..turns import begin_turn, correlated_message_text
+
+            turn_control = begin_turn(agent, msg)
+            if turn_control is not None:
+                msg = correlated_message_text(msg)
+            elif msg.type == MSG_CORRELATED_TURN:
+                # Lifecycle stop may claim a control after the post-dequeue
+                # shutdown check but before this bind. The private envelope is
+                # then already terminal and must never fall through as a fresh
+                # provider request with a serialized implementation object.
+                agent._log(
+                    "correlated_turn_envelope_skipped",
+                    reason="control_not_live",
+                )
+                if agent._shutdown.is_set():
+                    break
+                agent._set_state(
+                    AgentState.IDLE,
+                    reason="stale correlated turn envelope",
+                )
+                continue
+
             # --- Process with AED (Automatic Error Detection) ---
             sleep_state = AgentState.IDLE
+            handler_result = None
+            terminal_error: Exception | None = None
+            terminal_failure: str | None = None
             aed_attempts = 0
             transient_attempts = 0
             rate_limit_attempts = 0
@@ -942,6 +1066,13 @@ def _run_loop(agent) -> None:
             turn_origin = _aed_origin_route(agent)
             while True:
                 try:
+                    # A cancellation requested while this envelope was pending
+                    # settles without starting provider or tool work.
+                    if (
+                        turn_control is not None
+                        and turn_control.cancel_requested.is_set()
+                    ):
+                        break
                     # Fail closed: if a prior turn already poisoned the
                     # interface, do not run another turn against it. Request
                     # refresh and sleep instead.
@@ -962,8 +1093,10 @@ def _run_loop(agent) -> None:
                         agent._asleep.set()
                         sleep_state = AgentState.ASLEEP
                         skip_post_turn_save = True
+                        terminal_failure = "agent interface is unavailable"
                         break
-                    _handle_message(agent, msg)
+                    handler_result = _handle_message(agent, msg)
+                    terminal_error = None
                     # If a prior provider API error was surfaced to the Task Card
                     # this turn, mark it recovered (observe-only/fail-open); a
                     # clean first-attempt turn reported nothing, so this no-ops.
@@ -975,6 +1108,9 @@ def _run_loop(agent) -> None:
                 except Exception as e:
                     from ..llm_utils import WorkerStillRunningError
 
+                    # Retain the most recent provider/runtime exception until a
+                    # retry succeeds; terminal branches settle it as FAILED.
+                    terminal_error = e
                     # Read replay-safety markers before invoking any provider
                     # exception rendering hooks.  The rendering itself is also
                     # fail-closed so a hostile ``__str__``/``__repr__`` cannot
@@ -1484,6 +1620,14 @@ def _run_loop(agent) -> None:
                     f"({type(e).__name__}): {str(e)[:300]}",
                 )
 
+            _settle_correlated_after_turn(
+                agent,
+                turn_control,
+                handler_result,
+                terminal_error,
+                terminal_failure,
+            )
+
         break
 
 
@@ -1536,14 +1680,15 @@ def _concat_queued_messages(agent, msg: Message) -> Message:
     return merged
 
 
-def _handle_message(agent, msg: Message) -> None:
+def _handle_message(agent, msg: Message) -> dict | None:
     """Route message by type. Subclasses may override for routing."""
-    if msg.type in (MSG_REQUEST, MSG_USER_INPUT):
-        _handle_request(agent, msg)
-    elif msg.type == MSG_TC_WAKE:
+    if msg.type in (MSG_REQUEST, MSG_USER_INPUT, MSG_CORRELATED_TURN):
+        return _handle_request(agent, msg)
+    if msg.type == MSG_TC_WAKE:
         _handle_tc_wake(agent, msg)
-    else:
-        logger.warning(f"[{agent.agent_name}] Unknown message type: {msg.type}")
+        return None
+    logger.warning(f"[{agent.agent_name}] Unknown message type: {msg.type}")
+    return None
 
 
 # Context-pressure molt reminders are emitted as `_meta.agent_meta.agent_state.context.molt`
@@ -1633,7 +1778,7 @@ def _batch_includes_context_molt(tool_calls) -> bool:
     return any(_is_context_molt_call(tc) for tc in tool_calls or [])
 
 
-def _handle_request(agent, msg: Message) -> None:
+def _handle_request(agent, msg: Message) -> dict:
     """Send request to LLM, process response with tool calls."""
     if is_worker_interface_poisoned(agent):
         from .worker_recovery import request_worker_hang_refresh
@@ -1649,7 +1794,11 @@ def _handle_request(agent, msg: Message) -> None:
             artifact_relpath=artifact,
             source="handle_request_poison_guard",
         )
-        return
+        return {
+            "text": "",
+            "failed": True,
+            "errors": ["agent interface is unavailable"],
+        }
 
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
@@ -1691,6 +1840,7 @@ def _handle_request(agent, msg: Message) -> None:
         teardown = getattr(agent, "_teardown_telegram_task_card", None)
         if teardown is not None:
             teardown()
+    return result
 
 
 def _handle_tc_wake(agent, msg: Message) -> None:

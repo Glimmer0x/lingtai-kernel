@@ -12,13 +12,36 @@ import json
 import math
 import os
 import threading
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, localcontext
+from enum import Enum
 from pathlib import Path
 
 from ..config import HEARTBEAT_TICK_SECONDS, IDLE_SLEEP_TIMEOUT_SECONDS
 from ..refresh_watcher import RefreshWatcherRequest
 from ..snapshot import SourceRevisionPort
+
+
+class StopStatus(str, Enum):
+    """Execution-quiescence outcome of a bounded Agent stop request."""
+
+    STOPPED = "stopped"
+    TIMED_OUT = "timed_out"
+
+
+@dataclass(frozen=True, slots=True)
+class StopResult:
+    """Typed proof that stop either completed or retained process ownership."""
+
+    status: StopStatus
+    run_loop_alive: bool
+    provider_worker_alive: bool
+
+    @property
+    def stopped(self) -> bool:
+        return self.status is StopStatus.STOPPED
 
 
 # Key source files to hash for the runtime fingerprint.  A small curated
@@ -434,53 +457,95 @@ def _reset_uptime(agent) -> None:
     agent._uptime_anchor = agent._lifecycle_clock.monotonic_seconds()
 
 
-def _stop(agent, timeout: float = 5.0) -> None:
-    """Signal shutdown and wait for the agent thread to exit.
+def _stop(agent, timeout: float = 5.0) -> StopResult:
+    """Request shutdown, prove execution quiescence, then release ownership.
 
-    Heartbeat is stopped LAST (just before the workdir-lease release) so external
-    observers — TUI launcher, `lingtai-tui list`, `lingtai-tui purge` — see
-    `.agent.heartbeat` as fresh and present for the entire teardown window.
-    Otherwise the file vanishes seconds before the Python process actually
-    exits, and a quick relaunch races a still-living interpreter into the
-    same workdir. See workdir-race investigation 2026-05-09.
+    A bounded wait that expires is *not* teardown success. Correlated handles may
+    already be settled while the run loop or a detached poisoned-provider Future
+    can still mutate Agent state. In that case this function returns
+    ``TIMED_OUT`` before closing services, withdrawing heartbeat, or releasing
+    the workdir lease. Process owners must retry after quiescence or terminate
+    the process while the lease remains held.
 
-    Daemon resources are also reclaimed before liveness is withdrawn: daemon
-    ThreadPoolExecutor workers and external CLI process groups can otherwise
-    keep this interpreter visible in `ps` after heartbeat/lock are gone, which
-    makes refresh watchers race the duplicate-process guard.
-
-    The workdir lease release is unconditional: every teardown step after the
-    main-loop join runs inside a ``try`` whose ``finally`` releases the lease,
-    so a raising intermediate step (session close, manifest write, heartbeat
-    stop, …) can never wedge ``.agent.lock`` (issue #661).
+    Once execution is quiescent, the existing issue-661 guarantee still applies:
+    every later teardown step runs inside a ``try`` whose ``finally`` releases
+    the lease, so a cleanup exception cannot wedge a dead Agent's workdir.
     """
     agent._log("agent_stop")
     agent._cancel_soul_timer()
     agent._shutdown.set()
+    # Process teardown is terminal for every correlated caller, but caller
+    # settlement is deliberately not treated as execution quiescence.
+    from ..turns import cancel_all_turns
+    cancel_all_turns(agent, reason="agent stopped")
     # Wake a run loop blocked in inbox.get; its post-dequeue shutdown check
     # consumes this sentinel without dispatching a turn.
     inbox = getattr(agent, "inbox", None)
     if inbox is not None:
         from ..message import _make_message, MSG_TC_WAKE
         inbox.put(_make_message(MSG_TC_WAKE, "system", ""))
-    # Stop any Task Card watcher threads deterministically. The loops also
-    # observe ``_shutdown`` (daemon threads), but this joins and clears them
-    # without any filesystem deletion.
-    _task_card_controller = getattr(agent, "_task_card_controller", None)
-    if _task_card_controller is not None:
+
+    deadline = time.monotonic() + max(float(timeout), 0.0)
+    thread = getattr(agent, "_thread", None)
+    if thread is not None:
+        thread.join(timeout=max(deadline - time.monotonic(), 0.0))
+
+    provider_future = getattr(agent, "_llm_worker_poison_future", None)
+    if provider_future is not None and not provider_future.done():
         try:
-            _task_card_controller.shutdown_for_agent_stop(reason="agent_stop")
+            provider_future.result(timeout=max(deadline - time.monotonic(), 0.0))
+        except BaseException:
+            # Timeout means it is still live; any terminal result/exception means
+            # done() below is the only quiescence fact we need.
+            pass
+
+    run_loop_alive = bool(thread is not None and thread.is_alive())
+    provider_worker_alive = bool(
+        provider_future is not None and not provider_future.done()
+    )
+    if run_loop_alive or provider_worker_alive:
+        try:
+            agent._log(
+                "agent_stop_timed_out",
+                timeout_s=max(float(timeout), 0.0),
+                run_loop_alive=run_loop_alive,
+                provider_worker_alive=provider_worker_alive,
+            )
         except Exception:
             pass
-    _task_card_manager = getattr(agent, "_task_card_manager", None)
-    if _task_card_manager is not None and _task_card_manager is not _task_card_controller:
-        try:
-            _task_card_manager.shutdown_for_agent_stop(reason="agent_stop")
-        except Exception:
-            pass
-    if agent._thread:
-        agent._thread.join(timeout=timeout)
+        return StopResult(
+            status=StopStatus.TIMED_OUT,
+            run_loop_alive=run_loop_alive,
+            provider_worker_alive=provider_worker_alive,
+        )
+
+    # Only quiescent execution may enter service/liveness/lease teardown. Every
+    # post-proof cleanup step remains under the issue-661 release guarantee: an
+    # unexpected Task Card/subclass-service failure may propagate, but cannot
+    # wedge the workdir lease after execution has stopped.
     try:
+        _task_card_controller = getattr(agent, "_task_card_controller", None)
+        if _task_card_controller is not None:
+            try:
+                _task_card_controller.shutdown_for_agent_stop(reason="agent_stop")
+            except Exception:
+                pass
+        _task_card_manager = getattr(agent, "_task_card_manager", None)
+        if (
+            _task_card_manager is not None
+            and _task_card_manager is not _task_card_controller
+        ):
+            try:
+                _task_card_manager.shutdown_for_agent_stop(reason="agent_stop")
+            except Exception:
+                pass
+
+        close_agent_services = getattr(
+            agent, "_close_agent_owned_services_after_quiescence", None
+        )
+        if callable(close_agent_services):
+            close_agent_services()
+
         _shutdown_daemon_runtime(agent, reason="agent_stop")
         agent._session.close()
 
@@ -499,15 +564,23 @@ def _stop(agent, timeout: float = 5.0) -> None:
                 pass
 
         # Persist final state, stop heartbeat, release the workdir lease — order
-        # matters. See docstring above; heartbeat must remain fresh until this point.
+        # matters. Heartbeat must remain fresh until this point.
         agent._workdir.write_manifest(agent._build_manifest())
         _stop_heartbeat(agent)
     finally:
-        # The workdir lease MUST be released even when an intermediate teardown
-        # step raises (session close, manifest write, heartbeat stop, …).
-        # Otherwise .agent.lock stays wedged and the agent cannot restart
-        # without manual intervention (issue #661).
-        agent._workdir_lease.release()
+        # This finally is reachable only after execution quiescence. Preserve the
+        # issue-661 release-on-cleanup-error guarantee without releasing on a
+        # failed join/provider wait.
+        if getattr(agent, "_workdir_lease_acquired", True):
+            agent._workdir_lease.release()
+            if hasattr(agent, "_workdir_lease_acquired"):
+                agent._workdir_lease_acquired = False
+
+    return StopResult(
+        status=StopStatus.STOPPED,
+        run_loop_alive=False,
+        provider_worker_alive=False,
+    )
 
 
 def _shutdown_daemon_runtime(agent, *, reason: str) -> None:

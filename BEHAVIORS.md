@@ -9,6 +9,7 @@ related_files:
   - tests/CONTRACT.md
   - src/lingtai/kernel/BEHAVIORS.md
   - src/lingtai/kernel/tool_plugin/BEHAVIORS.md
+  - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/tools/BEHAVIORS.md
   - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/context/BEHAVIORS.md
