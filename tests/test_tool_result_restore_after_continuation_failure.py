@@ -256,17 +256,6 @@ class _ContinuingSession:
         return response
 
 
-class _CancelAfterInitialClear:
-    def __init__(self) -> None:
-        self.clear_count = 0
-
-    def clear(self) -> None:
-        self.clear_count += 1
-
-    def is_set(self) -> bool:
-        return self.clear_count == 1
-
-
 def test_process_response_restores_real_results_when_continuation_send_fails():
     """Regression: _process_response preserves tool output before AED heal runs."""
     agent = _FakeAgent()
@@ -366,7 +355,9 @@ def test_process_response_logs_cancel_before_tool_dispatch():
         content="should not execute",
     )
     agent._executor = _ProcessExecutor(real_result)
-    agent._cancel_event = _CancelAfterInitialClear()
+    agent._cancel_event = threading.Event()
+    agent._cancel_event.set()
+    agent._session = _FailingSession()
     agent._on_tool_result_hook = None
     agent._intermediate_text_streamed = True
     agent._sent_tracker = _NoopSentTracker()
@@ -380,6 +371,8 @@ def test_process_response_logs_cancel_before_tool_dispatch():
 
     assert result == {"text": "", "failed": False, "errors": []}
     assert agent._executor.calls == []
+    assert agent._session.sent == []
+    assert agent._cancel_event.is_set()
 
     names = [name for name, _ in agent.logs]
     assert names == ["tool_calls_not_dispatched"]

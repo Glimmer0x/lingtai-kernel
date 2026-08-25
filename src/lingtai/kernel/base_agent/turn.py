@@ -904,9 +904,10 @@ def _run_loop(agent) -> None:
                 if agent._shutdown.is_set():
                     break
 
-                # Wake up
+                # A successful fresh dequeue owns stale-latch reset.  Clear
+                # only after the shutdown recheck and before publishing ACTIVE.
                 agent._asleep.clear()
-                agent._cancel_event.clear()  # clear stale sleep signal
+                agent._cancel_event.clear()
                 agent._set_state(AgentState.ACTIVE, reason=f"woke from asleep: {msg.type}")
                 agent._log("wake", trigger=msg.type)
                 agent._reset_uptime()
@@ -920,6 +921,10 @@ def _run_loop(agent) -> None:
                 # Consume a stop wake before merging, state change, or dispatch.
                 if agent._shutdown.is_set():
                     break
+                # Clear only the stale latch inherited by this fresh dequeue.
+                # This precedes merging so cancellation requested during merge
+                # remains visible through the rest of the logical turn.
+                agent._cancel_event.clear()
                 msg = _concat_queued_messages(agent, msg)
                 agent._set_state(AgentState.ACTIVE, reason=f"received {msg.type}")
 
@@ -2182,8 +2187,6 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
     ``ledger_source`` propagates to ``_save_chat_history`` for any
     tool-loop continuation LLM round-trips.
     """
-    agent._cancel_event.clear()
-
     guard = agent._executor.guard
     collected_text_parts: list[str] = []
     collected_errors: list[str] = []
@@ -2250,7 +2253,6 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
 
         tool_call_fields = _tool_call_summary(response.tool_calls)
         if agent._cancel_event.is_set():
-            agent._cancel_event.clear()
             agent._log(
                 "tool_calls_not_dispatched",
                 ledger_source=ledger_source,
@@ -2434,7 +2436,6 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         if agent._cancel_event.is_set():
             if tool_results and agent._chat:
                 agent._chat.commit_tool_results(tool_results)
-            agent._cancel_event.clear()
             agent._log("turn_cancelled_post_tool",
                        reason="cancel_event_set_after_tool_execute")
             return {"text": "", "failed": False, "errors": []}

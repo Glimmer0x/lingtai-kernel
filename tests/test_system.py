@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.state import AgentState
 from lingtai.kernel.presets import home_shortened
 from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 from tests._workdir_lease_helpers import make_test_lease
@@ -200,9 +201,20 @@ def test_system_rejects_unknown_and_retired_actions(tmp_path, action):
 
 def test_system_self_sleep(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", admin={"karma": True}, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "sleep", "input": {"reason": "need bash"}})
+    original_request_cancel = agent._request_turn_cancel
+    cancel_observations = []
+
+    def request_cancel():
+        cancel_observations.append((agent.state, agent._asleep.is_set()))
+        original_request_cancel()
+
+    agent._request_turn_cancel = request_cancel
+    from lingtai.tools.system import handle
+    result = handle(agent, {"action": "sleep", "input": {"reason": "need bash"}})
     assert result["status"] == "ok"
+    assert cancel_observations == [(AgentState.ASLEEP, True)]
     assert agent._asleep.is_set()
+    assert agent._cancel_event.is_set()
     agent.stop(timeout=1.0)
 
 

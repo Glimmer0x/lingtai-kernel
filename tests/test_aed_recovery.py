@@ -221,6 +221,75 @@ def _make_run_loop_agent(tmp_path):
     return agent
 
 
+@pytest.mark.parametrize("initial_state", [AgentState.IDLE, AgentState.ASLEEP])
+def test_fresh_dequeue_clears_only_stale_turn_cancel_latch(
+    tmp_path, monkeypatch, initial_state
+):
+    """Both dequeue branches clear a prior turn's latch before ACTIVE."""
+    agent = _make_run_loop_agent(tmp_path)
+    agent._state = initial_state
+    if initial_state is AgentState.ASLEEP:
+        agent._asleep.set()
+    agent._cancel_event.set()
+    observed = []
+
+    def fake_handle(current, _msg):
+        observed.append((current._state, current._cancel_event.is_set()))
+        current._shutdown.set()
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _agent: None)
+
+    turn._run_loop(agent)
+
+    assert observed == [(AgentState.ACTIVE, False)]
+    assert not agent._cancel_event.is_set()
+
+
+def test_cancel_requested_during_awake_concat_survives_turn(
+    tmp_path, monkeypatch
+):
+    """The awake dequeue reset precedes merge, so a merge-time cancel survives."""
+    agent = _make_run_loop_agent(tmp_path)
+    agent._state = AgentState.IDLE
+    agent._cancel_event.set()
+    concat_entered = threading.Event()
+    allow_concat_return = threading.Event()
+    observed = []
+    errors = []
+
+    def blocking_concat(current, msg):
+        assert not current._cancel_event.is_set()
+        concat_entered.set()
+        assert allow_concat_return.wait(timeout=5)
+        return msg
+
+    def fake_handle(current, _msg):
+        observed.append(current._cancel_event.is_set())
+        current._shutdown.set()
+
+    def run():
+        try:
+            turn._run_loop(agent)
+        except BaseException as exc:  # surfaced in the asserting thread below
+            errors.append(exc)
+
+    monkeypatch.setattr(turn, "_concat_queued_messages", blocking_concat)
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    worker = threading.Thread(target=run, name="cancel-during-concat-test")
+    worker.start()
+    assert concat_entered.wait(timeout=5)
+    agent._cancel_event.set()
+    allow_concat_return.set()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert observed == [True]
+    assert agent._cancel_event.is_set()
+
+
 def test_partial_stream_marker_stops_before_transient_or_aed_retry(tmp_path, monkeypatch):
     agent = _make_run_loop_agent(tmp_path)
     agent.saves = 0

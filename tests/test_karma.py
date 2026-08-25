@@ -33,12 +33,21 @@ class TestSignalFiles:
 
     def test_interrupt_signal_sets_cancel_event(self, tmp_path):
         agent = _make_agent(tmp_path)
+        detected = threading.Event()
+        observations = []
+        original_request_cancel = agent._request_turn_cancel
+
+        def request_cancel():
+            observations.append(not (agent.working_dir / ".interrupt").exists())
+            original_request_cancel()
+            detected.set()
+
+        agent._request_turn_cancel = request_cancel
         agent.start()
         try:
-            # Write .interrupt signal file
             (agent.working_dir / ".interrupt").write_text("")
-            # Wait for heartbeat to detect it
-            time.sleep(2.0)
+            assert detected.wait(timeout=5), "heartbeat did not consume .interrupt"
+            assert observations == [True]
             assert agent._cancel_event.is_set()
             assert not (agent.working_dir / ".interrupt").exists(), "signal file should be deleted"
         finally:
@@ -46,14 +55,30 @@ class TestSignalFiles:
 
     def test_sleep_signal_sets_asleep(self, tmp_path):
         agent = _make_agent(tmp_path)
+        detected = threading.Event()
+        observations = []
+        original_request_cancel = agent._request_turn_cancel
+
+        def request_cancel():
+            observations.append((
+                not (agent.working_dir / ".sleep").exists(),
+                agent.state,
+            ))
+            original_request_cancel()
+            detected.set()
+
+        agent._request_turn_cancel = request_cancel
         agent.start()
-        # Write .sleep signal file
-        (agent.working_dir / ".sleep").write_text("")
-        # Wait for agent to detect it
-        time.sleep(3.0)
-        assert agent._asleep.is_set()
-        assert agent.state == AgentState.ASLEEP
-        assert not (agent.working_dir / ".sleep").exists(), "signal file should be deleted"
+        try:
+            (agent.working_dir / ".sleep").write_text("")
+            assert detected.wait(timeout=5), "heartbeat did not consume .sleep"
+            assert agent._asleep.wait(timeout=5), "sleep transition did not publish ASLEEP"
+            assert observations == [(True, AgentState.IDLE)]
+            assert agent._cancel_event.is_set()
+            assert agent.state == AgentState.ASLEEP
+            assert not (agent.working_dir / ".sleep").exists(), "signal file should be deleted"
+        finally:
+            agent.stop()
 
 
 class TestSystemIntrinsicKarma:

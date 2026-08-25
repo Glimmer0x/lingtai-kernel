@@ -611,9 +611,17 @@ def test_perform_refresh_sets_shutdown_and_cancel(tmp_path):
     agent = _make_agent_with_launch_cmd(tmp_path)
     assert not agent._shutdown.is_set()
     assert not agent._cancel_event.is_set()
+    original_request_cancel = agent._request_turn_cancel
+    cancel_observations = []
 
+    def request_cancel():
+        cancel_observations.append((agent._refresh_watcher.spawned, agent._shutdown.is_set()))
+        original_request_cancel()
+
+    agent._request_turn_cancel = request_cancel
     agent._perform_refresh()
 
+    assert cancel_observations == [(True, False)]
     assert agent._shutdown.is_set(), \
         "_perform_refresh must set _shutdown so the run loop exits and the lock releases"
     assert agent._cancel_event.is_set(), \

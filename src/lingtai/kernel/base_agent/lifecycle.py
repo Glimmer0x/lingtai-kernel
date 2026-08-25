@@ -614,7 +614,7 @@ def _heartbeat_loop(agent) -> None:
                     interrupt_file.unlink()
                 except OSError:
                     pass
-                agent._cancel_event.set()
+                agent._request_turn_cancel()
                 agent._log("interrupt_received", source="signal_file")
 
             # .refresh = full refresh with relaunch (identical to system(action='refresh'))
@@ -641,7 +641,7 @@ def _heartbeat_loop(agent) -> None:
                     suspend_file.unlink()
                 except OSError:
                     pass
-                agent._cancel_event.set()
+                agent._request_turn_cancel()
                 agent._set_state(AgentState.SUSPENDED, reason="suspend signal")
                 agent._shutdown.set()
                 agent._log("suspend_received", source="signal_file")
@@ -653,7 +653,7 @@ def _heartbeat_loop(agent) -> None:
                     sleep_file.unlink()
                 except OSError:
                     pass
-                agent._cancel_event.set()
+                agent._request_turn_cancel()
                 agent._set_state(AgentState.ASLEEP, reason="sleep signal")
                 agent._asleep.set()
                 agent._log("sleep_received", source="signal_file")
@@ -1131,12 +1131,7 @@ def _perform_refresh(
     # events here makes the watcher's second phase complete uniformly
     # regardless of caller; the heartbeat path's redundant `_shutdown.set()`
     # is idempotent.
-    cancel_event = getattr(agent, "_cancel_event", None)
-    if cancel_event is not None:
-        try:
-            cancel_event.set()
-        except Exception:
-            pass
+    agent._request_turn_cancel()
     shutdown_event = getattr(agent, "_shutdown", None)
     if shutdown_event is not None:
         try:
