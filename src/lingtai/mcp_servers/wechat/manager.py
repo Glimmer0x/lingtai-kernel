@@ -587,8 +587,27 @@ class WechatManager:
                 return {"error": f"File not found: {media_path}"}
 
         results = []
+        provider_acks: list[dict[str, int]] = []
 
-        def _persist_sent(status: str = "ok", media_error: dict | None = None) -> str:
+        def _acceptance_fields(*, partial: bool = False) -> dict:
+            return {
+                "delivery_status": (
+                    "partial_provider_acceptance" if partial
+                    else "provider_accepted"
+                ),
+                "delivery_confirmed": False,
+                "automatic_retry_allowed": False,
+                "provider_acknowledgement": {
+                    "request_count": len(provider_acks),
+                    "last_response": provider_acks[-1],
+                },
+            }
+
+        def _persist_sent(
+            status: str = "ok",
+            media_error: dict | None = None,
+            acceptance: dict | None = None,
+        ) -> str:
             """Persist an attempted outbound action for retry-safe inspection."""
             msg_id = str(uuid.uuid4())
             msg_dir = self._sent_dir / msg_id
@@ -603,6 +622,8 @@ class WechatManager:
             }
             if media_error is not None:
                 sent_data["media_error"] = media_error
+            if acceptance is not None:
+                sent_data.update(acceptance)
             (msg_dir / "message.json").write_text(
                 json.dumps(sent_data, ensure_ascii=False, indent=2), encoding="utf-8",
             )
@@ -618,10 +639,14 @@ class WechatManager:
             result = error.as_result()
             result["sent"] = list(results)
             if text and results:
+                acceptance = _acceptance_fields(partial=True)
                 result.update({
                     "status": "partial",
+                    # Legacy replay guard: not proof of recipient delivery.
                     "partial_delivery": True,
-                    "message_id": _persist_sent("partial", result),
+                    "partial_provider_acceptance": True,
+                    "message_id": _persist_sent("partial", result, acceptance),
+                    **acceptance,
                 })
             return result
 
@@ -645,9 +670,12 @@ class WechatManager:
                         text_item=TextItem(text=chunk),
                     )],
                 )
-                self._run_async(
+                acknowledgement = self._run_async(
                     api.send_message(self._base_url, self._token, msg)
                 )
+                if not isinstance(acknowledgement, dict):
+                    raise RuntimeError("iLink send_message returned no acknowledgement")
+                provider_acks.append(acknowledgement)
                 results.append(f"text ({len(chunk)} chars)")
 
         # Send media (already validated above)
@@ -671,17 +699,26 @@ class WechatManager:
                 item_list=[media_item],
             )
             try:
-                self._run_async(
+                acknowledgement = self._run_async(
                     api.send_message(self._base_url, self._token, msg)
                 )
+                if not isinstance(acknowledgement, dict):
+                    raise RuntimeError("iLink send_message returned no acknowledgement")
+                provider_acks.append(acknowledgement)
             except Exception as exc:
                 return _media_failure(media_mod.media_upload_error(
                     "send_media_reference_failed", self._base_url, exc
                 ))
             results.append(f"media ({path.name})")
 
-        msg_id = _persist_sent()
-        return {"status": "ok", "sent": results, "message_id": msg_id}
+        acceptance = _acceptance_fields()
+        msg_id = _persist_sent(acceptance=acceptance)
+        return {
+            "status": "ok",
+            "sent": results,
+            "message_id": msg_id,
+            **acceptance,
+        }
 
     def _handle_check(self, args: dict) -> dict:
         """List conversations with unread counts.

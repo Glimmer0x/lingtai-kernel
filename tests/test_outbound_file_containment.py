@@ -296,6 +296,7 @@ def test_wechat_send_accepts_media_path_inside_workdir(tmp_path, monkeypatch):
 
     async def _fake_send_message(*args, **kwargs):
         seen["sent"] = True
+        return {"ret": 0}
 
     monkeypatch.setattr(wx_media, "upload_media", _fake_upload)
     monkeypatch.setattr(
