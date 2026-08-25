@@ -192,8 +192,7 @@ Coding agents and LingTai agents MUST observe the following.
   provider/browser fallback is ever automatic beyond the family's one
   documented OpenAI→DuckDuckGo runtime fallback (see
   `src/lingtai/tools/web_search/CONTRACT.md`).
-  `daemon`, `email`, and `notification` are declared; every remaining target
-  stays outside this contract. Notification is a mandatory injected official
+  Notification is a mandatory injected official
   family: its declaration remains mounted once through the existing official
   boot route on construction and refresh even when its capability is null or
   listed in `disable`.
@@ -244,7 +243,8 @@ capability.
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
+exactly twenty grantable names: `workdir`, `prompt_section`, `avatar_parent`,
+`context_runtime`,
 `daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
 `notification_state`, `notifications`, `configuration`, `soul_runtime`,
 `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
