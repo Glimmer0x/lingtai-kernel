@@ -933,8 +933,10 @@ def _run_loop(agent) -> None:
         # published. Lifecycle stop may race this claim; both paths are exactly
         # once under the registry lock.
         from ..turns import cancel_all_turns
+        from ..execution_workspace import clear_execution_workspace
 
         cancel_all_turns(agent, reason="agent run loop stopped")
+        clear_execution_workspace()
 
 
 def _run_loop_body(agent) -> None:
@@ -1030,7 +1032,20 @@ def _run_loop_body(agent) -> None:
             from ..turns import begin_turn, correlated_message_text
 
             turn_control = begin_turn(agent, msg)
+            execution_workspace_token = None
             if turn_control is not None:
+                from ..execution_workspace import (
+                    bind_execution_workspace,
+                    clear_execution_workspace,
+                )
+                # Every fresh correlated turn starts from an explicitly empty
+                # execution scope. This is a cheap backstop for any future
+                # outer-loop control-flow path that might bypass the token reset
+                # below; thread exit still clears in _run_loop's finally.
+                clear_execution_workspace()
+                execution_workspace_token = bind_execution_workspace(
+                    turn_control.execution_workspace
+                )
                 msg = correlated_message_text(msg)
             elif msg.type == MSG_CORRELATED_TURN:
                 # Lifecycle stop may claim a control after the post-dequeue
@@ -1620,6 +1635,9 @@ def _run_loop_body(agent) -> None:
                     f"({type(e).__name__}): {str(e)[:300]}",
                 )
 
+            if execution_workspace_token is not None:
+                from ..execution_workspace import reset_execution_workspace
+                reset_execution_workspace(execution_workspace_token)
             _settle_correlated_after_turn(
                 agent,
                 turn_control,

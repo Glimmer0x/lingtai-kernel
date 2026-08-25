@@ -6,9 +6,13 @@ related_files:
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/execution_workspace.py
+  - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_acp_stdio.py
   - tests/test_correlated_turns.py
+  - tests/test_execution_workspace.py
+  - tests/test_session_mcp.py
   - tests/test_lifecycle_daemon_shutdown.py
 maintenance: |
   Keep this manual's launch, wire, cancellation, diagnostics, scope, and
@@ -26,10 +30,12 @@ local process that can launch an ACP subprocess. The implementation speaks ACP
 protocol version 1 directly with the standard library; no ACP SDK or optional
 package is required.
 
-This first slice supports exactly:
+This slice supports exactly:
 
 - `initialize` negotiation that returns this Agent's supported `protocolVersion: 1`;
 - one `session/new` per process;
+- one canonical execution workspace from `session/new.cwd`;
+- zero or more session-scoped stdio MCP servers mounted all-or-nothing;
 - one active `session/prompt` at a time;
 - baseline Text and ResourceLink prompt blocks;
 - one completed response projected as `agent_message_chunk`;
@@ -37,18 +43,16 @@ This first slice supports exactly:
 - `session/cancel` for the active turn.
 
 It deliberately does **not** provide session load/persistence, multiple sessions,
-session-scoped MCP servers, execution-workspace switching, permission requests,
+remote MCP servers, additional workspace roots, permission requests,
 capability-gated image/audio/embedded-resource content, incremental event/tool
 projection, remote transport,
 authentication, or ACP v2.
 
-**Current-spec limitation:** the current stable ACP v1 documentation describes
-stdio session MCP and applying `cwd` as baseline Agent requirements. This
-accepted first vertical slice explicitly defers those two plumbing capabilities:
-it rejects non-empty `mcpServers` and validates but does not project `cwd`. Text
-and ResourceLink prompts are supported. It is therefore a narrow interoperable
-empty-MCP local flow, not complete general-purpose ACP v1 conformance. Clients
-must stay inside the advertised/explicit scope above.
+Stable ACP v1 requires stdio session MCP and applying `cwd`. This slice implements
+both: cwd is canonicalized once and scopes execution-facing File, Shell, guard,
+and parallel tool work; stdio servers use stable v1's `name`, absolute `command`,
+string `args`, and `{name,value}` env-array shape. It remains a narrow local flow,
+not complete general-purpose ACP v1 conformance.
 
 ## Launch
 
@@ -69,7 +73,8 @@ it.
 A minimal client sequence is:
 
 1. Send `initialize` with `protocolVersion: 1`.
-2. Send `session/new` with an absolute `cwd` and `mcpServers: []`.
+2. Send `session/new` with an absolute existing-directory `cwd` and either
+   `mcpServers: []` or strict stdio entries. Startup is all-or-nothing.
 3. Retain the returned opaque `sessionId`.
 4. Send `session/prompt` with that id and a non-empty Text/ResourceLink block
    list. ResourceLink metadata is forwarded to Core as compact text; this slice
@@ -115,9 +120,10 @@ stdout: code launched in this host must not use those paths. Common explicit err
 
 - non-integer protocol version: invalid params (a different integer negotiates to
   this Agent's supported version `1`, which the client must accept or close);
-- relative `cwd`: invalid params (the value is validated but not applied as an
-  execution workspace in this slice);
-- non-empty `mcpServers`: unsupported;
+- relative, missing, or non-directory `cwd`: invalid params;
+- malformed, duplicate, HTTP, or SSE `mcpServers`: invalid params; startup or
+  tool-name collision closes earlier clients and publishes nothing;
+- non-empty `additionalDirectories`: unsupported (additional roots are not advertised);
 - second `session/new`: unsupported;
 - second prompt while one is active: session busy;
 - ResourceLink without non-empty `uri`/`name` or with invalid metadata: invalid params;

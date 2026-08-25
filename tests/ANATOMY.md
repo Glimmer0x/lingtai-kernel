@@ -41,6 +41,8 @@ related_files:
   - tests/opencode
   - tests/test_activate_preset.py
   - tests/test_acp_stdio.py
+  - tests/test_execution_workspace.py
+  - tests/test_session_mcp.py
   - tests/test_active_stuck_watchdog.py
   - tests/test_adapter_registry.py
   - tests/test_aed_recovery.py

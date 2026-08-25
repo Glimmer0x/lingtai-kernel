@@ -1642,6 +1642,11 @@ class Agent(BaseAgent):
             raise
         return self._mount_mcp_tools(client, tools, mcp_service)
 
+    def mount_session_mcp_stdio(self, configs):
+        """Mount one process-local stdio MCP overlay and return its owner lease."""
+        from .services.session_mcp import mount_session_mcp_stdio
+        return mount_session_mcp_stdio(self, tuple(configs))
+
     def _mount_mcp_tools(self, client: Any, tools: list[dict], mcp_service: Any) -> list[str]:
         """Mount one fully preflighted MCP catalog atomically for this client.
 
@@ -1891,6 +1896,12 @@ class Agent(BaseAgent):
         if poller is not None:
             try:
                 poller.stop()
+            except Exception:
+                pass
+
+        for lease in list(getattr(self, "_session_mcp_leases", [])):
+            try:
+                lease.close()
             except Exception:
                 pass
 

@@ -11,12 +11,16 @@ related_files:
   - src/lingtai/cli_acp.py
   - src/lingtai/cli.py
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/execution_workspace.py
+  - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - pyproject.toml
   - tests/test_acp_stdio.py
   - tests/test_correlated_turns.py
+  - tests/test_execution_workspace.py
+  - tests/test_session_mcp.py
   - tests/test_process_match.py
   - tests/test_lifecycle_daemon_shutdown.py
   - tests/test_lingtai_facade.py
@@ -37,12 +41,10 @@ through newline-delimited JSON-RPC on stdio. ACP is a driving Adapter: it
 translates protocol messages into the protocol-neutral correlated inbound-turn
 API owned by Core and never reaches into provider/session/tool internals.
 
-This accepted first slice is intentionally narrower than complete current stable
-ACP v1 Agent conformance: stable documentation treats stdio session MCP and
-applying session `cwd` as baseline requirements, while this slice explicitly
-defers them. Baseline Text and ResourceLink prompts are supported. The remaining
-narrow scope is observable and must not be advertised as support for deferred
-capabilities.
+This slice implements stable ACP v1's baseline session `cwd` and stdio MCP
+requirements alongside Text and ResourceLink prompts. It remains deliberately
+narrow: remote MCP, additional directories, rich content, permissions, and
+multi-session persistence are not advertised.
 
 ## Behavior
 
@@ -66,7 +68,9 @@ TurnHandle` and `TurnHandle.cancel()/result()` from
 `src/lingtai/kernel/turns.py`. The terminal `TurnResult` distinguishes
 `normal`, `cancelled`, and `failed` and carries the complete response text for
 normal settlement. This Port contains no ACP method, JSON-RPC object, session
-identifier, cwd, MCP, permission, or transport vocabulary.
+identifier, ACP method, MCP configuration, permission, or transport vocabulary.
+It may carry the generic immutable `ExecutionWorkspace` value attached to a
+correlated turn.
 
 ## Adapters
 
@@ -88,10 +92,16 @@ library JSON/threading streams directly.
    methods/params use JSON-RPC errors; notifications receive no response.
 2. `acp-local-stdio.session.v1` — one process owns at most one initialized ACP
    session and one active prompt. A second `session/new` or concurrent prompt
-   fails explicitly. `cwd` must be absolute but is not projected into execution;
-   workspace plumbing is outside this slice. `mcpServers` must be an array and
-   must be empty: session-scoped MCP is outside this slice and non-empty input
-   fails explicitly rather than being ignored.
+   fails explicitly. `cwd` must be absolute, exist, and be a directory; it is
+   canonicalized once and attached to each correlated turn without changing the
+   Agent identity/config/history workdir or process cwd. `mcpServers` uses the
+   stable-v1 stdio `{name, command, args, env}` shape. Names are unique, command
+   is absolute, args are strings, and env is an array of unique string
+   `{name,value}` records. Malformed/unknown fields and HTTP/SSE are rejected.
+   Every server starts and lists tools before one atomic publication; duplicate,
+   existing, or reserved tool names reject the session and close all clients.
+   Non-empty `additionalDirectories` fails explicitly because extra roots are not
+   advertised in this slice.
 3. `acp-local-stdio.turn.v1` — prompt input is a non-empty list of baseline
    Text/ResourceLink blocks. Text is concatenated in order; each validated
    ResourceLink is projected into the Core text boundary as compact JSON metadata
@@ -133,9 +143,14 @@ library JSON/threading streams directly.
    forms including quoted Windows `lingtai-agent.exe` before stale signal cleanup;
    the workdir lease remains authoritative.
 7. `acp-local-stdio.scope.v1` — local stdio and ACP v1 only. Multi-session
-   persistence/load, session-scoped MCP, execution-workspace projection,
-   permission brokerage, event streaming, remote transports, authentication,
-   and ACP v2 are non-goals.
+   persistence/load, additional workspace roots, permission brokerage, event
+   streaming, remote MCP/transports, authentication, and ACP v2 are non-goals.
+8. `acp-local-stdio.workspace-mcp-lifecycle.v1` — relative/default File paths,
+   Shell cwd validation/defaults, risky-action canonicalization, and parallel
+   dispatch observe the canonical turn workspace. Parent and symlink escapes
+   fail. Context is reset between turns and copied to worker threads. The ACP
+   server owns one idempotent session-MCP lease and closes it on close, EOF,
+   fatal abort, startup rollback, or Agent stop.
 
 ## Contract tests
 
@@ -145,6 +160,9 @@ session/busy/unsupported errors, strict JSON line framing, invalid UTF-8, EOF,
 blocked coordinator/prompt output, FIFO/generation/queue-full/write-failure paths,
 Agent-stop-with-open-stdin, Windows duplicate-before-cleanup, typed quiescence,
 and CLI Python-stdout quarantine/hard-exit ownership.
+`tests/test_execution_workspace.py`, `tests/test_session_mcp.py`, and the ACP
+wire tests pin workspace rooting/escape/isolation, stdio validation, atomic
+publication/rollback, collisions, and close/EOF ownership.
 `tests/test_correlated_turns.py` pins the consumed Core Port's normal, matching
 active cancel, pending-cancel isolation, failure, and shutdown settlement.
 

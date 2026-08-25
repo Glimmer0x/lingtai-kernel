@@ -9,12 +9,16 @@ related_files:
   - src/lingtai/cli_acp.py
   - src/lingtai/cli.py
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/execution_workspace.py
+  - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_acp_stdio.py
   - tests/test_correlated_turns.py
+  - tests/test_execution_workspace.py
+  - tests/test_session_mcp.py
   - tests/test_process_match.py
   - tests/test_lifecycle_daemon_shutdown.py
   - tests/test_lingtai_facade.py
@@ -35,7 +39,8 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 ## Components
 
 - `server.py` — `AcpStdioServer`: strict newline-delimited JSON-RPC reader,
-  ACP initialize/session state machine, Text/ResourceLink translation, one prompt
+  ACP initialize/session state machine, canonical workspace, strict stdio MCP
+  validation/lease ownership, Text/ResourceLink translation, one prompt
   waiter thread so the reader remains available for cancel, and one bounded FIFO
   of atomic batches consumed only by a disposable daemon writer. Generation/start
   checks suppress not-yet-started prompt frames; framing/write failures abort the
@@ -51,9 +56,12 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   reaches the unconditional process exit.
 - `../../kernel/process_match.py` — exact duplicate-host grammar for module,
   console, legacy, and quoted Windows `.exe` ACP launch forms.
-- `../../kernel/turns.py` — inward Core boundary consumed by the Adapter:
+- `../../kernel/turns.py` and `../../kernel/execution_workspace.py` — inward Core boundary consumed by the Adapter:
   `TurnHandle`, `TurnResult`, terminal outcome, exact correlation, and matching
-  cooperative cancellation. It contains no ACP vocabulary.
+  cooperative cancellation, immutable workspace metadata, and task-local scope.
+  They contain no ACP vocabulary.
+- `../../services/session_mcp.py` — atomic outer stdio overlay: start/list all,
+  collision preflight, one publication, explicit lease, and rollback/close.
 - `tests/test_acp_stdio.py` / `tests/test_correlated_turns.py` /
   `tests/test_process_match.py` — wire, Core settlement, and duplicate-host
   conformance evidence. `tests/test_tools_package_data.py` pins wheel/sdist
@@ -73,11 +81,12 @@ Parent: [`src/lingtai/`](../../ANATOMY.md). Neighbor adapters remain under
 `src/lingtai/adapters/`; this child is technology-specific at the ACP boundary,
 while Core correlation lives under `kernel/`. There is no ACP SDK dependency,
 selector, remote adapter, session store, workspace service, permission broker,
-or MCP bridge in this slice.
+or remote MCP bridge in this slice.
 
 ## State
 
-Process-local state only: initialized flag, one opaque session id, one active
+Process-local state only: initialized flag, one opaque session id, one canonical
+workspace, one session-MCP lease, one active
 prompt/handle, closing/aborted generation, a bounded 64-batch FIFO, one disposable
 daemon writer, and short-lived waiter thread records. Active/busy ownership lasts
 through physical terminal-batch completion, close invalidation, or fatal abort.
@@ -89,8 +98,8 @@ Agent stop retains services/heartbeat/lease until execution quiescence is proven
 ## Notes
 
 The stable ACP v1 schema supports broader content and session integrations than
-this deliberately narrow first slice. Empty `mcpServers` plus baseline Text and
-ResourceLink prompts are accepted; non-empty session MCP and capability-gated
-rich content fail explicitly. Capability objects stay empty so omitted optional
+this deliberately narrow slice. Empty or strict stable-v1 stdio `mcpServers`
+plus baseline Text and ResourceLink prompts are accepted; remote MCP and
+capability-gated rich content fail explicitly. Capability objects stay empty so omitted optional
 features are never advertised. Follow the manual and Contract before widening
 scope.

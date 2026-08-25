@@ -40,6 +40,7 @@ from .tool_result_summary import (
     maybe_summarize_result as _maybe_summarize_result,
 )
 from .tool_timing import ToolTimer
+from .execution_workspace import copy_execution_context
 from .types import UnknownToolError
 
 
@@ -1560,7 +1561,10 @@ class ToolExecutor:
         pool = ThreadPoolExecutor(max_workers=len(to_execute))
         try:
             futures = {
-                pool.submit(_run_one, i, tc, args, trace_id, verdict, decision, proposal): i
+                pool.submit(
+                    copy_execution_context().run,
+                    _run_one, i, tc, args, trace_id, verdict, decision, proposal,
+                ): i
                 for i, tc, args, trace_id, verdict, decision, proposal in to_execute
             }
             for future in as_completed(futures, timeout=300.0):

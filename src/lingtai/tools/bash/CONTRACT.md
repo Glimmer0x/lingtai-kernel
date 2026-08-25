@@ -4,6 +4,7 @@ tool: shell
 contract_version: 6
 related_files:
   - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
@@ -30,6 +31,7 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/manual/SKILL.md
   - tests/test_shell_tool_plugin_declaration.py
+  - tests/test_execution_workspace.py
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/shell_prompt_events.py
   - src/lingtai/tools/daemon/CONTRACT.md
@@ -127,7 +129,8 @@ same way with `error_code: "ACTION_REQUIRED"` and the message
 Following the strict-schema convention, optional run fields are declared
 REQUIRED but nullable: `null` means *absent* and is dropped before delegation,
 so `ShellManager` applies its own unchanged runtime defaults (`timeout` 30,
-`working_dir` = the agent sandbox, `async` false, `reminder` 1800). Only
+`working_dir` = the active execution workspace when bound, otherwise the agent
+sandbox; `async` false, `reminder` 1800). Only
 `command` is genuinely required and non-nullable. A falsy-but-present value
 (`timeout: 0`, `async: false`, `working_dir: ""`) is passed through verbatim.
 The sync `timeout` has a hard ceiling, `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`
@@ -407,8 +410,9 @@ those Ports.
   conservatively `running`/uncancellable; after that PID is gone, its explicit
   unknown terminal response is one-shot via a legacy consumption marker and never
   invents `-1` or a false `command_status: failed`.
-- The `working_dir` sandbox check resolves both the requested cwd and the agent
-  working directory and accepts the cwd only when it equals the sandbox or is
+- The `working_dir` sandbox check resolves both the requested cwd and the active
+  execution workspace (falling back to the agent working directory) and accepts
+  the cwd only when it equals the sandbox or is
   nested under it, using the live platform separator `os.sep` as the boundary
   (`resolved == sandbox or resolved.startswith(sandbox + os.sep)`). The
   separator is read at call time so `Path.resolve()`'s platform-native output —

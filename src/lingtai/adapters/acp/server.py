@@ -11,6 +11,8 @@ from typing import Any, TextIO
 from uuid import uuid4
 
 from lingtai.kernel.turns import TurnHandle, TurnOutcome
+from lingtai.kernel.execution_workspace import ExecutionWorkspace
+from lingtai.services.session_mcp import StdioMCPServerConfig
 
 
 JSONRPC_VERSION = "2.0"
@@ -81,6 +83,9 @@ class AcpStdioServer:
         self._state_lock = threading.RLock()
         self._initialized = False
         self._session_id: str | None = None
+        self._session_pending = False
+        self._execution_workspace: ExecutionWorkspace | None = None
+        self._session_mcp_lease = None
         self._active: _ActivePrompt | None = None
         self._closing = False
         self._aborted = False
@@ -173,6 +178,10 @@ class AcpStdioServer:
             self._active = None
         if active is not None:
             active.handle.cancel()
+        lease = self._session_mcp_lease
+        self._session_mcp_lease = None
+        if lease is not None:
+            lease.close()
 
     def _abort_transport(self) -> None:
         """Fail every queued batch closed after a fatal framing/write failure."""
@@ -187,6 +196,10 @@ class AcpStdioServer:
             self._active = None
         if active is not None:
             active.handle.cancel()
+        lease = self._session_mcp_lease
+        self._session_mcp_lease = None
+        if lease is not None:
+            lease.close()
 
     def _dispatch(self, message: Any) -> None:
         if not isinstance(message, dict):
@@ -277,27 +290,113 @@ class AcpStdioServer:
         if not initialized:
             raise _RpcError(SERVER_NOT_INITIALIZED, "server is not initialized")
 
+    @staticmethod
+    def _stdio_mcp_configs(value: Any) -> tuple[StdioMCPServerConfig, ...]:
+        if not isinstance(value, list):
+            raise _RpcError(INVALID_PARAMS, "mcpServers must be an array")
+        configs: list[StdioMCPServerConfig] = []
+        names: set[str] = set()
+        for item in value:
+            if not isinstance(item, dict):
+                raise _RpcError(INVALID_PARAMS, "mcpServers entries must be objects")
+            if "type" in item:
+                raise _RpcError(INVALID_PARAMS, "only stdio MCP servers are supported")
+            if set(item) - {"name", "command", "args", "env", "_meta"}:
+                raise _RpcError(INVALID_PARAMS, "unknown stdio MCP server field")
+            name = item.get("name")
+            command = item.get("command")
+            args = item.get("args")
+            env = item.get("env")
+            meta = item.get("_meta")
+            if not isinstance(name, str) or not name:
+                raise _RpcError(INVALID_PARAMS, "MCP server name must be non-empty")
+            if name in names:
+                raise _RpcError(INVALID_PARAMS, "duplicate MCP server name")
+            if (
+                not isinstance(command, str)
+                or not command
+                or not Path(command).is_absolute()
+            ):
+                raise _RpcError(INVALID_PARAMS, "MCP command must be an absolute path")
+            if not isinstance(args, list) or not all(isinstance(v, str) for v in args):
+                raise _RpcError(INVALID_PARAMS, "MCP args must be an array of strings")
+            if not isinstance(env, list):
+                raise _RpcError(INVALID_PARAMS, "MCP env must be an array")
+            if meta is not None and not isinstance(meta, dict):
+                raise _RpcError(INVALID_PARAMS, "MCP _meta must be an object or null")
+            env_pairs: list[tuple[str, str]] = []
+            env_names: set[str] = set()
+            for variable in env:
+                if not isinstance(variable, dict) or set(variable) - {"name", "value", "_meta"}:
+                    raise _RpcError(INVALID_PARAMS, "MCP env entries must be name/value objects")
+                key = variable.get("name")
+                val = variable.get("value")
+                var_meta = variable.get("_meta")
+                if not isinstance(key, str) or not key or not isinstance(val, str):
+                    raise _RpcError(INVALID_PARAMS, "MCP env names/values must be strings")
+                if key in env_names:
+                    raise _RpcError(INVALID_PARAMS, "duplicate MCP environment name")
+                if var_meta is not None and not isinstance(var_meta, dict):
+                    raise _RpcError(INVALID_PARAMS, "MCP env _meta must be an object or null")
+                env_names.add(key)
+                env_pairs.append((key, val))
+            names.add(name)
+            configs.append(StdioMCPServerConfig(name, command, tuple(args), tuple(env_pairs)))
+        return tuple(configs)
+
     def _new_session(self, params: Any) -> dict[str, str]:
         params = self._params_object(params)
         cwd = params.get("cwd")
         mcp_servers = params.get("mcpServers")
         if not isinstance(cwd, str) or not cwd or not Path(cwd).is_absolute():
             raise _RpcError(INVALID_PARAMS, "cwd must be an absolute path")
-        if not isinstance(mcp_servers, list):
-            raise _RpcError(INVALID_PARAMS, "mcpServers must be an array")
-        if mcp_servers:
+        try:
+            resolved_cwd = Path(cwd).resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise _RpcError(INVALID_PARAMS, "cwd must exist") from exc
+        if not resolved_cwd.is_dir():
+            raise _RpcError(INVALID_PARAMS, "cwd must be a directory")
+        configs = self._stdio_mcp_configs(mcp_servers)
+        additional_directories = params.get("additionalDirectories")
+        if additional_directories not in (None, []):
             raise _RpcError(
                 UNSUPPORTED,
-                "session-scoped MCP servers are not supported by this adapter",
+                "additionalDirectories are not supported by this local adapter",
             )
         with self._state_lock:
-            if self._session_id is not None:
+            if self._closing:
+                raise _RpcError(UNSUPPORTED, "adapter is closing")
+            if self._session_id is not None or self._session_pending:
                 raise _RpcError(
                     UNSUPPORTED,
                     "this local adapter supports one session per process",
                 )
-            self._session_id = f"session_{uuid4().hex}"
-            return {"sessionId": self._session_id}
+            self._session_pending = True
+
+        lease = None
+        try:
+            try:
+                lease = self._agent.mount_session_mcp_stdio(configs) if configs else None
+            except ValueError as exc:
+                raise _RpcError(INVALID_PARAMS, str(exc)) from exc
+            except Exception as exc:
+                raise _RpcError(INTERNAL_ERROR, "session MCP startup failed") from exc
+
+            workspace = ExecutionWorkspace(resolved_cwd)
+            with self._state_lock:
+                if self._closing:
+                    raise _RpcError(UNSUPPORTED, "adapter is closing")
+                self._execution_workspace = workspace
+                self._session_mcp_lease = lease
+                self._session_id = f"session_{uuid4().hex}"
+                return {"sessionId": self._session_id}
+        except Exception:
+            if lease is not None:
+                lease.close()
+            raise
+        finally:
+            with self._state_lock:
+                self._session_pending = False
 
     def _validate_session(self, params: dict[str, Any]) -> str:
         session_id = params.get("sessionId")
@@ -394,6 +493,7 @@ class AcpStdioServer:
                     content,
                     sender="user",
                     correlation_id=f"acp_{uuid4().hex}",
+                    execution_workspace=self._execution_workspace,
                 )
             except (TypeError, ValueError) as exc:
                 raise _RpcError(INVALID_PARAMS, str(exc)) from exc

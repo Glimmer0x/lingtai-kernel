@@ -6,6 +6,7 @@ import json
 import queue
 import threading
 import time
+import sys
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,11 +43,12 @@ class _Agent:
         self.submissions: list[dict] = []
         self._shutdown = threading.Event()
 
-    def submit_turn(self, content, *, sender, correlation_id):
+    def submit_turn(self, content, *, sender, correlation_id, execution_workspace=None):
         self.submissions.append({
             "content": content,
             "sender": sender,
             "correlation_id": correlation_id,
+            "execution_workspace": execution_workspace,
         })
         self.handle.correlation_id = correlation_id
         return self.handle
@@ -90,6 +92,159 @@ def _open_session(server, output):
         "authMethods": [],
     }
     return messages[1]["result"]["sessionId"]
+
+
+class _Lease:
+    def __init__(self):
+        self.closed = 0
+
+    def close(self):
+        self.closed += 1
+
+
+class _SessionMcpAgent(_Agent):
+    def __init__(self, handle):
+        super().__init__(handle)
+        self.configs = None
+        self.lease = _Lease()
+
+    def mount_session_mcp_stdio(self, configs):
+        self.configs = configs
+        return self.lease
+
+
+def test_session_new_canonicalizes_existing_directory_and_mounts_stdio_mcp(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(workspace, target_is_directory=True)
+    agent = _SessionMcpAgent(_Handle("placeholder"))
+    agent._working_dir = tmp_path / "agent-identity"
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    _request(server, 1, "initialize", {"protocolVersion": 1})
+    _request(server, 2, "session/new", {
+        "cwd": str(alias),
+        "mcpServers": [{
+            "name": "demo",
+            "command": sys.executable,
+            "args": ["-m", "demo"],
+            "env": [{"name": "TOKEN", "value": "value"}],
+        }],
+    })
+    session_id = _wait_for(output, 2)[1]["result"]["sessionId"]
+    assert agent.configs[0].name == "demo"
+    assert agent.configs[0].env == (("TOKEN", "value"),)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "go"}],
+    })
+    assert agent.submissions[0]["execution_workspace"].root == workspace.resolve()
+    assert agent._working_dir == tmp_path / "agent-identity"
+    server.close()
+    server.close()
+    assert agent.lease.closed == 1
+
+
+@pytest.mark.parametrize("cwd,mcp_servers", [
+    ("missing", []),
+    (None, []),
+    ("valid", [{"type": "http", "name": "x", "url": "https://example"}]),
+    ("valid", [{"name": "x", "command": "relative", "args": [], "env": []}]),
+    ("valid", [{"name": "x", "command": "/bin/x", "args": [1], "env": []}]),
+    ("valid", [{"name": "x", "command": "/bin/x", "args": [], "env": {}}]),
+    ("valid", [
+        {"name": "x", "command": "/bin/x", "args": [], "env": []},
+        {"name": "x", "command": "/bin/y", "args": [], "env": []},
+    ]),
+])
+def test_session_new_rejects_malformed_workspace_and_mcp(tmp_path, cwd, mcp_servers):
+    valid = tmp_path / "valid"
+    valid.mkdir()
+    raw_cwd = str(valid) if cwd == "valid" else (
+        str(tmp_path / "missing") if cwd == "missing" else cwd
+    )
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(_Handle("x")), io.StringIO(), output)
+    _request(server, 1, "initialize", {"protocolVersion": 1})
+    _request(server, 2, "session/new", {"cwd": raw_cwd, "mcpServers": mcp_servers})
+    assert _wait_for(output, 2)[1]["error"]["code"] == -32602
+
+
+def test_close_during_session_mcp_start_returns_and_late_lease_is_closed(tmp_path):
+    class _BlockingAgent(_SessionMcpAgent):
+        def __init__(self, handle):
+            super().__init__(handle)
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def mount_session_mcp_stdio(self, configs):
+            self.configs = configs
+            self.started.set()
+            assert self.release.wait(timeout=5)
+            return self.lease
+
+    agent = _BlockingAgent(_Handle("x"))
+    server = AcpStdioServer(agent, io.StringIO(), io.StringIO())
+    errors = []
+
+    def create_session():
+        try:
+            server._new_session({
+                "cwd": str(tmp_path),
+                "mcpServers": [{
+                    "name": "demo",
+                    "command": sys.executable,
+                    "args": [],
+                    "env": [],
+                }],
+            })
+        except Exception as exc:  # private RPC error asserted structurally
+            errors.append(exc)
+
+    worker = threading.Thread(target=create_session)
+    worker.start()
+    assert agent.started.wait(timeout=5)
+    started = time.monotonic()
+    server.close()
+    assert time.monotonic() - started < 0.5
+    agent.release.set()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert getattr(errors[0], "code", None) == -32004
+    assert agent.lease.closed == 1
+    assert server._session_id is None
+    assert server._session_mcp_lease is None
+
+
+def test_session_new_rejects_nonempty_additional_directories(tmp_path):
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(_Handle("x")), io.StringIO(), output)
+    _request(server, 1, "initialize", {"protocolVersion": 1})
+    _request(server, 2, "session/new", {
+        "cwd": str(tmp_path),
+        "mcpServers": [],
+        "additionalDirectories": [str(tmp_path / "extra")],
+    })
+    assert _wait_for(output, 2)[1]["error"]["code"] == -32004
+
+
+
+def test_eof_closes_session_mcp_lease(tmp_path):
+    agent = _SessionMcpAgent(_Handle("x"))
+    frames = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}},
+        {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {
+            "cwd": str(tmp_path),
+            "mcpServers": [{"name": "x", "command": sys.executable, "args": [], "env": []}],
+        }},
+    ]
+    input_stream = io.StringIO("".join(json.dumps(frame) + "\n" for frame in frames))
+    server = AcpStdioServer(agent, input_stream, io.StringIO())
+    server.serve()
+    assert agent.lease.closed == 1
 
 
 def test_acp_normal_turn_emits_one_message_update_then_end_turn():

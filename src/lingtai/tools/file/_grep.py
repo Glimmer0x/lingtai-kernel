@@ -30,11 +30,11 @@ def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
         pattern = args.get("pattern", "")
         if not pattern:
             return {"status": "error", "message": "pattern is required"}
-        search_path = args.get("path", str(workdir.path))
-        search_path = resolve_workdir_path(workdir.path, search_path)
+        search_path = args.get("path", ".")
         max_matches = args.get("max_matches", 200)
         glob_filter = args.get("glob", "*")
         try:
+            search_path = resolve_workdir_path(workdir.path, search_path)
             # Push the glob filter into the service so excluded files are
             # pruned *before* stat / read, instead of scanning every file
             # under the search root and post-filtering the matches. ``"*"``

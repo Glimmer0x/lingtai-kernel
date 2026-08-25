@@ -126,11 +126,11 @@ def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
         path = args.get("file_path", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}
-        path = resolve_workdir_path(workdir.path, path)
         offset = args.get("offset", 1)
         limit = args.get("limit", 2000)
         max_chars = args.get("max_chars")
         try:
+            path = resolve_workdir_path(workdir.path, path)
             content = file_io.read(path)
         except FileNotFoundError:
             # Spill-aware messaging: if the missing file is under
