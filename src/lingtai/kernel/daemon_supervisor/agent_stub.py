@@ -61,5 +61,18 @@ class DaemonSupervisorAgentStub:
         if self._log_fn is not None:
             self._log_fn(event_type, **fields)
 
+    def _enqueue_system_notification(self, **_kwargs) -> None:
+        """Refuse the live-Agent notification route from detached composition.
+
+        This stand-in deliberately owns neither the parent Agent's notification
+        store nor its identity.  The detached supervisor publishes terminal
+        daemon receipts through its own daemon-channel publisher; callers that
+        request a live-Agent system notification must receive a truthful failure
+        rather than a false acknowledgement.
+        """
+        raise RuntimeError(
+            "daemon supervisor host cannot publish live-Agent system notifications"
+        )
+
 
 __all__ = ["DaemonSupervisorAgentStub"]

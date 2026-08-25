@@ -140,6 +140,22 @@ def _spawn_lingtai_supervisor(run_dir: DaemonRunDir, *, task="say hi", timeout_s
     return proc
 
 
+def test_detached_shell_plugin_setup_does_not_require_live_agent_notification_route(tmp_path):
+    """The detached host can bind Shell without becoming a second Agent."""
+    from lingtai.kernel.daemon_supervisor.agent_stub import DaemonSupervisorAgentStub
+    from lingtai.tools.daemon import _ToolCollector
+    from lingtai.tools.registry import setup_capability
+
+    stub = DaemonSupervisorAgentStub(tmp_path)
+    collector = _ToolCollector(stub)
+    setup_capability(collector, "shell")
+
+    assert "shell" in collector.schemas
+    assert "shell" in collector.handlers
+    with pytest.raises(RuntimeError, match="cannot publish live-Agent system notifications"):
+        stub._enqueue_system_notification(source="daemon", ref_id="em-test", body="test")
+
+
 def test_supervisor_terminal_store_error_records_typed_retryable_evidence(tmp_path, monkeypatch):
     from lingtai.tools.daemon import supervisor_runtime
 
