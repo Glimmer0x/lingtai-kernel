@@ -63,8 +63,8 @@ therefore prohibited while ACP owns the transport.
 
 ## Port
 
-The Adapter consumes `BaseAgent.submit_turn(content, sender, correlation_id) ->
-TurnHandle` and `TurnHandle.cancel()/result()` from
+The Adapter consumes `BaseAgent.submit_turn(content, sender, correlation_id,
+execution_workspace) -> TurnHandle` and `TurnHandle.cancel()/result()` from
 `src/lingtai/kernel/turns.py`. The terminal `TurnResult` distinguishes
 `normal`, `cancelled`, and `failed` and carries the complete response text for
 normal settlement. This Port contains no ACP method, JSON-RPC object, session
