@@ -114,6 +114,11 @@ class DaemonRunDir:
     DATA_VERSION = 1
     PENDING_LAUNCH_LEASE_S = 5.0
     _TERMINAL_STATES = frozenset({"done", "failed", "cancelled", "timeout"})
+    # Shell async publications are admitted only while this bounded queue has
+    # room. Ref history retains retry/dedupe evidence without making daemon.json
+    # grow with every job a long-lived daemon starts.
+    _MAX_PENDING_SHELL_PROMPT_EVENTS = 16
+    _MAX_SHELL_PROMPT_EVENT_REFS = 128
 
     def __init__(
         self,
@@ -213,6 +218,8 @@ class DaemonRunDir:
             "terminal_notification_claim": None,
             "terminal_notification_receipt": None,
             "pending_followups": [],
+            "pending_shell_prompt_events": [],
+            "delivered_shell_prompt_event_refs": [],
             "checkpoint_sequence": 0,
             "latest_checkpoint": None,
             "pending_checkpoint_messages": [],
@@ -687,6 +694,117 @@ class DaemonRunDir:
             self._state["pending_followups"] = []
             self._persist_daemon_state()
         return "\n\n".join(messages) or None
+
+    def enqueue_shell_prompt_event(
+        self, *, kind: str, ref_id: str, job_id: str,
+        exit_status_known: bool | None = None, exit_code: int | None = None,
+    ) -> bool:
+        """Durably enqueue one bounded, ref-deduplicated detached Shell event.
+
+        A ``False`` result is intentionally a failed publication acknowledgement:
+        Shell keeps its existing durable reminder/completion claim retryable.  A
+        duplicate stable ref returns ``True`` because its earlier durable event
+        is still authoritative.  No process output is accepted or persisted.
+        """
+        import re
+
+        if kind not in {"shell_reminder", "shell_completion"}:
+            return False
+        if not isinstance(ref_id, str) or len(ref_id) > 128:
+            return False
+        if not isinstance(job_id, str) or not re.fullmatch(r"job-[0-9a-f]{32}", job_id):
+            return False
+        prefix = "bash.reminder:" if kind == "shell_reminder" else "bash.completion:"
+        if ref_id != f"{prefix}{job_id}":
+            return False
+        if kind == "shell_completion":
+            if type(exit_status_known) is not bool:
+                return False
+            if exit_status_known:
+                if type(exit_code) is not int:
+                    return False
+            elif exit_code is not None:
+                return False
+        elif exit_status_known is not None or exit_code is not None:
+            return False
+
+        try:
+            with self._state_transaction():
+                if self._state.get("state") not in {"running", "active"}:
+                    return False
+                queue = self._state.get("pending_shell_prompt_events")
+                if not isinstance(queue, list):
+                    queue = []
+                    self._state["pending_shell_prompt_events"] = queue
+                delivered = self._state.get("delivered_shell_prompt_event_refs")
+                if not isinstance(delivered, list):
+                    delivered = []
+                    self._state["delivered_shell_prompt_event_refs"] = delivered
+                known_refs = {
+                    item.get("ref_id") for item in queue
+                    if isinstance(item, dict) and isinstance(item.get("ref_id"), str)
+                }
+                known_refs.update(ref for ref in delivered if isinstance(ref, str))
+                if ref_id in known_refs:
+                    return True
+                if len(queue) >= self._MAX_PENDING_SHELL_PROMPT_EVENTS:
+                    return False
+                event = {
+                    "kind": kind,
+                    "ref_id": ref_id,
+                    "job_id": job_id,
+                    "queued_at": self._now_iso(),
+                }
+                if kind == "shell_completion":
+                    event["exit_status_known"] = exit_status_known
+                    event["exit_code"] = exit_code
+                queue.append(event)
+                self._persist_daemon_state()
+                self._append_jsonl(
+                    self.events_path,
+                    {"event": "shell_prompt_event_queued", **event},
+                )
+                self.heartbeat_path.touch()
+                return True
+        except (OSError, ValueError, TypeError):
+            return False
+
+    def drain_shell_prompt_events(self, *, limit: int = 1) -> list[dict]:
+        """Record delivery and consume up to ``limit`` Shell events atomically.
+
+        Callers invoke this only immediately before a legal provider send with
+        no pending assistant tool-call pair.  Recording delivery before that
+        send is the durable crash boundary: a stopped/terminal daemon is never
+        resurrected merely to replay a Shell publication.
+        """
+        if type(limit) is not int or limit < 1:
+            raise ValueError("shell prompt event drain limit must be a positive integer")
+        with self._state_transaction():
+            if self._state.get("state") not in {"running", "active"}:
+                return []
+            queue = self._state.get("pending_shell_prompt_events")
+            if not isinstance(queue, list) or not queue:
+                return []
+            events = [item for item in queue[:limit] if isinstance(item, dict)]
+            self._state["pending_shell_prompt_events"] = queue[len(events):]
+            delivered = self._state.get("delivered_shell_prompt_event_refs")
+            if not isinstance(delivered, list):
+                delivered = []
+            delivered.extend(
+                event["ref_id"] for event in events
+                if isinstance(event.get("ref_id"), str)
+            )
+            self._state["delivered_shell_prompt_event_refs"] = delivered[
+                -self._MAX_SHELL_PROMPT_EVENT_REFS:
+            ]
+            self._persist_daemon_state()
+            for event in events:
+                self._append_jsonl(
+                    self.events_path,
+                    {"event": "shell_prompt_event_delivered", **event},
+                )
+            self.heartbeat_path.touch()
+            return [dict(event) for event in events]
 
     def enqueue_checkpoint_message(self, message: str) -> str | None:
         """Queue one ID-bound parent message for the worker's next checkpoint."""

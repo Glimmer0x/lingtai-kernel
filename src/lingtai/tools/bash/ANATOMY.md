@@ -43,6 +43,11 @@ related_files:
   - src/lingtai/tools/bash/manual/reference/notification-reminders/SKILL.md
   - src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
   - src/lingtai/tools/bash/powershell_policy.json
+  - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/tools/daemon/shell_prompt_events.py
+  - tests/test_daemon_shell_prompt_events.py
+  - tests/test_daemon_detached_supervisor.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -72,6 +77,7 @@ be explicitly opted into.
 - `adapters/windows/powershell.py`, `powershell_process.py`, and `powershell_state_lock.py` — PowerShell 7 dialect (ASCII-only cmdline + UTF-8 stdin bootstrap), Job Object process-tree ownership, and native cross-process byte-range locking.
 - `adapters/windows/gitbash.py` — Git Bash (Git for Windows) fallback dialect with an explicit `bash -lc` spawn form and a WSL-launcher-rejecting `discover_git_bash`; see the Git Bash / MSYS pitfall list (path mangling, `/c/...` translation, `usr\bin` PATH prepend, login-shell coreutils gap, ASLR spawn-failure retry class, WSL-bash ambiguity) in the Notes of `adapters/windows/ANATOMY.md`.
 - `bash/_async_supervisor.py` — private detached policy runner that selects the same Ports, claims leases, delegates spawn/wait, and atomically persists terminal truth.
+- `tools/daemon/execution_host.py` + `tools/daemon/shell_prompt_events.py` — the sole detached-daemon composition branch. When selected `shell` is reconstructed under `DetachedDaemonExecutionHost`, its private `_setup_detached_daemon_shell()` composer supplies a run-local `DaemonShellPromptEventAdapter` as the existing `notifications` grant and `<run>/shell-jobs` as its async state namespace; command cwd stays the granted parent task workdir. Activation/rehydration therefore cannot inspect or claim `<parent>/system/jobs`. Its two Shell publications enqueue bounded, ref-deduplicated RunDir prompt events instead of using the supervisor stub, Agent store, or `.notification`; a queue-full `False` is reconciled in the live detached manager with capped backoff. The retained Shell manager/supervisor still owns async job state and poll/cancel.
 - `bash/_output_hygiene.py` — output hygiene at the shell-tool boundary. Small dependency-free helpers applied before output is returned, stripping ANSI/CSI color and cursor sequences, C0/C1 control bytes (bell, backspace, OSC title sequences, DEL), and shell-startup noise lines (`bash: no job control in this shell`, `tcsetattr: ...`) that would otherwise pollute tool results, waste context, and confuse plain-text parsers.
 - `bash/powershell_policy.json` — the PowerShell-dialect counterpart to `bash_policy.json`, denying the cmdlet/alias spellings of the same classes (`Remove-Item`/`ri`/`rm`/`del`, `Format-Volume`/`Clear-Disk`, `Stop-Computer`/`Stop-Process`, `Invoke-Expression`/`iex`, `Set-Acl`/`icacls`/`takeown`, `Invoke-WebRequest`/`iwr`, `Set-ExecutionPolicy`, `reg`/`sc`).
 - `bash/bash_policy.json` — default denylist policy shipped with the kernel. Denies destructive (`rm`, `rmdir`, `shred`, `dd`), privilege escalation (`sudo`, `su`, `doas`), permission changes (`chmod`, `chown`, `chgrp`), disk management (`mount`, `umount`, `mkfs`, `fdisk`), package managers (`apt`, `apt-get`, `yum`, `dnf`, `brew`), process control (`kill`, `killall`, `pkill`, `shutdown`, `reboot`, `systemctl`), network (`nc`, `ncat`), and code execution (`eval`, `exec`).

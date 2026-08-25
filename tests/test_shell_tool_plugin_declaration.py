@@ -60,6 +60,40 @@ def test_shell_declaration_is_static_and_derives_its_shipped_surface():
     assert get_schema()["properties"]["action"]["enum"] == list(DECLARATION.public_actions)
 
 
+def test_normal_shell_setup_and_manifest_reject_detached_only_overrides(tmp_path):
+    """Normal capability configuration cannot replace Shell's notification destination."""
+    from lingtai.tools.bash import setup as setup_shell
+    from lingtai.tools.registry import setup_capability
+
+    ordinary = Agent(
+        service=make_gemini_mock_service(), working_dir=tmp_path / "ordinary", capabilities={},
+    )
+    try:
+        # Shell is an ordinary Agent default. Both rejected calls leave that
+        # existing normal-Agent destination and handoff untouched.
+        ordinary_manager = ordinary._tool_handlers["shell"].__self__.manager
+        ordinary_notifications = ordinary_manager._notifications
+        with pytest.raises(RuntimeError, match="notification_port"):
+            setup_shell(ordinary, notification_port="not-a-port")
+        with pytest.raises(RuntimeError, match="async_handoff"):
+            setup_capability(ordinary, "shell", async_handoff="not-a-daemon-handoff")
+        assert ordinary._tool_handlers["shell"].__self__.manager is ordinary_manager
+        assert ordinary_manager._notifications is ordinary_notifications
+        assert "wake you as a notification" in ordinary_manager._async_handoff
+    finally:
+        ordinary.stop(timeout=1.0)
+
+    # Agent manifests flow capability kwargs through the same public setup
+    # surface, so detached-only values cannot install a poisoned normal binding.
+    with pytest.raises(RuntimeError, match="async_handoff.*notification_port"):
+        Agent(
+            service=make_gemini_mock_service(), working_dir=tmp_path / "manifest",
+            capabilities={"shell": {
+                "notification_port": "not-a-port", "async_handoff": "not-a-daemon-handoff",
+            }},
+        )
+
+
 def test_shell_bind_uses_only_its_narrow_ports_and_defers_rehydration(shell_agent, monkeypatch):
     from lingtai.adapters.tool_plugin_host import (
         StaticConfigurationAdapter,
@@ -130,6 +164,7 @@ def test_official_shell_async_run_and_poll_keep_durable_engine_semantics(shell_a
         "reasoning": "verify official Shell async supervision",
     })
     assert started["status"] == "ok"
+    assert "wake you as a notification" in started["handoff"]
     job_id = started["job_id"]
 
     deadline = time.monotonic() + 10

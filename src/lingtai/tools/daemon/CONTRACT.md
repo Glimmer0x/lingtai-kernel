@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 12
-last_changed_at: "2026-08-24"
+contract_version: 13
+last_changed_at: "2026-08-25"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
@@ -39,6 +39,10 @@ related_files:
   - src/lingtai/tools/daemon/posix_process.py
   - src/lingtai/tools/daemon/windows_process.py
   - src/lingtai/tools/daemon/run_dir.py
+  - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/tools/daemon/shell_prompt_events.py
+  - src/lingtai/tools/bash/CONTRACT.md
+  - tests/test_daemon_shell_prompt_events.py
   - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/tools/daemon/manual/SKILL.md
   - ENVIRONMENT_VARIABLES.md
@@ -1059,3 +1063,40 @@ python -m pytest tests/test_daemon.py tests/test_daemon_check.py tests/test_daem
   name, or user-visible concept requires reviewing all three glossary files in
   the same PR.
 - **Validation:** `python -m lingtai.tools.glossary_validator --check`.
+
+
+## Detached Shell async prompt events
+
+For a selected `shell` in `DetachedDaemonExecutionHost`, the execution host
+invokes Shell's private detached composer. It constructs
+`DaemonShellPromptEventAdapter(run_dir)`, passes it as Shell's existing
+`notifications` grant, and supplies only `<run>/shell-jobs` as Shell's async
+state namespace. Command cwd remains the granted parent task workdir, but Shell
+creation, activation, rehydration, publication, poll, and cancel cannot observe
+or claim the parent `system/jobs` namespace or another daemon's jobs. Public
+Shell setup and manifest capability configuration cannot select this destination
+or private namespace. This does not create a second Agent or grant a new plugin
+runtime. The adapter accepts only Shell's stable reminder and completion
+publications and calls `DaemonRunDir.enqueue_shell_prompt_event`.
+
+`daemon.json` holds a bounded `pending_shell_prompt_events` queue and bounded
+delivered-ref history. Each event is ref-deduplicated and contains only `kind`,
+`ref_id`, `job_id`, queue timestamp, and completion exit metadata; no command,
+stdout, stderr, preview, or arbitrary publication body is provider-visible. A
+full queue, filesystem failure, or non-running run returns `False` to Shell, so
+its durable publication state stays retryable. In the selected live manager,
+failed reminder publication is re-armed and failed completion publication stays
+watched with capped exponential backoff; draining capacity therefore delivers one
+stable ref exactly once without auto-polling. A successful enqueue (or stable
+duplicate) is its publication acknowledgement. Queued/delivered audit records
+land in the run event log.
+
+`_run_emanation` drains only already-persisted events at a legal text-only
+provider-send boundary after the preceding assistant tool-call pair is complete.
+It records a `shell_completion` or `shell_reminder` history entry and sends fixed
+trusted guidance containing the job id and `call shell.poll for exact output`.
+The loop never auto-polls, reads Shell logs, consumes a terminal Shell result,
+creates a parent wake per job, or waits for a future event. Once this daemon is
+terminal, enqueue fails and no event revives or holds it; the supervisor's
+existing terminal daemon receipt remains the only final parent wake. These events
+are neither `daemon_common` checkpoint traffic nor `.notification` artifacts.

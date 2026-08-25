@@ -137,6 +137,11 @@ class DetachedDaemonExecutionHost:
         from lingtai.tools.registry import BUILTIN_TOOLS, setup_capability
         collector = _ToolCollector(self._agent)
         expanded = DaemonManager._expand_requested_tools(self, manifest.get("tools", []))
+        # Selected detached Shell is mounted through its private composer. It
+        # receives a RunDir-only adapter and a run-private async job namespace;
+        # it never borrows the stub's deliberately absent Agent notification/store
+        # route or the parent workdir's shared system/jobs namespace.
+        self._shell_prompt_event_adapter = None
         if "file" in expanded:
             # The ``file`` family's action handlers dereference the
             # agent-shaped host's injected FileIOService at execution time.
@@ -153,7 +158,14 @@ class DetachedDaemonExecutionHost:
                 root=self._agent._working_dir,
             )
         for name in sorted(expanded):
-            if name in BUILTIN_TOOLS:
+            if name not in BUILTIN_TOOLS:
+                continue
+            if name == "shell":
+                from lingtai.tools.bash import _setup_detached_daemon_shell
+                _, self._shell_prompt_event_adapter = _setup_detached_daemon_shell(
+                    collector, run_dir=run_dir,
+                )
+            else:
                 setup_capability(collector, name)
         self._agent._tool_schemas = list(collector.schemas.values())
         self._agent._tool_handlers = dict(collector.handlers)

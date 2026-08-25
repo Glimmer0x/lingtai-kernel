@@ -1,7 +1,7 @@
 ---
 name: bash-contract
 tool: shell
-contract_version: 5
+contract_version: 6
 related_files:
   - src/lingtai/tools/bash/__init__.py
   - src/lingtai/tools/bash/_tool_family.py
@@ -30,6 +30,11 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/manual/SKILL.md
   - tests/test_shell_tool_plugin_declaration.py
+  - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/tools/daemon/shell_prompt_events.py
+  - src/lingtai/tools/daemon/CONTRACT.md
+  - tests/test_daemon_shell_prompt_events.py
+  - tests/test_daemon_detached_supervisor.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -482,3 +487,40 @@ python -m pytest tests/test_bash_async.py tests/test_bash_async_process_contract
   name, or user-visible concept requires reviewing all three glossary files in
   the same PR.
 - **Validation:** `python -m lingtai.tools.glossary_validator --check`.
+
+
+## Detached daemon Shell notification destination
+
+The static declaration remains exactly `("workdir", "notifications",
+"configuration")`; it adds no daemon-only port or public action. Ordinary Agent
+composition still supplies `AgentNotificationAdapter`, writes the documented
+`.notification/system.json` reminder and `.notification/bash.json` completion,
+and retains its existing handoff wording.
+
+Only `DetachedDaemonExecutionHost` may invoke the private
+`_setup_detached_daemon_shell()` composer for selected detached Shell. Public
+`bash.setup()` and manifest capability configuration cannot supply a
+notification destination, handoff text, or job-state namespace. The private
+composer supplies the already-required `NotificationPort` and a `<run>/shell-jobs`
+namespace; command cwd remains the granted parent task workdir, but creation,
+activation, rehydration, poll, cancel, and publication never observe or claim
+`<parent>/system/jobs` or another run's jobs.
+
+Its `DaemonShellPromptEventAdapter` accepts only `bash.reminder:<job_id>` system
+publishers and `bash.completion:<job_id>` `bash`-channel publishers. It ignores
+all command presentation/output fields and atomically queues only bounded trusted
+metadata in that run's `DaemonRunDir`. A successful new or duplicate-ref queue
+acknowledges Shell's existing publication claim. A full, failed, or terminal-run
+enqueue returns `False`; the selected live manager re-arms reminders and retains
+completion watching with capped exponential backoff until its stable ref is
+acknowledged or terminal suppression wins, so a later queue drain delivers it
+exactly once. This route never invokes the detached stub's
+`_enqueue_system_notification`, a live Agent/store, mailbox, heartbeat, or
+`.notification/*` file.
+
+The daemon worker may drain an already-queued event only immediately before a
+provider send with no pending assistant tool-call pair. Its fixed guidance names
+the job id and says to call `shell.poll` for exact output; it never auto-polls or
+consumes the one-shot terminal Shell result. Events do not wake a parent, create
+a daemon terminal receipt, wait for a job, hold a daemon open, or resurrect a
+terminal daemon. The daemon contract/manual own those lifecycle limits.
