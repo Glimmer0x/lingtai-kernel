@@ -20,6 +20,9 @@ related_files:
   - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/tools/daemon/shell_prompt_events.py
+  - tests/test_daemon_shell_prompt_events.py
   - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/__init__.py
@@ -106,6 +109,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
 ## Components
 
+- Detached selected Shell reuses the same declared `notifications` key only through `DetachedDaemonExecutionHost`'s private `bash._setup_detached_daemon_shell()` composer; the registrar's per-declaration extra-port precedence substitutes a RunDir event sink without widening `NotificationPort` or mounting a live Agent capability. Public Shell setup/manifest values cannot reach this override.
 - `src/lingtai/kernel/tool_plugin/__init__.py` — the whole Core. One module,
   because the component is a shape rather than a machine:
   - constants `MANUAL_ACTION`, `GRANTABLE_HOST_PORTS`, and

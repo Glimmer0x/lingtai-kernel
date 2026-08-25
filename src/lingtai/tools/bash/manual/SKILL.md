@@ -17,13 +17,15 @@ description: >
   Goose, OpenHands, and Crush are shell-only harnesses with no LingTai backend
   id. This manual owns only the shell-side supervision discipline (async +
   poll, reminders, scheduling, debugging, cleanup).
-version: 1.10.0
-last_changed_at: 2026-08-07T00:00:00Z
+version: 1.11.0
+last_changed_at: 2026-08-25T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/__init__.py
 - src/lingtai/tools/bash/CONTRACT.md
 - src/lingtai/tools/bash/ANATOMY.md
 - src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
+- src/lingtai/tools/daemon/manual/SKILL.md
+- src/lingtai/tools/daemon/shell_prompt_events.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -210,6 +212,23 @@ reading the whole file when you only need recent events.
   reminder or internal delayed self-email) and yield/idle. Poll again only when
   a completion notification arrives, the reminder fires, or you have a concrete
   reason to expect new state.
+
+### Detached daemon Shell is deliberately different
+
+When a **selected detached LingTai daemon** uses `shell`, it has no live Agent
+notification store, mailbox, heartbeat, or `.notification/system.json` /
+`.notification/bash.json` route. Its async job state is in that run's private
+`<run>/shell-jobs` namespace, never the task workdir's shared `system/jobs`, even
+though command cwd remains the granted task workdir. Its async
+reminder/completion becomes a bounded same-run prompt event only while that
+daemon is still live. A temporarily full event queue is retried by the live
+selected manager with capped backoff after capacity can drain. The event contains
+a job id but **not** command stdout/stderr; at its next safe model-send boundary
+the daemon is told to call `shell.poll` for exact output. It is not a parent wake
+or `daemon_common` checkpoint, does not auto-poll or consume the result, and
+does not keep/restart a terminal daemon. Read `daemon-manual` for the daemon
+lifecycle rule. Ordinary Agent Shell keeps the `.notification` behavior described
+below.
 
 - **Idle care: set an async `input.reminder` that matches the expected duration.**
   Every async run has a last-resort `reminder` delay. It lives only in `run`'s

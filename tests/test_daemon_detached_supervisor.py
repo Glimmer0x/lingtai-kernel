@@ -1096,6 +1096,209 @@ def test_detached_execution_composes_inherited_process_and_terminal_ports(tmp_pa
     assert host._interactive_terminal_port._start_new_session is False
 
 
+
+def test_detached_shell_async_uses_run_local_events_not_agent_notifications(tmp_path):
+    """Actual detached Shell async completion is pollable without an Agent sink."""
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="detached shell async")
+    parent_working_dir = run_dir.path.parent.parent
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(parent_working_dir), run_dir=str(run_dir.path),
+        task="detached shell async", tools=["shell"], max_turns=3, timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    attempted_live_enqueue = []
+
+    def forbidden_live_enqueue(**_kwargs):
+        attempted_live_enqueue.append(True)
+        raise AssertionError("detached Shell must not use the supervisor stub")
+
+    host._agent._enqueue_system_notification = forbidden_live_enqueue
+    assert {schema.name for schema in host._agent._tool_schemas}.issuperset({"shell"})
+    handler = host._agent._tool_handlers["shell"]
+    manager = handler.__self__.manager
+    assert manager._notifications is host._shell_prompt_event_adapter
+
+    started = handler({
+        "action": "run",
+        "input": {
+            "command": "printf detached-shell-output",
+            "timeout": None,
+            "working_dir": None,
+            "async": True,
+            "reminder": 10,
+        },
+        "reasoning": "exercise detached async Shell delivery",
+    })
+    assert started["status"] == "ok", started
+    assert "parent notifications" in started["handoff"]
+    job_id = started["job_id"]
+
+    def completion_event():
+        state = DaemonRunDir.read_state_from_disk(run_dir.path)
+        events = state.get("pending_shell_prompt_events") or []
+        return events[0] if events else None
+
+    event = _poll_until(completion_event, timeout=10.0)
+    assert event["kind"] == "shell_completion"
+    assert event["job_id"] == job_id
+    assert "stdout" not in event
+    assert "detached-shell-output" not in json.dumps(event)
+    job_state = json.loads(
+        (run_dir.path / "shell-jobs" / job_id / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert job_state["cwd"] == str(parent_working_dir)
+    assert not (parent_working_dir / "system" / "jobs" / job_id).exists()
+    assert job_state["terminal_polled"] is False, "delivery must not auto-poll"
+    assert attempted_live_enqueue == []
+    assert not (parent_working_dir / ".notification" / "system.json").exists()
+    assert not (parent_working_dir / ".notification" / "bash.json").exists()
+
+    polled = handler({
+        "action": "poll",
+        "input": {"job_id": job_id},
+        "reasoning": "explicitly inspect exact detached Shell output",
+    })
+    assert polled["stdout"] == "detached-shell-output"
+
+
+def test_detached_shell_jobs_are_run_private_and_never_claim_foreign_parent_jobs(tmp_path):
+    """Two detached Shell managers cannot rehydrate, claim, or expose a parent job."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from lingtai.tools.bash import ShellManager, ShellPolicy
+    from lingtai.tools.bash._async_supervisor import load_state, write_initial_state
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from tests._daemon_helpers import make_daemon_run_dir
+
+    parent = tmp_path / "agent"
+    first_run = make_daemon_run_dir(
+        parent_working_dir=parent, handle="em-shell-first", task="first shell", tools=["shell"],
+    )
+    second_run = make_daemon_run_dir(
+        parent_working_dir=parent, handle="em-shell-second", task="second shell", tools=["shell"],
+    )
+
+    class _ParentNotifications:
+        def __init__(self):
+            self.channels = []
+
+        def publish_system(self, **_kwargs):
+            return True
+
+        def publish_channel(self, channel, payload, *, ref_id):
+            self.channels.append((channel, payload, ref_id))
+            return True
+
+    parent_notifications = _ParentNotifications()
+    parent_manager = ShellManager(
+        ShellPolicy.yolo(), str(parent), notification_port=parent_notifications, rehydrate=False,
+    )
+    foreign_job = "job-" + "f" * 32
+    foreign_dir = parent / "system" / "jobs" / foreign_job
+    foreign_dir.mkdir(parents=True)
+    (foreign_dir / "stdout.log").write_text("FOREIGN-SHELL-SECRET", encoding="utf-8")
+    (foreign_dir / "stderr.log").write_text("", encoding="utf-8")
+    foreign_state = parent_manager._initial_async_state(
+        foreign_job, "printf foreign", str(parent), 60,
+    )
+    foreign_state.update({"status": "completed", "exit_status_known": True, "exit_code": 0})
+    write_initial_state(foreign_dir, foreign_state)
+
+    def manifest_for(run_dir):
+        return build_manifest(
+            run_id=run_dir.run_id, backend="lingtai",
+            parent_working_dir=str(parent), run_dir=str(run_dir.path), task="isolated shell",
+            tools=["shell"], max_turns=3, timeout_s=30, group_id=None,
+            llm={"provider": "fake", "model": "fake", "api_key": None,
+                 "base_url": None, "context_window": None, "provider_defaults": None},
+        )
+
+    first_host = DetachedDaemonExecutionHost(
+        first_run, manifest_for(first_run), Event(), Event(),
+    )
+    second_host = DetachedDaemonExecutionHost(
+        second_run, manifest_for(second_run), Event(), Event(),
+    )
+    first_handler = first_host._agent._tool_handlers["shell"]
+    second_handler = second_host._agent._tool_handlers["shell"]
+    first_manager = first_handler.__self__.manager
+    second_manager = second_handler.__self__.manager
+    assert first_manager._jobs_path() == first_run.path / "shell-jobs"
+    assert second_manager._jobs_path() == second_run.path / "shell-jobs"
+    assert first_manager._jobs_path() != second_manager._jobs_path()
+    assert load_state(foreign_dir)["completion"]["state"] == "pending"
+    assert foreign_job not in json.dumps(first_run.state_snapshot())
+    assert foreign_job not in json.dumps(second_run.state_snapshot())
+    denied = first_handler({
+        "action": "poll", "input": {"job_id": foreign_job},
+        "reasoning": "foreign parent jobs are not in this daemon namespace",
+    })
+    assert denied == {"status": "error", "message": f"Job not found: {foreign_job}"}
+
+    def start(handler, marker):
+        return handler({
+            "action": "run",
+            "input": {
+                "command": f"printf {marker}", "timeout": None, "working_dir": None,
+                "async": True, "reminder": 10,
+            },
+            "reasoning": "prove concurrent detached Shell namespace isolation",
+        })
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_started, second_started = [
+            future.result(timeout=10)
+            for future in (
+                pool.submit(start, first_handler, "first-private-output"),
+                pool.submit(start, second_handler, "second-private-output"),
+            )
+        ]
+    assert first_started["status"] == second_started["status"] == "ok"
+
+    def first_event():
+        events = DaemonRunDir.read_state_from_disk(first_run.path).get("pending_shell_prompt_events") or []
+        return events[0] if events else None
+
+    def second_event():
+        events = DaemonRunDir.read_state_from_disk(second_run.path).get("pending_shell_prompt_events") or []
+        return events[0] if events else None
+
+    assert _poll_until(first_event, timeout=10)["job_id"] == first_started["job_id"]
+    assert _poll_until(second_event, timeout=10)["job_id"] == second_started["job_id"]
+    for run_dir, started in ((first_run, first_started), (second_run, second_started)):
+        state = json.loads(
+            (run_dir.path / "shell-jobs" / started["job_id"] / "state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert state["cwd"] == str(parent), "job state isolation must not change task cwd"
+    assert sorted(path.name for path in (parent / "system" / "jobs").iterdir()) == [foreign_job]
+    daemon_text = "\n".join([
+        first_run.daemon_json_path.read_text(encoding="utf-8"),
+        first_run.events_path.read_text(encoding="utf-8"),
+        second_run.daemon_json_path.read_text(encoding="utf-8"),
+        second_run.events_path.read_text(encoding="utf-8"),
+    ])
+    assert foreign_job not in daemon_text
+    assert "FOREIGN-SHELL-SECRET" not in daemon_text
+
+    # The parent manager still exclusively owns the foreign publication and can
+    # publish it after both detached hosts were activated.
+    parent_manager._publish_completion_if_due(foreign_job, foreign_dir)
+    assert load_state(foreign_dir)["completion"]["state"] == "published"
+    assert parent_notifications.channels[-1][2] == f"bash.completion:{foreign_job}"
+
+
 def test_detached_lingtai_file_surface_executes_against_parent_workdir(tmp_path):
     """Detached LingTai composition can execute its advertised file floor."""
     from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost

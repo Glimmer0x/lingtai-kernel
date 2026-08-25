@@ -18,6 +18,9 @@ related_files:
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/tools/daemon/shell_prompt_events.py
+  - tests/test_daemon_shell_prompt_events.py
   - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manual/SKILL.md
@@ -587,3 +590,17 @@ See the `maintenance` frontmatter above. The paired
 [`ANATOMY.md`](ANATOMY.md) owns where the code lives and how it composes;
 [`BEHAVIORS.md`](BEHAVIORS.md) owns the agent-executable proof of the clauses
 above. Change one, re-check the other two.
+
+
+## Shell NotificationPort destination selection
+
+`NotificationPort` remains Shell's exact two-operation grant; it is not a
+requirement that every adapter be a live Agent notification store. Normal Agent
+composition supplies the established Agent adapter. Only the private
+`bash._setup_detached_daemon_shell()` composition invoked by
+`DetachedDaemonExecutionHost` can override the already-declared `notifications`
+value with a run-local adapter; normal public `bash.setup()` and manifest
+capability configuration have no such arguments. No new `requires` entry,
+generic callback/runtime, parent-store capability, or notification-state grant
+is implied. The selected adapter must return `False` when its durable enqueue
+fails so Shell's private live retry can retain its publication transition.

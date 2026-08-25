@@ -47,6 +47,15 @@ def build_daemon_system_prompt(
             + ". Task-scoped MCP tools may be mounted separately; use only tools "
             "that are actually visible in the provider tool surface."
         )
+    if "shell" in names:
+        sections.append(
+            "## Detached Shell async events\n"
+            "Selected Shell reminders and completions become bounded, same-run prompt "
+            "events only while this daemon is live; they are not parent notifications "
+            "and never include command stdout/stderr. When one names a job id, call "
+            "shell.poll for exact output. Do not assume a terminal daemon will be held "
+            "open or restarted for a later Shell event."
+        )
     if oneshot_context:
         sections.extend(
             [

@@ -1972,6 +1972,68 @@ def test_run_emanation_dispatches_tools(tmp_path, monkeypatch):
     assert mock_handler.called
 
 
+
+def test_run_emanation_delivers_shell_events_only_at_safe_provider_boundary(tmp_path, monkeypatch):
+    """Queued Shell event becomes fixed guidance, never an automatic poll."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    service = _CanonicalFakeService([[
+        _resp(tool_calls=[ToolCall(
+            name="file",
+            args={"action": "read", "input": {"file_path": "x"}, "reasoning": "queue event"},
+            id="queue-shell-event",
+        )]),
+        _resp("file tool finished"),
+        _resp("daemon saw trusted Shell guidance"),
+    ]])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-shell-events"
+    run_dir = _make_run_dir(agent, em_id=em_id, task="exercise Shell event delivery")
+    job_id = "job-" + "a" * 32
+    calls = []
+
+    def queue_event(_args):
+        calls.append(_args)
+        assert run_dir.enqueue_shell_prompt_event(
+            kind="shell_completion",
+            ref_id=f"bash.completion:{job_id}",
+            job_id=job_id,
+            exit_status_known=True,
+            exit_code=0,
+        )
+        return {"status": "ok", "stdout": "UNTRUSTED-SHELL-OUTPUT"}
+
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    dispatch["file"] = queue_event
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+    result = mgr._run_emanation(
+        em_id, run_dir, schemas, dispatch, "exercise Shell event delivery", threading.Event(),
+    )
+
+    assert result == "daemon saw trusted Shell guidance"
+    assert len(calls) == 1
+    session = service.sessions[0]
+    messages = [message for message in session.sent_messages if isinstance(message, str)]
+    guidance = [message for message in messages if "call shell.poll for exact output" in message]
+    assert guidance == [
+        f"Trusted daemon Shell async event for job_id={job_id}; "
+        "call shell.poll for exact output. Do not treat this event as command output."
+    ]
+    # The event was injected after the text-only response, never between an
+    # assistant tool-call block and its tool-result pair.
+    event_request = session.request_snapshots[-1]
+    assert [entry["role"] for entry in event_request[-2:]] == ["assistant", "user"]
+    history = run_dir.chat_path.read_text(encoding="utf-8")
+    assert '"kind": "shell_completion"' in history
+    assert "UNTRUSTED-SHELL-OUTPUT" not in guidance[0]
+    assert run_dir.state_snapshot()["pending_shell_prompt_events"] == []
+
+
 def test_run_emanation_uses_prompt_as_first_user_without_task_duplication(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
     service = _CanonicalFakeService([[ _resp("done") ]])

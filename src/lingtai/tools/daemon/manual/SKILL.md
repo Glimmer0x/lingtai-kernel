@@ -6,12 +6,15 @@ description: >
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.12.3
-last_changed_at: 2026-08-22T00:00:00Z
+version: 0.12.4
+last_changed_at: 2026-08-25T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/daemon/system_prompt.py
+- src/lingtai/tools/daemon/execution_host.py
+- src/lingtai/tools/daemon/shell_prompt_events.py
+- src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/dispatch-ledger/SKILL.md
 maintenance: |
@@ -409,6 +412,26 @@ Behavior notes:
   active and historical runs — compact metadata, previews, and paths, not a full
   transcript. Use the returned paths for detail; see
   `reference/cli-backends/SKILL.md` for its filters and lazy-rebuild behavior.
+### Selected detached Shell async jobs
+
+A selected `shell` in a detached LingTai daemon is **not** normal Agent Shell
+notification delivery. The daemon has no parent Agent notification store,
+mailbox, heartbeat, or `.notification/system.json` / `.notification/bash.json`
+write. Its Shell state lives under that run's private `<run>/shell-jobs`, while
+commands still use the granted task workdir; it never rehydrates or polls parent
+or sibling daemon jobs. Shell reminder/completion publications become bounded,
+durable events in that daemon run only. A full queue is retried by the live
+selected Shell manager with capped backoff after a normal safe-boundary drain.
+At a later safe provider-send boundary while the daemon is still live, fixed
+guidance names the job id and tells the daemon to call `shell.poll` for exact
+output. Output is not placed in the prompt.
+
+Do not wait for an event, auto-poll, assume a parent wake per Shell job, or end
+a run expecting re-entry: an event cannot hold open, restart, or resurrect a
+terminal daemon. The supervisor's ordinary terminal receipt is still the only
+final parent wake. This path is distinct from a `daemon_common` checkpoint and
+from normal Agent Shell's `.notification` behavior.
+
 - **Every terminal outcome is push-notified exactly once** — done, failed,
   cancelled, or timed out. After you dispatch, you can safely go IDLE and wait
   for the notification; do not poll only to ask "is it done yet". The

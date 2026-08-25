@@ -280,6 +280,8 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
         ShellPolicy,
         _DEFAULT_POLICY_FILE,
         _POWERSHELL_POLICY_FILE,
+        _DETACHED_DAEMON_ASYNC_HANDOFF,
+        _DetachedDaemonShellBinding,
         _describe_host_os,
         _resolve_shell_kind,
         _select_shell_dialect,
@@ -299,12 +301,19 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
         )
         policy = ShellPolicy.from_file(str(default_policy))
 
+    detached_binding = values.get("_detached_daemon_shell")
+    detached = (
+        detached_binding if isinstance(detached_binding, _DetachedDaemonShellBinding) else None
+    )
     manager = ShellManager(
         policy=policy,
         working_dir=str(host.workdir.path),
         dialect=dialect,
         shell_kind=kind,
         notification_port=host.notifications,
+        async_handoff=_DETACHED_DAEMON_ASYNC_HANDOFF if detached is not None else None,
+        async_jobs_dir=detached.jobs_dir if detached is not None else None,
+        retry_failed_publications=detached is not None,
         rehydrate=False,
     )
     dispatcher = ShellFamilyDispatcher(manager, host.workdir)

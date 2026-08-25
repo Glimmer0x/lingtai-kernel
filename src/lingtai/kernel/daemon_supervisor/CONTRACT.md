@@ -1,6 +1,6 @@
 ---
 name: daemon-supervisor
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/daemon_supervisor/ANATOMY.md
@@ -18,6 +18,9 @@ related_files:
   - src/lingtai/adapters/windows/process_identity.py
   - tests/test_daemon_windows_supervisor.py
   - src/lingtai/tools/daemon/manual/SKILL.md
+  - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/tools/daemon/shell_prompt_events.py
+  - tests/test_daemon_detached_supervisor.py
 maintenance: |
   Keep this Contract paired with its ANATOMY.md and preserve the repository
   Anatomy/Contract maintenance convention. Update the promise and focused tests
@@ -104,3 +107,19 @@ parent interpreter exit, all backend-spec routing through the shared execution
 host, completion/MCP/preset/skills reconstruction, run-owned logs, identity
 mismatch, timeout/reclaim, control ack/race truth, terminal notification
 idempotency, and restrictive manifest mode.
+
+
+## Selected Shell composition boundary
+
+The supervisor Core neither owns Shell policy nor reconstructs an Agent. Its
+execution child may ask `DetachedDaemonExecutionHost` to invoke Shell's private
+detached composer with a `DaemonRunDir`-local `NotificationPort` adapter and
+`<run>/shell-jobs` state namespace. That adapter is tools layer composition, not
+a supervisor port or parent notification route: it writes bounded prompt-event
+state only while the run is live, retries an unacknowledged full-queue publication
+with capped backoff, and never calls the stub's notification method/store, writes
+`.notification`, or emits another terminal receipt. Command cwd remains the
+granted task workdir, while activation and rehydration cannot enter parent or
+sibling job namespaces. The supervisor continues to own exactly one terminal
+daemon receipt; it does not wait for, join, cancel, or restart a daemon around a
+Shell job.

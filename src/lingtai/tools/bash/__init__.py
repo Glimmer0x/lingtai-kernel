@@ -69,6 +69,34 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 _DEFAULT_POLICY_FILE = Path(__file__).parent / "bash_policy.json"
 _POWERSHELL_POLICY_FILE = Path(__file__).parent / "powershell_policy.json"
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
+_AGENT_ASYNC_HANDOFF = (
+    "While waiting, go idle or call system(action='sleep'); the terminal result "
+    "will arrive and wake you as a notification; read shell-manual and "
+    "notification-manual for details. If Telegram is connected and a Task Card "
+    "is available for the current turn, use it to report progress; call "
+    "`telegram(action='manual')` and follow its `Programmable Task Card` "
+    "section for details."
+)
+_DETACHED_DAEMON_ASYNC_HANDOFF = (
+    "While this daemon is still running, Shell reminder and completion events "
+    "are delivered only into this same daemon at a safe provider send boundary. "
+    "They are not parent notifications and may not arrive after daemon completion; "
+    "call shell.poll for exact output."
+)
+# Detached daemon queue admission can temporarily fail at its bounded RunDir
+# capacity. Retry only that private composition path; normal Agent publications
+# retain their established one-shot notification behavior.
+_DETACHED_PUBLICATION_RETRY_INITIAL_SECONDS = 0.05
+_DETACHED_PUBLICATION_RETRY_MAX_SECONDS = 1.0
+
+
+class _DetachedDaemonShellBinding:
+    """Private setup token for the sole detached-daemon Shell composition path."""
+
+    __slots__ = ("jobs_dir",)
+
+    def __init__(self, jobs_dir: Path) -> None:
+        self.jobs_dir = jobs_dir
 _SUPERVISOR_START_LEASE_SECONDS = 3.0
 # The parent may spend one start lease launching the supervisor and another
 # waiting for its durable PID before it can atomically arm the user-visible
@@ -573,6 +601,9 @@ class ShellManager:
         async_process: BashAsyncProcessPort | None = None,
         shell_kind: "ShellKind | str | None" = None,
         notification_port: object | None = None,
+        async_handoff: str | None = None,
+        async_jobs_dir: Path | None = None,
+        retry_failed_publications: bool = False,
         rehydrate: bool = True,
     ):
         self._policy = policy
@@ -583,15 +614,27 @@ class ShellManager:
         # receives only ``notification_port`` from its granted host facade.
         self._agent = agent
         self._notifications = notification_port
+        # Ordinary Agent composition keeps the established notification handoff.
+        # Detached daemon composition selects its distinct, run-local wording
+        # through the same immutable Shell configuration snapshot.
+        self._async_handoff = (
+            async_handoff if isinstance(async_handoff, str) and async_handoff.strip()
+            else _AGENT_ASYNC_HANDOFF
+        )
         self._dialect = dialect or _select_shell_dialect()
         # Runtime shell-family metadata: classifier override when provided,
         # otherwise derived from the dialect.  Unknown dialects (test mocks)
         # fall back to the POSIX kind for metadata purposes only.
         self._shell_kind = ShellKind.coerce(shell_kind) or self._dialect.kind() or ShellKind.POSIX
         self._async_process = async_process or _select_shell_async_process()
-        self._jobs_dir: Path | None = None
+        # Detached daemon composition supplies its own run-private job namespace;
+        # command cwd intentionally remains ``_working_dir`` (the granted task
+        # workdir). Ordinary Shell preserves its historical <workdir>/system/jobs.
+        self._jobs_dir: Path | None = async_jobs_dir
+        self._retry_failed_publications = retry_failed_publications
         self._reminder_lock = threading.Lock()
         self._reminder_cancel_events: dict[str, threading.Event] = {}
+        self._reminder_retry_delays: dict[str, float] = {}
         self._completion_lock = threading.Lock()
         self._completion_watchers: set[str] = set()
         if rehydrate:
@@ -1110,7 +1153,10 @@ class ShellManager:
                     return current
 
                 update_state(job_dir, suppress_terminal_reminder)
-                self._publish_completion_if_due(job_id, job_dir)
+                if self._retry_failed_publications:
+                    self._start_completion_watcher(job_id, job_dir)
+                else:
+                    self._publish_completion_if_due(job_id, job_dir)
             else:
                 if isinstance(reminder, dict) and reminder.get("state") in {"pending", "publishing", "suppressing"}:
                     self._start_reminder_timer(job_id, job_dir)
@@ -1351,7 +1397,7 @@ class ShellManager:
                         'Job started. Use shell(action="poll", '
                         f'input={{"job_id": "{job_id}"}}) to check.'
                     ),
-                    "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read shell-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details.",
+                    "handoff": self._async_handoff,
                 }
             if state and self._terminal(state.get("status")):
                 break
@@ -1410,7 +1456,32 @@ class ShellManager:
         # The helper retains the cross-manager state lock through the final
         # pre-publish suppression check, sink write, and acknowledgement.  A
         # terminal claim which wins that lock makes this stale token a no-op.
-        self._publish_claimed_reminder(job_id, job_dir, claim_token)
+        published = self._publish_claimed_reminder(job_id, job_dir, claim_token)
+        if published:
+            self._clear_reminder_retry_delay(job_id)
+        elif self._retry_failed_publications and job_dir.is_dir():
+            # A full daemon RunDir queue returns False without acknowledging this
+            # durable claim. Re-arm a bounded-backoff timer so freeing capacity in
+            # this still-live manager reconciles the same stable reminder ref.
+            self._start_reminder_timer(
+                job_id, job_dir, self._next_reminder_retry_delay(job_id)
+            )
+
+    def _next_reminder_retry_delay(self, job_id: str) -> float:
+        """Return the next bounded detached-publication retry delay."""
+        with self._reminder_lock:
+            previous = self._reminder_retry_delays.get(job_id)
+            delay = (
+                _DETACHED_PUBLICATION_RETRY_INITIAL_SECONDS
+                if previous is None
+                else min(previous * 2, _DETACHED_PUBLICATION_RETRY_MAX_SECONDS)
+            )
+            self._reminder_retry_delays[job_id] = delay
+            return delay
+
+    def _clear_reminder_retry_delay(self, job_id: str) -> None:
+        with self._reminder_lock:
+            self._reminder_retry_delays.pop(job_id, None)
 
     def _claim_reminder_timer(
         self, job_id: str, job_dir: Path, cancel_event: threading.Event,
@@ -1538,6 +1609,7 @@ class ShellManager:
         """Stop this manager's local deadline worker; durable suppression is a terminal claim."""
         with self._reminder_lock:
             cancel_event = self._reminder_cancel_events.pop(job_id, None)
+            self._reminder_retry_delays.pop(job_id, None)
         if cancel_event is not None:
             cancel_event.set()
 
@@ -1620,6 +1692,7 @@ class ShellManager:
         ).start()
 
     def _watch_durable_job(self, job_id: str, job_dir: Path) -> None:
+        retry_delay = _DETACHED_PUBLICATION_RETRY_INITIAL_SECONDS
         try:
             while True:
                 state = load_state(job_dir)
@@ -1627,7 +1700,21 @@ class ShellManager:
                     return
                 if self._terminal(state.get("status")):
                     self._publish_completion_if_due(job_id, job_dir)
-                    return
+                    if not self._retry_failed_publications:
+                        return
+                    latest = load_state(job_dir)
+                    completion = latest.get("completion") if latest else None
+                    if not isinstance(completion, dict) or completion.get("state") == "published":
+                        return
+                    # The daemon's bounded queue may drain without any Shell
+                    # action. Keep reconciling its unacknowledged stable ref with
+                    # capped exponential backoff; this thread is daemonized and
+                    # cannot hold a terminal daemon process open.
+                    time.sleep(retry_delay)
+                    retry_delay = min(
+                        retry_delay * 2, _DETACHED_PUBLICATION_RETRY_MAX_SECONDS
+                    )
+                    continue
                 time.sleep(0.05)
         finally:
             with self._completion_lock:
@@ -2088,38 +2175,76 @@ BashPolicy = ShellPolicy
 BashManager = ShellManager
 
 
-def setup(
-    agent: "BaseAgent",
-    policy_file: str | None = None,
-    yolo: bool = False,
-    shell_kind: "ShellKind | str | None" = None,
+def _mount_declared_shell(
+    agent: "BaseAgent", *, configuration, notification_port: object | None = None,
 ) -> ShellManager:
-    """Mount the static Shell declaration through the controlled host route.
+    """Mount one Shell declaration with composition-owned, already-typed ports."""
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
 
-    Policy selection and durable async behavior live in ``_bind`` against the
-    declaration's narrow workdir/configuration/notification grant.  This
-    function remains composition wiring only: it supplies the explicit setup
-    values, delegates mounting to the kernel registrar, and preserves the
-    historical manager return for programmatic direct callers.
-    """
-    from lingtai.adapters.tool_plugin_host import (
-        StaticConfigurationAdapter,
-        register_agent_tool_plugins,
-    )
-
-    configuration = StaticConfigurationAdapter({
-        "policy_file": policy_file,
-        "yolo": yolo,
-        "shell_kind": shell_kind,
-    })
     (bound,) = register_agent_tool_plugins(
         agent,
         [DECLARATION],
         extra_ports_for=lambda declaration: (
-            {"configuration": configuration} if declaration is DECLARATION else {}
+            {
+                "configuration": configuration,
+                **({"notifications": notification_port} if notification_port is not None else {}),
+            }
+            if declaration is DECLARATION else {}
         ),
     )
     dispatcher = getattr(bound.handler, "__self__", None)
     if not isinstance(dispatcher, ShellFamilyDispatcher):  # pragma: no cover - wiring invariant
         raise RuntimeError("Shell declaration did not bind a ShellFamilyDispatcher")
     return dispatcher.manager
+
+
+def setup(
+    agent: "BaseAgent",
+    policy_file: str | None = None,
+    yolo: bool = False,
+    shell_kind: "ShellKind | str | None" = None,
+    **unsupported: object,
+) -> ShellManager:
+    """Mount ordinary Shell with only its public capability configuration.
+
+    The normal setup/manifest surface intentionally cannot choose a notification
+    destination, async handoff, or job-state namespace. Detached daemon Shell
+    composition is a separate private helper below.
+    """
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        raise RuntimeError(
+            "Shell capability configuration does not accept "
+            f"{names}; detached Shell composition is private to "
+            "DetachedDaemonExecutionHost"
+        )
+    from lingtai.adapters.tool_plugin_host import StaticConfigurationAdapter
+
+    return _mount_declared_shell(
+        agent,
+        configuration=StaticConfigurationAdapter({
+            "policy_file": policy_file,
+            "yolo": yolo,
+            "shell_kind": shell_kind,
+        }),
+    )
+
+
+def _setup_detached_daemon_shell(agent: "BaseAgent", *, run_dir) -> tuple[ShellManager, object]:
+    """Private detached-daemon composition; never reached by capability config."""
+    from lingtai.adapters.tool_plugin_host import StaticConfigurationAdapter
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+    from lingtai.tools.daemon.shell_prompt_events import DaemonShellPromptEventAdapter
+
+    if not isinstance(run_dir, DaemonRunDir):
+        raise TypeError("detached Shell composition requires a DaemonRunDir")
+    adapter = DaemonShellPromptEventAdapter(run_dir)
+    binding = _DetachedDaemonShellBinding(run_dir.path / "shell-jobs")
+    manager = _mount_declared_shell(
+        agent,
+        configuration=StaticConfigurationAdapter({
+            "_detached_daemon_shell": binding,
+        }),
+        notification_port=adapter,
+    )
+    return manager, adapter
