@@ -15,11 +15,13 @@ related_files:
   - src/lingtai/adapters/refresh_watcher.py
   - src/lingtai/adapters/process_scan.py
   - src/lingtai/adapters/lifecycle_clock.py
+  - src/lingtai/adapters/project_workspace.py
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/adapters/avatar_launcher.py
   - src/lingtai/adapters/workdir_lease.py
   - src/lingtai/auth/ANATOMY.md
   - src/lingtai/cli.py
+  - src/lingtai/cli_project.py
   - src/lingtai/cli_acp.py
   - src/lingtai/cli_daemon.py
   - src/lingtai/tools/ANATOMY.md
@@ -106,7 +108,9 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `adapters/workdir_lease.py` | Outer platform selector for the `WorkdirLeasePort` adapter: composition-root wiring that reads the running platform, selects the concrete adapter, and constructs it. Deliberately the only place that branches on the OS for leasing — Core never imports it; `lingtai.agent` and `lingtai.cli` call `select_workdir_lease` and inject the returned Port into `BaseAgent` and the SQLite rebuild. An unsupported platform fails loudly rather than silently degrading. |
 | `adapters/browser_transport.py` | Production static HTTP(S) Adapter for the internal browse Core-owned `BrowserPort`; bounds DNS wait with one in-flight resolver job, pins vetted IPs, and preserves Host/SNI, selected lazily by unified web setup. |
 | `adapters/lifecycle_clock.py` | The one portable production `SystemLifecycleClockAdapter` for the Core-owned `LifecycleClockPort` — direct `wall_seconds()`→`time.time()` / `monotonic_seconds()`→`time.monotonic()`, no caching or policy. Not POSIX (no filesystem/`fcntl`/platform selection), so it sits at the top of `adapters/` rather than under `adapters/posix/`; its promise/navigation are owned by the kernel `lifecycle_clock/` governed pair (`src/lingtai/kernel/lifecycle_clock/CONTRACT.md` + `ANATOMY.md`). |
-| `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent acp --agent-dir <dir>` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points; the `run` composition root performs a post-stop hard exit only when existing worker-poison state would otherwise keep the old process alive and block the refresh watcher |
+| `adapters/project_workspace.py` | Filesystem implementation of the Project Core Port: exclusively creates one fresh `.lingtai` tree, writes its seed, and applies an injected init-reader validation. |
+| `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent acp --agent-dir <dir>` / `lingtai-agent project create ...` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points; the `run` composition root performs a post-stop hard exit only when existing worker-poison state would otherwise keep the old process alive and block the refresh watcher |
+| `cli_project.py` | Inbound composition for one fresh `project create` seed: caller inputs, wrapper preset loading, current-reader validation, Project adapter, and output; it does not start an Agent. |
 | `cli_acp.py` | Outer composition root for `lingtai-agent acp`: captures the original stdout wire and quarantines Python `sys.stdout` before Agent construction, reuses existing init/venv/build/lifecycle paths, serves `AcpStdioServer`, consumes typed stop proof, and process-terminates on timeout/error without writing the workdir after lease release. |
 | `cli_daemon.py` | `lingtai-agent daemon emanate|list|check` — the programmatic (shell/Python/CI) skin over the daemon engine. `_CliDaemonAgent` is the minimal parent-agent facade `DaemonManager` reads (no lease, heartbeat, or agent identity), built from the agent's effective config through the canonical `init_reader.read_init`; `emanate` validates the tasks file against the tool's own emanate schema and enforces the preset allowlist and effective capability policy before previewing, then dispatches through the `DaemonFamilyDispatcher` envelope only under `--yes`; `_ReadOnlyDaemonView` binds the manager's unmodified `_handle_list`/`_handle_check` with both of its write paths (startup reconciliation, lazy daemon.json repair) removed |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
@@ -126,6 +130,8 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`cli_acp.py`**: `add_acp_parser` · `run_acp` · `handle_acp_command`
 
+**`cli_project.py`**: `add_project_parser` · `_request` · `_validate_agent` · `handle_project_command`
+
 **`cli_daemon.py`**: `_CliDaemonAgent` (`for_dispatch` reads effective config via `init_reader.read_init`; `for_inspection` reads none) · `_CliDaemonAgent.effective_capabilities` / `install_tool_surface` (`registry.apply_core_defaults` — honors `manifest.disable` and authored kwargs) · `_ReadOnlyDaemonView` (overrides `_load_or_rebuild_daemon_state` so inspection reconstructs in memory instead of repairing on disk) · `_read_effective_init` · `_load_tasks_file` · `_check_schema` / `_validate_emanate_input` (interprets the tool's own `_emanate_input_schema` at preview time) · `_enforce_preset_allowlist` · `_enforce_capability_policy` · `_dispatch_through_tool_family` · `add_daemon_parser` · `handle_daemon_command`
 
 **`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai.kernel.presets` (`discover_presets_in_dirs` :177 · `load_preset` :232 · `materialize_active_preset` :360 · `expand_inherit` :580).
@@ -141,6 +147,8 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 ## Connections
 
 **Inbound:** `lingtai-tui` calls `cli.run()` to boot agents; imports `load_preset`, `discover_presets_in_dirs` for UI. Kernel's `BaseAgent` is the parent class.
+
+**Project creation:** `cli_project` composes caller inputs, wrapper `load_preset`, the current init reader, and `FilesystemProjectWorkspaceAdapter` for `kernel.project`; it writes a seed only and never starts an Agent.
 
 **Outbound — kernel:** `lingtai.kernel.base_agent.{BaseAgent,StopResult,StopStatus}`, `.config.AgentConfig`, `.event_journal.EventJournalPort`, `.mail_transport.MailTransportPort`, `.workdir_lease.WorkdirLeasePort`, `.notification_store.NotificationStorePort` (S4: capability-native persistence for `.notification/` channel mirrors; see `kernel/notification_store/CONTRACT.md`), `.agent_presence.AgentPresenceStorePort` (own-heartbeat + foreign liveness; see `kernel/agent_presence/CONTRACT.md`), `.lifecycle_clock.LifecycleClockPort` (S7b: wall/monotonic lifecycle time; see `kernel/lifecycle_clock/CONTRACT.md`), `.snapshot.{SnapshotPort,SourceRevisionPort}` (S5: workdir capture and bounded source identity; see `kernel/snapshot/CONTRACT.md`), `.prompt.build_system_prompt`, `.handshake.resolve_address`, and the shared `lingtai.init_reader.read_init` / `lingtai.kernel.workdir.write_resolved_manifest` path. Legacy migration modules remain outside this production reader path; see `../lingtai/kernel/migrate/CONTRACT.md` for their retained historical/test surface.
 
