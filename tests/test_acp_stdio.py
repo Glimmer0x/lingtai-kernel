@@ -14,8 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from lingtai.adapters.acp.server import AcpStdioServer
-from lingtai.kernel.base_agent import StopResult, StopStatus
-from lingtai.kernel.turns import TurnOutcome, TurnResult
+from lingtai.kernel.base_agent import BaseAgent, StopResult, StopStatus
+from lingtai.kernel.turns import TurnOutcome, TurnResult, control_from_message
 
 
 class _Handle:
@@ -144,6 +144,34 @@ def test_session_new_canonicalizes_existing_directory_and_mounts_stdio_mcp(tmp_p
     server.close()
     server.close()
     assert agent.lease.closed == 1
+
+
+def test_acp_prompt_queues_canonical_workspace_through_real_base_agent(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(workspace, target_is_directory=True)
+    agent = object.__new__(BaseAgent)
+    agent._shutdown = threading.Event()
+    agent.inbox = queue.Queue()
+    server = AcpStdioServer(agent, io.StringIO(), io.StringIO())
+
+    session_id = server._new_session({"cwd": str(alias), "mcpServers": []})[
+        "sessionId"
+    ]
+    server._prompt(
+        {
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": "go"}],
+        },
+        "prompt-real-facade",
+    )
+
+    control = control_from_message(agent.inbox.get_nowait())
+    server.close()
+    assert control is not None
+    assert control.execution_workspace is server._execution_workspace
+    assert control.execution_workspace.root == workspace.resolve()
 
 
 @pytest.mark.parametrize("cwd,mcp_servers", [
