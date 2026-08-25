@@ -33,6 +33,7 @@ from lingtai.services.file_io import (
 )
 from lingtai.services.file_io_sidecar import (
     RustFileIOBackend,
+    SIDECAR_ENV_VARS,
     SidecarAdapter,
     SidecarError,
     SidecarRequest,
@@ -71,7 +72,7 @@ def _write_fake_sidecar(tmp_path: Path, name: str, script: str) -> Path:
     return sidecar
 
 
-def _echo_grep_sidecar(tmp_path: Path) -> Path:
+def _echo_grep_sidecar(tmp_path: Path, name: str = "echo-grep.py") -> Path:
     """Fake sidecar that echoes its payload back as a single grep match.
 
     Useful for asserting that the adapter formed the right JSON request
@@ -79,7 +80,7 @@ def _echo_grep_sidecar(tmp_path: Path) -> Path:
     """
     return _write_fake_sidecar(
         tmp_path,
-        "echo-grep.py",
+        name,
         """
         env = {
             "ok": True,
@@ -730,6 +731,55 @@ class TestSidecarAdapterAutodiscover:
         assert adapter.available()
         assert adapter._resolve_binary() == str(packaged)
 
+    def test_autodiscover_re_resolves_after_first_source_is_cleared(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The packaged copy outranks the dev tree, but it is a staged build
+        # artifact that ``setup.py`` clears on a later build. An adapter that
+        # pinned it at construction would report ``not_configured`` for the
+        # rest of the process even though the dev-tree binary still resolves.
+        packaged = _echo_grep_sidecar(tmp_path)
+        dev = _glob_sidecar(tmp_path)
+        monkeypatch.setattr(
+            _sidecar_mod,
+            "_packaged_binary",
+            lambda: str(packaged) if packaged.is_file() else None,
+        )
+        monkeypatch.setattr(_sidecar_mod, "_dev_tree_binary", lambda: str(dev))
+        adapter = SidecarAdapter.autodiscover()
+        assert adapter._resolve_binary() == str(packaged)
+
+        packaged.unlink()
+
+        assert adapter.available()
+        assert adapter._resolve_binary() == str(dev)
+
+    def test_explicit_binary_path_stays_pinned_and_strict(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The explicit ``binary_path=`` layer is the top of the priority list
+        # and is deliberately *not* live-resolving: it wins over packaged /
+        # dev-tree while it exists, and when it disappears the strict adapter
+        # reports ``not_configured`` rather than quietly re-walking the list.
+        explicit = _echo_grep_sidecar(tmp_path)
+        packaged = _glob_sidecar(tmp_path)
+        monkeypatch.setattr(_sidecar_mod, "_packaged_binary", lambda: str(packaged))
+        monkeypatch.setattr(_sidecar_mod, "_dev_tree_binary", lambda: str(packaged))
+        backend = RustFileIOBackend(root=tmp_path, binary_path=str(explicit))
+        assert backend._adapter._resolve_binary() == str(explicit)
+        assert backend.grep("needle")[0].path.endswith("echoed.txt")
+
+        explicit.unlink()
+
+        assert not backend.available()
+        with pytest.raises(SidecarError, match="not configured") as exc:
+            backend.grep("needle")
+        assert exc.value.code == "not_configured"
+
     def test_strict_constructor_ignores_packaged_path(
         self,
         tmp_path: Path,
@@ -766,6 +816,68 @@ class TestDefaultFileIOService:
         # matter what's on disk.
         results = svc.grep("anything")
         assert len(results) == 1
+
+    @pytest.mark.parametrize("env_name", SIDECAR_ENV_VARS)
+    def test_env_selected_sidecar_stays_pinned_and_strict(
+        self,
+        env_name: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        selected = _echo_grep_sidecar(tmp_path)
+        automatic = _glob_sidecar(tmp_path)
+        monkeypatch.setattr(_sidecar_mod, "_packaged_binary", lambda: str(automatic))
+        monkeypatch.setattr(_sidecar_mod, "_dev_tree_binary", lambda: str(automatic))
+        monkeypatch.setenv(env_name, str(selected))
+
+        svc = default_file_io_service(root=tmp_path)
+        backend = svc._backend  # noqa: SLF001 — assert the factory's adapter mode.
+        assert isinstance(backend, RustFileIOBackend)
+        assert backend._adapter._resolve_binary() == str(selected)  # noqa: SLF001
+
+        # The service-construction setting can change only after a restart.
+        monkeypatch.setenv(env_name, str(automatic))
+        assert backend._adapter._resolve_binary() == str(selected)  # noqa: SLF001
+        assert len(svc.grep("anything")) == 1
+
+        # A pinned environment sidecar is strict: it does not fall through
+        # to automatic sources if its selected executable later disappears.
+        selected.unlink()
+        assert not backend.available()
+        with pytest.raises(SidecarError) as exc:
+            svc.grep("anything")
+        assert exc.value.code == "not_configured"
+
+    @pytest.mark.parametrize("env_name", SIDECAR_ENV_VARS)
+    def test_invalid_env_falls_through_to_auto_sources_without_late_adoption(
+        self,
+        env_name: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        packaged = _echo_grep_sidecar(tmp_path)
+        dev_tree = _glob_sidecar(tmp_path)
+        late_env = _echo_grep_sidecar(tmp_path, "late-env.py")
+        monkeypatch.setattr(
+            _sidecar_mod,
+            "_packaged_binary",
+            lambda: str(packaged) if packaged.is_file() else None,
+        )
+        monkeypatch.setattr(_sidecar_mod, "_dev_tree_binary", lambda: str(dev_tree))
+        monkeypatch.setenv(env_name, str(tmp_path / "missing-sidecar"))
+
+        svc = default_file_io_service(root=tmp_path)
+        backend = svc._backend  # noqa: SLF001 — assert the factory's adapter mode.
+        assert isinstance(backend, RustFileIOBackend)
+        assert backend._adapter._resolve_binary() == str(packaged)  # noqa: SLF001
+
+        # An invalid construction-time value retains the automatic fallback,
+        # but later environment mutation is not adopted by this live service.
+        monkeypatch.setenv(env_name, str(late_env))
+        packaged.unlink()
+        assert backend.available()
+        assert backend._adapter._resolve_binary() == str(dev_tree)  # noqa: SLF001
+        assert svc.glob("*.py") == ["/abs/a.py", "/abs/b.py"]
 
     def test_auto_falls_back_to_python_when_no_binary(
         self,

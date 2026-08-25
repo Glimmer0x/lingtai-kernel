@@ -28,8 +28,10 @@ uses the first one that points at an executable file:
 
 ``SidecarAdapter()`` remains strict for direct/public callers: without an
 explicit ``binary_path`` it only honors env vars. The default agent path
-uses ``default_file_io_service()``, which calls ``resolve_sidecar_binary``
-for packaged/dev-tree autodiscovery and soft Python fallback.
+uses ``default_file_io_service()``: a valid env-selected sidecar is pinned
+at service construction, while an automatic adapter re-resolves only the
+packaged/dev-tree sources on every call so a live agent can leave a staged
+binary that was cleared after construction.
 
 Failure mode
 ~~~~~~~~~~~~
@@ -54,7 +56,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .file_io import (
     DEFAULT_EXCLUDED_DIRS,
@@ -163,10 +165,10 @@ class SidecarAdapter:
       Used by the public ``RustFileIOBackend`` API so opt-in callers see
       a loud failure rather than picking up a stale dev-tree binary.
 
-    * ``SidecarAdapter.autodiscover()`` — auto-resolve via the full
-      priority list (explicit > env > packaged > dev tree). Used by the
-      ``default_file_io_service`` factory and by the wheel-installed
-      default agent path.
+    * ``SidecarAdapter.autodiscover()`` — auto-resolve only packaged and
+      dev-tree sources on every call. Used by the
+      ``default_file_io_service`` factory when no valid environment
+      selection was present at service construction.
     """
 
     def __init__(
@@ -177,22 +179,25 @@ class SidecarAdapter:
     ) -> None:
         self.binary_path = binary_path or _binary_from_env()
         self.timeout_s = timeout_s
+        # Strict adapters pin ``binary_path`` above. ``autodiscover`` installs
+        # the live automatic-source walk here instead, so each call re-resolves
+        # packaged/dev-tree sources rather than freezing the first answer.
+        self._discover: Callable[[], str | None] | None = None
 
     @classmethod
     def autodiscover(cls, *, timeout_s: float = 30.0) -> "SidecarAdapter":
-        """Return an adapter pointing at the best-effort resolved binary.
+        """Return an adapter that resolves automatic sources live per call.
 
-        Walks ``resolve_sidecar_binary`` (explicit unset, so the env vars,
-        packaged binary, and dev-tree binary all participate). The
-        resulting adapter may still report ``available() is False`` if
-        nothing was found — that's the signal the operator's environment
-        has no Rust backend at all, and the factory layer above will
-        fall through to ``LocalFileIOBackend``.
+        Each ``call``/``available`` walks only the packaged and dev-tree
+        sources. A staged packaged copy that ``setup.py`` later clears or
+        re-stages, or a dev-tree rebuild, is picked up by the next call
+        instead of leaving a live agent bound to a path that no longer
+        exists. Environment choices belong to service construction and are
+        pinned by the factory's strict-adapter path. The adapter may still
+        report ``available() is False`` when no automatic source resolves.
         """
         adapter = cls(binary_path=None, timeout_s=timeout_s)
-        # Bypass the env-var-only constructor default by stamping the
-        # resolved path in directly.
-        adapter.binary_path = resolve_sidecar_binary()
+        adapter._discover = lambda: resolve_sidecar_binary(skip_env=True)
         return adapter
 
     def available(self) -> bool:
@@ -243,6 +248,8 @@ class SidecarAdapter:
         return envelope
 
     def _resolve_binary(self) -> str | None:
+        if self._discover is not None:
+            return self._discover()
         if not self.binary_path:
             return None
         candidate = Path(self.binary_path).expanduser()
@@ -679,8 +686,12 @@ def default_file_io_service(
     if selection == "python":
         return LocalFileIOService(root=root)
 
-    # Both "auto" and "rust" want the native path if one is available.
-    binary = resolve_sidecar_binary()
+    # Environment selection is a service-construction input: a valid value
+    # stays strict and pinned for this service's lifetime. When it is absent
+    # or invalid, retain the existing fallback to automatic sources; that
+    # adapter re-resolves only packaged/dev-tree binaries per call.
+    env_binary = resolve_sidecar_binary(skip_packaged=True, skip_dev_tree=True)
+    binary = env_binary or resolve_sidecar_binary(skip_env=True)
     if binary is None:
         if selection == "rust":
             envs = " or ".join(SIDECAR_ENV_VARS)
@@ -693,5 +704,8 @@ def default_file_io_service(
         # auto: soft fallback to pure Python.
         return LocalFileIOService(root=root)
 
-    rust_backend = RustFileIOBackend(root=root, binary_path=binary)
+    if env_binary:
+        rust_backend = RustFileIOBackend(root=root, binary_path=env_binary)
+    else:
+        rust_backend = RustFileIOBackend(root=root, adapter=SidecarAdapter.autodiscover())
     return LocalFileIOService(backend=rust_backend)

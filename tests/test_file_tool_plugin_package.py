@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import inspect
+import stat
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +16,8 @@ from lingtai.kernel.tool_plugin import (
     OFFICIAL_TOOL_PLUGIN_NAMES,
     ToolPluginHost,
 )
+from lingtai.services import file_io_sidecar as sidecar_mod
+from lingtai.services.file_io_sidecar import default_file_io_service
 from lingtai.tools.file import DECLARATION, get_schema
 from tests._service_helpers import make_gemini_mock_service
 
@@ -169,6 +173,88 @@ def test_official_file_mount_preserves_real_operations_and_packaged_manual(file_
         / "capabilities"
         / "file"
     ).exists()
+
+
+def _tagged_sidecar(directory: Path, name: str, tag: str) -> Path:
+    """Write an executable fake sidecar whose glob/grep results name *tag*."""
+    script = directory / name
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "request = json.loads(sys.stdin.read())\n"
+        "sys.stdout.write(json.dumps({\n"
+        "    'ok': True, 'op': request['op'],\n"
+        f"    'paths': ['/served/by/{tag}'],\n"
+        f"    'matches': [{{'path': '{tag}.txt', 'line_number': 1, 'line': 'served by {tag}'}}],\n"
+        "    'visited': 1, 'elapsed_ms': 0, 'truncated_reason': None,\n"
+        "    'files_skipped_size': 0, 'files_skipped_binary': 0, 'dirs_pruned': 0,\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return script
+
+
+def test_mounted_glob_and_grep_follow_the_live_sidecar_resolution(tmp_path, monkeypatch):
+    """Mounted glob/grep must not stay bound to a sidecar copy cleared after boot.
+
+    Reproduces the live outage: ``setup.py`` stages a packaged copy under
+    ``lingtai/bin/`` that outranks the dev-tree build, the Agent boots against
+    it, and a later ``LINGTAI_SKIP_RUST_BUILD=1`` build clears that staged copy.
+    The mounted family must keep serving through the still-present dev-tree
+    binary exactly as a freshly built ``default_file_io_service`` does.
+    """
+    for name in ("LINGTAI_FILE_IO_SIDECAR", "LINGTAI_SEARCH_SIDECAR", "LINGTAI_FILE_IO_BACKEND"):
+        monkeypatch.delenv(name, raising=False)
+    packaged = _tagged_sidecar(tmp_path, "packaged-sidecar.py", "packaged")
+    dev_tree = _tagged_sidecar(tmp_path, "dev-tree-sidecar.py", "dev-tree")
+    monkeypatch.setattr(
+        sidecar_mod,
+        "_packaged_binary",
+        lambda: str(packaged) if packaged.is_file() else None,
+    )
+    monkeypatch.setattr(sidecar_mod, "_dev_tree_binary", lambda: str(dev_tree))
+
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="file-live-sidecar",
+        working_dir=tmp_path / "agent",
+        capabilities={"file": {}},
+    )
+    try:
+        handler = agent._tool_handlers["file"]
+
+        def glob():
+            return handler(
+                {
+                    "action": "glob",
+                    "input": {"pattern": "*.py", "path": None},
+                    "reasoning": "exercise mounted glob provenance",
+                }
+            )
+
+        def grep():
+            return handler(
+                {
+                    "action": "grep",
+                    "input": {"pattern": "served", "path": None, "glob": None, "max_matches": None},
+                    "reasoning": "exercise mounted grep provenance",
+                }
+            )
+
+        assert glob() == {"matches": ["/served/by/packaged"], "count": 1}
+        assert [m["text"] for m in grep()["matches"]] == ["served by packaged"]
+
+        # What ``setup.py``'s ``_clear_staged_sidecar()`` did to the live tree.
+        packaged.unlink()
+
+        assert glob() == {"matches": ["/served/by/dev-tree"], "count": 1}
+        assert [m["text"] for m in grep()["matches"]] == ["served by dev-tree"]
+        assert default_file_io_service(root=agent.working_dir).glob("*.py") == [
+            "/served/by/dev-tree"
+        ]
+    finally:
+        agent.stop(timeout=1.0)
 
 
 def test_foreign_file_declaration_fails_before_bind_and_preserves_live_identity(file_agent):
