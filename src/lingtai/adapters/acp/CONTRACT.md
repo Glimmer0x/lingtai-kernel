@@ -177,14 +177,17 @@ library JSON/threading streams directly.
    underlying tool, but queue/framing failure still aborts the transport under rule
    6. Tool-call ids are session-unique and no argument/result/raw payload is sent.
 10. `acp-local-stdio.permission.v1` — every otherwise-allowed known ACP tool is
-   announced `pending` and requested with the same minimal id/title/status plus
-   exactly `allow_once` and `reject_once`. Only the first valid matching
-   `selected/allow_once` that arrives after the request frame is physically
+   announced `pending`; the permission request carries a plain minimal
+   `ToolCallUpdate` with the same id/title/status but no `sessionUpdate`
+   discriminator, plus exactly `allow_once` and `reject_once`. Only the first
+   valid matching nested result
+   `{outcome: {outcome: "selected", optionId: "allow_once"}}` that arrives
+   after the request frame is physically
    written and flushed dispatches; response arrival and the post-flush published
    bit linearize under the state lock, so a guessed/pre-flush response remains
    denied even if descheduled until after publication. A per-request publication
    lock protects the wire boundary without holding the global state lock across
-   stdout. Reject/cancel, malformed/error/unknown-option
+   stdout. Nested reject/cancel, flattened legacy, malformed/error/unknown-option
    responses, timeout after 60 seconds, close/EOF, queue/framing/write failure,
    and broker failure deny and wake the waiter. Unknown, duplicate, and late
    responses are ignored. Tagged batches suppress an unwritten resolved request;

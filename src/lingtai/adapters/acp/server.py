@@ -770,11 +770,24 @@ class AcpStdioServer:
                     )
                     if (
                         meta_valid
-                        and result_fields == {"outcome", "optionId"}
-                        and result.get("outcome") == "selected"
-                        and result.get("optionId") == "allow_once"
+                        and result_fields == {"outcome"}
+                        and isinstance(result.get("outcome"), dict)
                     ):
-                        decision = PermissionDecision.ALLOW
+                        outcome = result["outcome"]
+                        outcome_fields = set(outcome) - {"_meta"}
+                        outcome_meta = outcome.get("_meta")
+                        outcome_meta_valid = (
+                            "_meta" not in outcome
+                            or outcome_meta is None
+                            or isinstance(outcome_meta, dict)
+                        )
+                        if (
+                            outcome_meta_valid
+                            and outcome_fields == {"outcome", "optionId"}
+                            and outcome.get("outcome") == "selected"
+                            and outcome.get("optionId") == "allow_once"
+                        ):
+                            decision = PermissionDecision.ALLOW
                 self._pending_permissions.pop(request_id, None)
                 pending.decision = decision
         pending.event.set()
@@ -814,12 +827,12 @@ class AcpStdioServer:
             )
             observer._track_permission(tool_call_id, pending.publication_lock)
 
-        update = {
-            "sessionUpdate": "tool_call",
+        tool_call = {
             "toolCallId": tool_call_id,
             "title": tool_name,
             "status": "pending",
         }
+        update = {"sessionUpdate": "tool_call", **tool_call}
         messages = ({
             "jsonrpc": JSONRPC_VERSION,
             "method": "session/update",
@@ -830,7 +843,7 @@ class AcpStdioServer:
             "method": "session/request_permission",
             "params": {
                 "sessionId": active.session_id,
-                "toolCall": update,
+                "toolCall": tool_call,
                 "options": [
                     {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
                     {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
