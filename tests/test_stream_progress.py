@@ -432,7 +432,7 @@ def test_session_without_port_keeps_pre_existing_call_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Default-on sources and explicit opt-out
+# System-owned streaming policy and explicit opt-out
 # ---------------------------------------------------------------------------
 
 def _make_agent(tmp_path, **kwargs):
@@ -501,12 +501,13 @@ def _write_init(tmp_path: Path, manifest_overrides: dict | None = None) -> dict:
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
 @patch("lingtai.cli.PosixFilesystemMailAdapter")
-def test_cli_system_runtime_policy_controls_streaming_and_composes_loopback_factory(
+def test_cli_streaming_env_overrides_system_default_and_composes_loopback_factory(
     mock_mail, mock_agent, mock_llm, tmp_path, monkeypatch
 ) -> None:
     from lingtai.cli import build_agent
     from lingtai.tools.system.settings import STREAMING_ENV
 
+    # Valid env wins over the fixed-false System v2 default.
     monkeypatch.setenv(STREAMING_ENV, "on")
     data = _write_init(tmp_path)
     assert "streaming" not in data["manifest"]

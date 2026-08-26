@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/kernel/session.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/cli.py
+  - src/lingtai/tools/system/settings.py
   - docs/references/stream-progress.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -61,14 +62,17 @@ manual [`docs/references/stream-progress.md`](../../../../docs/references/stream
   the stable `agent_id` right after identity resolution — only when
   `streaming` is true; an explicit `streaming=False` never calls it — stores
   the Port as `self._stream_progress`, and passes it to `SessionManager`
-  (`src/lingtai/kernel/base_agent/__init__.py`). `streaming` defaults to `True`.
+  (`src/lingtai/kernel/base_agent/__init__.py`). `streaming` defaults to `False`.
 - The only production adapter is `LoopbackStreamProgressPublisher` plus its
   `loopback_stream_progress_factory` (`src/lingtai/adapters/stream_progress.py`),
   mapped structurally by the source root [`src/lingtai/ANATOMY.md`](../../ANATOMY.md).
-  `lingtai.cli.build_agent` injects the factory and `run` closes the publisher
-  best-effort after stop (`src/lingtai/cli.py`). `lingtai.Agent` passes the
-  kwarg through untouched; programmatic callers get no endpoint unless they
-  inject one.
+  `lingtai.cli.build_agent` injects the factory and passes
+  `streaming=runtime_policy.streaming` from the System v2 runtime-policy owner
+  (`src/lingtai/tools/system/settings.py`: valid `LINGTAI_STREAMING` > valid v2
+  `settings/system.json` `streaming` > fixed `false`; never `init.json`), and
+  `run` closes the publisher best-effort after stop (`src/lingtai/cli.py`).
+  `lingtai.Agent` passes the kwarg through untouched; programmatic callers get
+  no endpoint unless they explicitly enable streaming and inject a factory.
 - Consumers (first: the `lingtai-tui` Go client) reimplement `candidate_ports`
   byte-for-byte and read `GET /v1/stream-progress` on `127.0.0.1`.
 
@@ -90,7 +94,7 @@ process. The Port itself and the discovery arithmetic own no state.
 
 ## Notes
 
-This is a navigation-only Port anatomy; the lifecycle, fail-open, default-on,
+This is a navigation-only Port anatomy; the lifecycle, fail-open, configuration,
 schema, and discovery rules are normative in the paired
 [`CONTRACT.md`](CONTRACT.md). There is no dedicated anatomy for the one-file
 portable loopback adapter — its structure is owned by this governed pair and

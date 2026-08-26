@@ -11,7 +11,7 @@ related_files:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/cli.py
-  - src/lingtai/init.jsonc
+  - src/lingtai/tools/system/settings.py
   - docs/references/stream-progress.md
   - tests/test_stream_progress.py
   - tests/test_architecture_documents.py
@@ -55,8 +55,9 @@ delta increments; success and failure both clear (`active = false`,
 `streamed_chars = 0`) in a `finally`. A failure inside progress publication
 MUST never fail the LLM call, and a bind or read failure of the local endpoint
 MUST leave the agent (and any consumer) running without the badge. LLM output
-streaming is on by default for new or missing configuration; an explicit
-`"streaming": false` remains an honest opt-out. Agents MUST NOT add a text
+streaming is System-owned for production agents: valid `LINGTAI_STREAMING` >
+valid v2 `settings/system.json` `streaming` > fixed `false`, never `init.json`.
+A legacy `manifest.streaming` cannot affect boot or refresh. Agents MUST NOT add a text
 field, a write or authenticated operation, a non-loopback bind, a filesystem
 side channel, or a generic plugin/tool surface to this boundary.
 
@@ -136,11 +137,15 @@ and is not registered through a selector. Core never imports it.
    imports or constructs the concrete publisher. `lingtai.cli.build_agent`
    injects `loopback_stream_progress_factory`; the `run` host closes the
    publisher best-effort after `agent.stop`, outside the kernel stop order.
-4. Default-on sources are truthful together: the canonical `init.jsonc`
-   template ships `"streaming": true`, `cli.build_agent` falls back to `True`
-   for a missing key, and `BaseAgent.__init__` (therefore `lingtai.Agent`)
-   defaults `streaming=True`. An explicit `false` stays `False` and takes the
-   non-stream `send` path.
+4. One production policy is truthful end to end: `cli.build_agent` passes
+   `streaming=runtime_policy.streaming`, where
+   `resolve_runtime_policy(working_dir)` resolves valid `LINGTAI_STREAMING` >
+   valid v2 `settings/system.json` boolean `streaming` > fixed `False`. It
+   never reads a manifest key — the canonical `init.jsonc` ships no `streaming`
+   field, while a legacy `manifest.streaming` remains compatibility-readable but
+   cannot affect boot or refresh. `BaseAgent.__init__` (therefore
+   `lingtai.Agent`) also defaults `streaming=False`. A resolved or explicit
+   `False` takes the non-stream `send` path.
 5. `StreamProgressState` is generation-bound: `add_chars`/`end` mutate only
    while active *and* the given generation equals the current one. A delta or
    `end` from any other generation — an abandoned timed-out worker that keeps
@@ -167,9 +172,9 @@ generation, clears that generation in `finally` on success and on failure, is
 immune to an abandoned worker's late callbacks/end during a newer response, is
 fail-open when the Port raises (begin, add, or end) or returns a non-`int`
 generation, uses `send` untouched with explicit `streaming=False`, and keeps
-the no-Port call shape; the default-on sources (`BaseAgent` signature, wrapper
-pass-through, CLI missing key, canonical template) and the explicit-false
-opt-out (factory never called, non-stream send); `BaseAgent` factory injection
+the no-Port call shape; the System-owned production policy (`LINGTAI_STREAMING`
+then v2 settings then fixed false), the legacy-manifest non-owner rule, and the
+explicit-false path (factory never called, non-stream send); `BaseAgent` factory injection
 with the stable `agent_id` and factory fail-open; and the loopback endpoint
 (`127.0.0.1` bind on a discovery candidate, schema/identity/`no-store`, 404/405,
 live transition readback, next-free-candidate binding with reader-side

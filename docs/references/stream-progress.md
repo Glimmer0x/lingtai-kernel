@@ -4,6 +4,7 @@ related_files:
 - src/lingtai/kernel/stream_progress/ANATOMY.md
 - src/lingtai/kernel/stream_progress/__init__.py
 - src/lingtai/adapters/stream_progress.py
+- src/lingtai/tools/system/settings.py
 maintenance: |
   Capability manual for the stream-progress Port and its loopback read API; reciprocally linked from stream_progress/CONTRACT.md and ANATOMY.md related_files (enforced by tests/test_architecture_documents.py) — keep the schema, discovery arithmetic, and lifecycle guidance synced with the Port's actual contract, the adapter, and the Go client that mirrors it.
 ---
@@ -72,15 +73,19 @@ generation can change the snapshot.
 Every Port call is fail-open: a raising publisher is logged once per session
 and the LLM call proceeds normally.
 
-## Streaming is on by default
+## Streaming is System-owned
 
-Streaming — and therefore progress — is enabled unless a manifest says
-otherwise. The three default sources agree: the canonical `init.jsonc`
-template ships `"streaming": true`, `lingtai run` treats a missing key as
-`true`, and `BaseAgent`/`lingtai.Agent` default to `streaming=True`. To opt out,
-set `"streaming": false` explicitly in `init.json`; that value is honored as
-before — the agent uses the non-streaming send and composes no publisher at
-all, so no loopback endpoint is bound for it.
+For a production `lingtai-agent run` agent, the one configuration owner is
+`lingtai.tools.system.settings.resolve_runtime_policy` (the System manual's
+runtime-policy v2 section): a valid `LINGTAI_STREAMING` environment value, then
+a valid boolean `streaming` in a v2 `<agent>/settings/system.json` document,
+then the fixed default `false`. `init.json` does not participate: its canonical
+template ships no `streaming` key, while a legacy `manifest.streaming` remains
+compatibility-readable but cannot affect boot or refresh. When the resolved
+policy is off, the agent uses the non-streaming send and composes no publisher,
+so no loopback endpoint is bound. Programmatic `BaseAgent`/`lingtai.Agent`
+callers likewise default to `streaming=False`; callers that need streaming pass
+`True` explicitly.
 
 ## Reading it (writing a consumer)
 
@@ -116,12 +121,14 @@ curl -s http://127.0.0.1:<candidate>/v1/stream-progress
 
 ## Composition
 
-`lingtai.cli.build_agent` injects `loopback_stream_progress_factory`; `BaseAgent`
-calls it once with the stable `agent_id` and passes the returned Port to
-`SessionManager`. Bare `BaseAgent`/`lingtai.Agent` callers get no endpoint unless
-they inject their own factory — a fake Port in tests, for example. A bind
-failure on all eight candidates is logged once and the agent keeps running
-without a badge.
+`lingtai.cli.build_agent` resolves the System runtime policy once and passes
+`streaming=runtime_policy.streaming` while injecting
+`loopback_stream_progress_factory`; `BaseAgent` calls the factory once with the
+stable `agent_id` only when streaming is on, then passes the returned Port to
+`SessionManager`. Bare `BaseAgent`/`lingtai.Agent` callers get no endpoint
+unless they explicitly enable streaming and inject their own factory — a fake
+Port in tests, for example. A bind failure on all eight candidates is logged
+once and the agent keeps running without a badge.
 
 ## Non-goals
 
