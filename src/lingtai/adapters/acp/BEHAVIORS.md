@@ -57,8 +57,15 @@ maintenance: |
    responses, timeout, close, queue/write/
    flush failure deny and wake without exposing private tool data.
 5. Inspect the cancellation test: while the original prompt is unresolved, send a no-id `session/cancel` for the same session and confirm only the original prompt id receives `stopReason=cancelled`.
-6. Inspect every Adapter-authored stdout line with `json.loads`; confirm there is one complete JSON-RPC object per physical line and Python boot/runtime/stop `print` output is captured only on stderr. Confirm docs prohibit native fd 1, pre-captured stdout, and child stdout rather than claiming to quarantine them.
-7. Inspect explicit-scope/lifecycle tests: malformed cwd/MCP, a second session, concurrent prompt, invalid ResourceLink, and failed Core turn each produce the named error path. Confirm canonical outside-agent workspace rooting, parent/symlink refusal, parallel propagation without later leakage, atomic stdio MCP publication/rollback/collision refusal, and lease teardown on close/EOF. Confirm the existing blocked-write and typed-stop lifecycle evidence remains intact.
+6. Inspect request-id/error-taxonomy tests: explicit null/string/signed-int64
+   boundary ids round-trip, missing id remains notification-only, and bool,
+   fractional, structured, or out-of-range integer ids fail with diagnostic id
+   null. Confirm methodless permission responses keep their
+   existing routing. Confirm local session busy/not-initialized errors are
+   `-32010`/`-32011`, not ACP's predefined authentication/resource errors
+   `-32000`/`-32002` or the Adapter's established session-not-found `-32001`.
+7. Inspect every Adapter-authored stdout line with `json.loads`; confirm there is one complete JSON-RPC object per physical line and Python boot/runtime/stop `print` output is captured only on stderr. Confirm docs prohibit native fd 1, pre-captured stdout, and child stdout rather than claiming to quarantine them.
+8. Inspect explicit-scope/lifecycle tests: malformed cwd/MCP, a second session, concurrent prompt, invalid ResourceLink, and failed Core turn each produce the named error path. Confirm canonical outside-agent workspace rooting, parent/symlink refusal, parallel propagation without later leakage, atomic stdio MCP publication/rollback/collision refusal, and lease teardown on close/EOF. Confirm the existing blocked-write and typed-stop lifecycle evidence remains intact.
 
 ### Expected evidence
 - [ ] Step 1 reports all focused tests passing with no network/provider call.
@@ -66,6 +73,10 @@ maintenance: |
 - [ ] Tool lifecycle frames use session-unique ids and only title/status metadata; no arguments, results, content, locations, rawInput/rawOutput, or internal error detail is projected.
 - [ ] Cancel has no response of its own and the original prompt settles exactly once as `cancelled`; no later agent update is emitted for it.
 - [ ] Every Adapter-authored stdout line parses independently as JSON-RPC 2.0; Python diagnostic prints are stderr-only and unsupported native/child fd 1 paths are documented.
+- [ ] Included null/string/signed-int64 request ids echo exactly, invalid ids use
+  diagnostic id null, missing ids remain notifications, and local session-state
+  errors avoid ACP's predefined `-32000` authentication / `-32002` resource
+  meanings plus the Adapter's established `-32001` session-not-found meaning.
 - [ ] Baseline ResourceLink reaches Core as validated compact metadata; strict stdio MCP publishes atomically while malformed/remote variants fail explicitly, and Core failure uses the fixed `LingTai turn failed` wire message.
 - [ ] Agent shutdown cannot wait on EOF or any client write; not-yet-started prompt frames are invalidated, fatal queue/write failures abort, typed timeout retains liveness/lease until ACP process termination, a successful poisoned stop emits no post-release workdir log before exit 0, and invalid UTF-8 has a fixed Parse error only.
 
