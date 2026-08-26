@@ -548,6 +548,8 @@ def main() -> None:
     add_daemon_parser(sub)
     from lingtai.cli_acp import add_acp_parser
     add_acp_parser(sub)
+    from lingtai.cli_project import add_project_parser
+    add_project_parser(sub)
 
     maintenance_parser = sub.add_parser(
         "maintenance",
@@ -619,6 +621,10 @@ def main() -> None:
         from lingtai.cli_acp import handle_acp_command
 
         handle_acp_command(args)
+    elif args.command == "project":
+        from lingtai.cli_project import handle_project_command
+
+        handle_project_command(args)
     elif args.command == "maintenance":
         _handle_maintenance_command(args)
     else:
