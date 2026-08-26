@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
+  - src/lingtai/kernel/turn_permissions.py
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -31,6 +32,7 @@ related_files:
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
+  - tests/test_turn_permissions.py
   - tests/test_acp_stdio.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/process_scan.py
@@ -308,7 +310,8 @@ Clause IDs are stable; each rule composes the linked normative source.
 12. `agent-runtime.correlated-turn.v1` — Guarded by
    [BA004](BEHAVIORS.md#behavior-ba004). `BaseAgent.submit_turn` accepts one text
    turn plus optional caller correlation, generic immutable execution workspace
-   metadata, and a protocol-neutral turn-scoped tool observer, and returns a
+   metadata, a protocol-neutral turn-scoped tool observer, and a separate
+   protocol-neutral permission broker, and returns a
    `TurnHandle`; the handle
    settles exactly once as `normal`, `cancelled`, or `failed`, with completed
    response text only on normal settlement. Correlated envelopes are distinct
@@ -325,8 +328,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    the loop's terminal `finally` cancels every other live control, including a
    registered envelope dequeued before `begin_turn`. Racing teardown claims remain
    exactly once under the same registry lock. While the correlated turn is
-   current, Core binds its workspace and optional observer through task-local
-   context and resets both before settlement/loop teardown; parallel tool workers
+   current, Core binds its workspace, optional observer, and optional permission
+   broker through task-local context and resets all before settlement/loop teardown; parallel tool workers
    receive explicit context copies. The observer receives only bounded tool-call
    id/name/lifecycle state, and observer failure MUST NOT change tool execution or
    settlement. Parallel workers announce start, while the collector exclusively
@@ -334,7 +337,9 @@ Clause IDs are stable; each rule composes the linked normative source.
    terminal observation cannot disagree with batch outcome. This inbound Port is protocol-neutral:
    adapters may translate ACP or another driver into it, but
    Core types and methods contain no ACP session, JSON-RPC, MCP configuration,
-   permission, or transport vocabulary. It still promises no hard provider abort or
+   protocol-specific permission or transport vocabulary. The broker receives only
+   tool id/name; absent brokerage passes through, while broker exceptions or
+   invalid decisions deny. It still promises no hard provider abort or
    running-tool preemption.
 
 ## Contract tests

@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
+  - src/lingtai/kernel/turn_permissions.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -23,6 +24,7 @@ related_files:
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
+  - tests/test_turn_permissions.py
   - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_process_match.py
@@ -47,7 +49,7 @@ API owned by Core and never reaches into provider/session/tool internals.
 
 This slice implements stable ACP v1's baseline session `cwd` and stdio MCP
 requirements alongside Text and ResourceLink prompts. It remains deliberately
-narrow: remote MCP, additional directories, rich content, permissions, and
+narrow: remote MCP, additional directories, rich content, persistent permissions, and
 multi-session persistence are not advertised.
 
 ## Behavior
@@ -68,12 +70,13 @@ therefore prohibited while ACP owns the transport.
 ## Port
 
 The Adapter consumes `BaseAgent.submit_turn(content, sender, correlation_id,
-execution_workspace, tool_observer) -> TurnHandle` and
+execution_workspace, tool_observer, permission_broker) -> TurnHandle` and
 `TurnHandle.cancel()/result()` from
 `src/lingtai/kernel/turns.py`. The terminal `TurnResult` distinguishes
 `normal`, `cancelled`, and `failed` and carries the complete response text for
 normal settlement. This Port contains no ACP method, JSON-RPC object, session
-identifier, ACP method, MCP configuration, permission, or transport vocabulary.
+identifier, ACP method, MCP configuration, or transport vocabulary. Its optional
+permission broker is protocol-neutral and carries only tool call id/name.
 It may carry the generic immutable `ExecutionWorkspace` value attached to a
 correlated turn.
 
@@ -110,7 +113,7 @@ library JSON/threading streams directly.
 3. `acp-local-stdio.turn.v1` — prompt input is a non-empty list of baseline
    Text/ResourceLink blocks. Text is concatenated in order; each validated
    ResourceLink is projected into the Core text boundary as compact JSON metadata
-   without fetching it. Images/audio, embedded resources, permission requests,
+   without fetching it. Images/audio, embedded resources,
    message/usage streaming, and rich tool content are unsupported. During the
    correlated turn, the Adapter projects only minimal tool lifecycle metadata as
    ACP v1 `tool_call`/`tool_call_update`: one session-unique id, the tool name as
@@ -152,7 +155,7 @@ library JSON/threading streams directly.
    forms including quoted Windows `lingtai-agent.exe` before stale signal cleanup;
    the workdir lease remains authoritative.
 7. `acp-local-stdio.scope.v1` — local stdio and ACP v1 only. Multi-session
-   persistence/load, additional workspace roots, permission brokerage,
+   persistence/load, additional workspace roots, persistent permission choices,
    message/usage streaming, tool content/results, remote MCP/transports,
    authentication, and ACP v2 are non-goals.
 8. `acp-local-stdio.workspace-mcp-lifecycle.v1` — relative/default File paths,
@@ -173,16 +176,35 @@ library JSON/threading streams directly.
    invalidation drops later events. Observer or projection failure cannot fail the
    underlying tool, but queue/framing failure still aborts the transport under rule
    6. Tool-call ids are session-unique and no argument/result/raw payload is sent.
+10. `acp-local-stdio.permission.v1` — every otherwise-allowed known ACP tool is
+   announced `pending` and requested with the same minimal id/title/status plus
+   exactly `allow_once` and `reject_once`. Only the first valid matching
+   `selected/allow_once` that arrives after the request frame is physically
+   written and flushed dispatches; response arrival and the post-flush published
+   bit linearize under the state lock, so a guessed/pre-flush response remains
+   denied even if descheduled until after publication. A per-request publication
+   lock protects the wire boundary without holding the global state lock across
+   stdout. Reject/cancel, malformed/error/unknown-option
+   responses, timeout after 60 seconds, close/EOF, queue/framing/write failure,
+   and broker failure deny and wake the waiter. Unknown, duplicate, and late
+   responses are ignored. Tagged batches suppress an unwritten resolved request;
+   lifecycle is marked announced only after its initial pending frame flushes. If
+   cancel/timeout drains permission during an already-started pending write, the
+   writer emits an adjacent failed update after that frame and suppresses request.
+   Arguments, commands, paths, environment, results, content, locations, raw
+   input/output, internal errors, and private paths never enter permission wire.
+   The existing risky-action gate remains first and may deny without a request.
 
 ## Contract tests
 
 `tests/test_acp_stdio.py` pins initialize/session/prompt/update/end-turn framing,
+permission response arbitration and fail-closed teardown,
 cancel settlement, ResourceLink projection, fixed failure redaction, single-
 session/busy/unsupported errors, strict JSON line framing, invalid UTF-8, EOF,
 blocked coordinator/prompt output, FIFO/generation/queue-full/write-failure paths,
 Agent-stop-with-open-stdin, Windows duplicate-before-cleanup, typed quiescence,
 and CLI Python-stdout quarantine/hard-exit ownership.
-`tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP
+`tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_turn_permissions.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP
 wire tests pin workspace rooting/escape/isolation, stdio validation, atomic
 publication/rollback, collisions, and close/EOF ownership.
 `tests/test_correlated_turns.py` pins the consumed Core Port's normal, matching

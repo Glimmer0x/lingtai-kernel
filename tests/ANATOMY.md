@@ -43,6 +43,7 @@ related_files:
   - tests/test_acp_stdio.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
+  - tests/test_turn_permissions.py
   - tests/test_session_mcp.py
   - tests/test_active_stuck_watchdog.py
   - tests/test_adapter_registry.py

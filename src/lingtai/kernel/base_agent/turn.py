@@ -25,6 +25,7 @@ from ..safety_limits import (
 from ..tool_executor import ToolExecutor
 from ..tool_call_guard import ToolCallGuard
 from ..risky_action_gate import build_risky_action_check
+from ..turn_permissions import broker_permission_check
 from ..tool_result_artifacts import CompactionStats, compact_oversized_history
 from ..llm.base import (
     is_all_empty_response,
@@ -935,10 +936,12 @@ def _run_loop(agent) -> None:
         from ..turns import cancel_all_turns
         from ..execution_workspace import clear_execution_workspace
         from ..turn_events import clear_turn_tool_observer
+        from ..turn_permissions import clear_turn_permission_broker
 
         cancel_all_turns(agent, reason="agent run loop stopped")
         clear_execution_workspace()
         clear_turn_tool_observer()
+        clear_turn_permission_broker()
 
 
 def _run_loop_body(agent) -> None:
@@ -1036,6 +1039,7 @@ def _run_loop_body(agent) -> None:
             turn_control = begin_turn(agent, msg)
             execution_workspace_token = None
             tool_observer_token = None
+            permission_broker_token = None
             if turn_control is not None:
                 from ..execution_workspace import (
                     bind_execution_workspace,
@@ -1056,6 +1060,14 @@ def _run_loop_body(agent) -> None:
                 clear_turn_tool_observer()
                 tool_observer_token = bind_turn_tool_observer(
                     turn_control.tool_observer
+                )
+                from ..turn_permissions import (
+                    bind_turn_permission_broker,
+                    clear_turn_permission_broker,
+                )
+                clear_turn_permission_broker()
+                permission_broker_token = bind_turn_permission_broker(
+                    turn_control.permission_broker
                 )
                 msg = correlated_message_text(msg)
             elif msg.type == MSG_CORRELATED_TURN:
@@ -1652,6 +1664,9 @@ def _run_loop_body(agent) -> None:
             if tool_observer_token is not None:
                 from ..turn_events import reset_turn_tool_observer
                 reset_turn_tool_observer(tool_observer_token)
+            if permission_broker_token is not None:
+                from ..turn_permissions import reset_turn_permission_broker
+                reset_turn_permission_broker(permission_broker_token)
             _settle_correlated_after_turn(
                 agent,
                 turn_control,
@@ -2116,6 +2131,7 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
         working_dir=agent._working_dir,
         tool_call_guard=ToolCallGuard([
             build_risky_action_check(agent._working_dir),
+            broker_permission_check,
         ]),
         summarize_notification_threshold=getattr(
             agent, "_summarize_notification_threshold", None

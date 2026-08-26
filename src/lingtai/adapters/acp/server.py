@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, TextIO
@@ -15,6 +15,10 @@ from lingtai.kernel.execution_workspace import ExecutionWorkspace
 from lingtai.kernel.turn_events import (
     ToolLifecycleEvent,
     ToolLifecycleState,
+)
+from lingtai.kernel.turn_permissions import (
+    PermissionDecision,
+    ToolPermissionRequest,
 )
 from lingtai.services.session_mcp import StdioMCPServerConfig
 
@@ -58,6 +62,20 @@ class _OutboundBatch:
     wires: tuple[str, ...]
     active: _ActivePrompt | None = None
     settles_active: bool = False
+    permission: _PendingPermission | None = None
+
+
+@dataclass(slots=True)
+class _PendingPermission:
+    request_id: str
+    active: _ActivePrompt
+    generation: int
+    event: threading.Event
+    observer: _PromptToolObserver
+    tool_call_id: str
+    publication_lock: threading.Lock = field(default_factory=threading.Lock)
+    published: bool = False
+    decision: PermissionDecision | None = None
 
 
 class _PromptToolObserver:
@@ -75,69 +93,130 @@ class _PromptToolObserver:
         self._correlation_id = correlation_id
         self._generation = generation
         self._active: _ActivePrompt | None = None
+        self._announced: set[str] = set()
         self._started: set[str] = set()
         self._terminal: set[str] = set()
+        self._publication_locks: dict[str, threading.Lock] = {}
 
     def bind_active(self, active: _ActivePrompt) -> None:
         self._active = active
 
+    def _track_permission(
+        self, tool_call_id: str, publication_lock: threading.Lock
+    ) -> None:
+        """Associate lifecycle with a pending wire publication.
+
+        Caller owns the server state lock. Lifecycle acquires this per-call lock
+        before the state lock, matching the writer and response paths.
+        """
+
+        self._publication_locks[tool_call_id] = publication_lock
+
+    def _mark_announced(
+        self, tool_call_id: str, *, terminal: bool = False
+    ) -> None:
+        """Record a physically flushed initial record and optional terminal."""
+
+        self._announced.add(tool_call_id)
+        if terminal:
+            self._terminal.add(tool_call_id)
+            self._publication_locks.pop(tool_call_id, None)
+
     def on_tool_lifecycle(self, event: ToolLifecycleEvent) -> None:
         server = self._server
+        tool_call_id = f"{self._correlation_id}:{event.tool_call_id}"
         with server._state_lock:
-            active = self._active
-            if (
-                active is None
-                or server._active is not active
-                or active.terminal_claimed
-                or server._closing
-                or server._generation != self._generation
-            ):
-                return
-            tool_call_id = f"{self._correlation_id}:{event.tool_call_id}"
-            if tool_call_id in self._terminal:
-                return
-            if event.state is ToolLifecycleState.STARTED:
-                if tool_call_id in self._started:
+            publication_lock = self._publication_locks.get(tool_call_id)
+        if publication_lock is not None and not publication_lock.acquire(
+            blocking=False
+        ):
+            # A timeout/cancel can produce DENIED while client stdout is still
+            # blocked in the initial permission batch. Lifecycle observation is
+            # fail-open: suppress rather than pin the Core tool thread behind
+            # an unbounded client write or emit an orphan update.
+            with server._state_lock:
+                self._publication_locks.pop(tool_call_id, None)
+            return
+        try:
+            with server._state_lock:
+                active = self._active
+                if (
+                    active is None
+                    or server._active is not active
+                    or active.terminal_claimed
+                    or server._closing
+                    or server._generation != self._generation
+                ):
+                    self._publication_locks.pop(tool_call_id, None)
                     return
-                self._started.add(tool_call_id)
-                update = {
-                    "sessionUpdate": "tool_call",
-                    "toolCallId": tool_call_id,
-                    "title": event.tool_name,
-                    "status": "in_progress",
-                }
-            else:
-                failed = event.state in {
-                    ToolLifecycleState.FAILED,
-                    ToolLifecycleState.DENIED,
-                }
-                status = "failed" if failed else "completed"
-                self._terminal.add(tool_call_id)
-                if tool_call_id in self._started:
-                    update = {
-                        "sessionUpdate": "tool_call_update",
-                        "toolCallId": tool_call_id,
-                        "status": status,
-                    }
+                if tool_call_id in self._terminal:
+                    return
+                if event.state is ToolLifecycleState.STARTED:
+                    if tool_call_id in self._started:
+                        return
+                    self._started.add(tool_call_id)
+                    self._publication_locks.pop(tool_call_id, None)
+                    if tool_call_id in self._announced:
+                        update = {
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": tool_call_id,
+                            "status": "in_progress",
+                        }
+                    else:
+                        self._announced.add(tool_call_id)
+                        update = {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": tool_call_id,
+                            "title": event.tool_name,
+                            "status": "in_progress",
+                        }
                 else:
-                    update = {
-                        "sessionUpdate": "tool_call",
-                        "toolCallId": tool_call_id,
-                        "title": event.tool_name,
-                        "status": status,
+                    failed = event.state in {
+                        ToolLifecycleState.FAILED,
+                        ToolLifecycleState.DENIED,
                     }
-            server._enqueue_messages(
-                ({
-                    "jsonrpc": JSONRPC_VERSION,
-                    "method": "session/update",
-                    "params": {
-                        "sessionId": self._session_id,
-                        "update": update,
-                    },
-                },),
-                generation=self._generation,
-                active=active,
-            )
+                    status = "failed" if failed else "completed"
+                    self._terminal.add(tool_call_id)
+                    self._publication_locks.pop(tool_call_id, None)
+                    if tool_call_id in self._announced:
+                        update = {
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": tool_call_id,
+                            "status": status,
+                        }
+                    else:
+                        self._announced.add(tool_call_id)
+                        update = {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": tool_call_id,
+                            "title": event.tool_name,
+                            "status": status,
+                        }
+                server._enqueue_messages(
+                    ({
+                        "jsonrpc": JSONRPC_VERSION,
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": self._session_id,
+                            "update": update,
+                        },
+                    },),
+                    generation=self._generation,
+                    active=active,
+                )
+        finally:
+            if publication_lock is not None:
+                publication_lock.release()
+
+    def request_permission(
+        self, request: ToolPermissionRequest
+    ) -> PermissionDecision:
+        return self._server._request_tool_permission(
+            observer=self,
+            tool_call_id=f"{self._correlation_id}:{request.tool_call_id}",
+            tool_name=request.tool_name,
+            generation=self._generation,
+        )
 
 
 def _package_version() -> str:
@@ -161,6 +240,7 @@ class AcpStdioServer:
     """
 
     _OUTBOUND_QUEUE_BATCHES = 64
+    _PERMISSION_TIMEOUT_SECONDS = 60.0
 
     def __init__(self, agent, input_stream: TextIO, output_stream: TextIO):
         self._agent = agent
@@ -177,6 +257,8 @@ class AcpStdioServer:
         self._aborted = False
         self._generation = 0
         self._prompt_threads: set[threading.Thread] = set()
+        self._permission_counter = 0
+        self._pending_permissions: dict[str, _PendingPermission] = {}
         self._outbound: queue.Queue[_OutboundBatch] = queue.Queue(
             maxsize=self._OUTBOUND_QUEUE_BATCHES
         )
@@ -262,6 +344,8 @@ class AcpStdioServer:
             self._generation += 1
             active = self._active
             self._active = None
+            pending = self._drain_permissions_locked()
+        self._wake_permissions(pending)
         if active is not None:
             active.handle.cancel()
         lease = self._session_mcp_lease
@@ -280,6 +364,8 @@ class AcpStdioServer:
             self._generation += 1
             active = self._active
             self._active = None
+            pending = self._drain_permissions_locked()
+        self._wake_permissions(pending)
         if active is not None:
             active.handle.cancel()
         lease = self._session_mcp_lease
@@ -290,6 +376,9 @@ class AcpStdioServer:
     def _dispatch(self, message: Any) -> None:
         if not isinstance(message, dict):
             self._write_error(None, INVALID_REQUEST, "Invalid Request")
+            return
+
+        if "method" not in message and self._dispatch_permission_response(message):
             return
 
         has_id = "id" in message
@@ -589,6 +678,7 @@ class AcpStdioServer:
                     correlation_id=correlation_id,
                     execution_workspace=self._execution_workspace,
                     tool_observer=observer,
+                    permission_broker=observer,
                 )
             except (TypeError, ValueError) as exc:
                 raise _RpcError(INVALID_PARAMS, str(exc)) from exc
@@ -622,8 +712,145 @@ class AcpStdioServer:
                 # Keep adapter settlement ordering linear: the prompt worker also
                 # takes this lock before emitting its terminal response, so a
                 # received cancel reaches the Core handle before that response.
+                pending = self._drain_permissions_locked(active=active)
+                self._wake_permissions(pending)
                 active.handle.cancel()
         return None
+
+    def _drain_permissions_locked(
+        self, *, active: _ActivePrompt | None = None
+    ) -> list[_PendingPermission]:
+        drained = []
+        for request_id, pending in list(self._pending_permissions.items()):
+            if active is None or pending.active is active:
+                self._pending_permissions.pop(request_id, None)
+                pending.decision = PermissionDecision.DENY
+                drained.append(pending)
+        return drained
+
+    @staticmethod
+    def _wake_permissions(pending: list[_PendingPermission]) -> None:
+        for entry in pending:
+            entry.event.set()
+
+    def _dispatch_permission_response(self, message: dict[str, Any]) -> bool:
+        request_id = message.get("id")
+        if not self._valid_id(request_id):
+            return False
+        with self._state_lock:
+            pending = self._pending_permissions.get(request_id)
+            if pending is None:
+                # Unknown, duplicate, and late response objects are ignored, but
+                # a method-less object without a result/error remains an invalid
+                # client request and must follow the ordinary JSON-RPC error path.
+                return "result" in message or "error" in message
+            # Capture arrival under the same state lock that the writer uses to
+            # publish the bit after a successful request-frame flush. If this
+            # response entered before that boundary it remains DENY even when it
+            # is descheduled until after publication or waits on the wire lock.
+            arrived_before_publish = not pending.published
+
+        with pending.publication_lock:
+            with self._state_lock:
+                if self._pending_permissions.get(request_id) is not pending:
+                    return True
+                decision = PermissionDecision.DENY
+                if not arrived_before_publish and pending.published and (
+                    message.get("jsonrpc") == JSONRPC_VERSION
+                    and set(message) == {"jsonrpc", "id", "result"}
+                    and isinstance(message.get("result"), dict)
+                ):
+                    result = message["result"]
+                    result_fields = set(result) - {"_meta"}
+                    meta = result.get("_meta")
+                    meta_valid = (
+                        "_meta" not in result
+                        or meta is None
+                        or isinstance(meta, dict)
+                    )
+                    if (
+                        meta_valid
+                        and result_fields == {"outcome", "optionId"}
+                        and result.get("outcome") == "selected"
+                        and result.get("optionId") == "allow_once"
+                    ):
+                        decision = PermissionDecision.ALLOW
+                self._pending_permissions.pop(request_id, None)
+                pending.decision = decision
+        pending.event.set()
+        return True
+
+    def _request_tool_permission(
+        self,
+        *,
+        observer: _PromptToolObserver,
+        tool_call_id: str,
+        tool_name: str,
+        generation: int,
+    ) -> PermissionDecision:
+        with self._state_lock:
+            active = observer._active
+            if (
+                active is None
+                or self._active is not active
+                or active.terminal_claimed
+                or (
+                    callable(getattr(active.handle, "cancel_requested", None))
+                    and active.handle.cancel_requested()
+                )
+                or self._closing
+                or generation != self._generation
+            ):
+                return PermissionDecision.DENY
+            self._permission_counter += 1
+            request_id = f"lingtai-permission-{self._permission_counter}"
+            pending = _PendingPermission(
+                request_id=request_id,
+                active=active,
+                generation=generation,
+                event=threading.Event(),
+                observer=observer,
+                tool_call_id=tool_call_id,
+            )
+            observer._track_permission(tool_call_id, pending.publication_lock)
+
+        update = {
+            "sessionUpdate": "tool_call",
+            "toolCallId": tool_call_id,
+            "title": tool_name,
+            "status": "pending",
+        }
+        messages = ({
+            "jsonrpc": JSONRPC_VERSION,
+            "method": "session/update",
+            "params": {"sessionId": active.session_id, "update": update},
+        }, {
+            "jsonrpc": JSONRPC_VERSION,
+            "id": request_id,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": active.session_id,
+                "toolCall": update,
+                "options": [
+                    {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+                    {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
+                ],
+            },
+        })
+        accepted = self._enqueue_messages(
+            messages,
+            generation=generation,
+            active=active,
+            permission=pending,
+        )
+        if not accepted:
+            return PermissionDecision.DENY
+        pending.event.wait(timeout=self._PERMISSION_TIMEOUT_SECONDS)
+        with self._state_lock:
+            if self._pending_permissions.get(request_id) is pending:
+                self._pending_permissions.pop(request_id, None)
+                pending.decision = PermissionDecision.DENY
+            return pending.decision or PermissionDecision.DENY
 
     def _await_prompt(self, active: _ActivePrompt) -> None:
         accepted = False
@@ -731,6 +958,7 @@ class AcpStdioServer:
         generation: int | None = None,
         active: _ActivePrompt | None = None,
         settles_active: bool = False,
+        permission: _PendingPermission | None = None,
     ) -> bool:
         try:
             wires: list[str] = []
@@ -757,6 +985,20 @@ class AcpStdioServer:
                 generation = self._generation
             elif generation != self._generation:
                 return False
+            if permission is not None:
+                if (
+                    permission.active is not active
+                    or permission.generation != generation
+                    or self._active is not active
+                    or active is None
+                    or active.terminal_claimed
+                    or (
+                        callable(getattr(active.handle, "cancel_requested", None))
+                        and active.handle.cancel_requested()
+                    )
+                ):
+                    return False
+                self._pending_permissions[permission.request_id] = permission
             try:
                 self._outbound.put_nowait(
                     _OutboundBatch(
@@ -764,6 +1006,7 @@ class AcpStdioServer:
                         tuple(wires),
                         active,
                         settles_active,
+                        permission,
                     )
                 )
             except queue.Full:
@@ -776,6 +1019,10 @@ class AcpStdioServer:
                 self._generation += 1
                 active_to_cancel = self._active
                 self._active = None
+                pending = self._drain_permissions_locked()
+            else:
+                pending = []
+        self._wake_permissions(pending)
         if active_to_cancel is not None:
             active_to_cancel.handle.cancel()
         return accepted
@@ -792,24 +1039,98 @@ class AcpStdioServer:
                         return
                 continue
             try:
-                for wire in batch.wires:
-                    with self._state_lock:
-                        if self._aborted or (
-                            batch.active is not None
-                            and (
-                                self._closing
-                                or batch.generation != self._generation
-                                or self._shutdown_requested()
-                            )
-                        ):
+                for wire_index, wire in enumerate(batch.wires):
+                    publication_lock = (
+                        batch.permission.publication_lock
+                        if batch.permission is not None
+                        else None
+                    )
+                    if publication_lock is not None:
+                        publication_lock.acquire()
+                    try:
+                        with self._state_lock:
+                            if self._aborted or (
+                                batch.active is not None
+                                and (
+                                    self._closing
+                                    or batch.generation != self._generation
+                                    or self._shutdown_requested()
+                                )
+                            ) or (
+                                batch.permission is not None
+                                and self._pending_permissions.get(
+                                    batch.permission.request_id
+                                ) is not batch.permission
+                            ):
+                                break
+                            # This state check is the start linearization point.
+                            # Close can invalidate every frame that has not crossed
+                            # it, but no Python API can revoke an OS write already
+                            # in progress. Permission publication uses its own lock
+                            # so global teardown never waits on client stdout.
+                        written = self._output.write(wire)
+                        if written != len(wire):
+                            raise OSError("short ACP stdout write")
+                        self._output.flush()
+                        deferred_terminal_wire = None
+                        if batch.permission is not None:
+                            with self._state_lock:
+                                registered = self._pending_permissions.get(
+                                    batch.permission.request_id
+                                ) is batch.permission
+                                if wire_index == len(batch.wires) - 1 and registered:
+                                    # Publish under the same state lock used when
+                                    # a response captures its arrival. The flush
+                                    # has completed, and the wire lock stays held.
+                                    batch.permission.published = True
+                                if wire_index == 0:
+                                    # Cancel/timeout may drain and deny while this
+                                    # already-started pending write is blocked.
+                                    # Once the frame physically lands it needs an
+                                    # adjacent terminal even though the request
+                                    # frame will be suppressed.
+                                    close_started_record = (
+                                        not registered
+                                        and batch.permission.decision
+                                        is PermissionDecision.DENY
+                                        and not self._aborted
+                                        and not self._closing
+                                        and batch.permission.generation
+                                        == self._generation
+                                        and self._active
+                                        is batch.permission.active
+                                    )
+                                    batch.permission.observer._mark_announced(
+                                        batch.permission.tool_call_id,
+                                        terminal=close_started_record,
+                                    )
+                                    if close_started_record:
+                                        deferred_terminal_wire = json.dumps(
+                                            {
+                                                "jsonrpc": JSONRPC_VERSION,
+                                                "method": "session/update",
+                                                "params": {
+                                                    "sessionId": batch.permission.active.session_id,
+                                                    "update": {
+                                                        "sessionUpdate": "tool_call_update",
+                                                        "toolCallId": batch.permission.tool_call_id,
+                                                        "status": "failed",
+                                                    },
+                                                },
+                                            },
+                                            ensure_ascii=False,
+                                            separators=(",", ":"),
+                                            allow_nan=False,
+                                        ) + "\n"
+                        if deferred_terminal_wire is not None:
+                            written = self._output.write(deferred_terminal_wire)
+                            if written != len(deferred_terminal_wire):
+                                raise OSError("short ACP stdout write")
+                            self._output.flush()
                             break
-                        # This state check is the start linearization point. Close
-                        # can invalidate every frame that has not crossed it, but
-                        # no Python API can revoke an OS write already in progress.
-                    written = self._output.write(wire)
-                    if written != len(wire):
-                        raise OSError("short ACP stdout write")
-                    self._output.flush()
+                    finally:
+                        if publication_lock is not None:
+                            publication_lock.release()
             except Exception:
                 self._abort_transport()
                 return

@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
+  - src/lingtai/kernel/turn_permissions.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -27,6 +28,7 @@ related_files:
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
+  - tests/test_turn_permissions.py
   - src/lingtai/adapters/acp/BEHAVIORS.md
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
@@ -127,7 +129,7 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
 - **estimate**: ≈ 3 minutes
 
 ### Steps
-1. From `<repo>`, run `python -m pytest -q -x tests/test_turn_events.py tests/test_correlated_turns.py tests/test_execution_workspace.py tests/test_tool_executor.py` with the project Python.
+1. From `<repo>`, run `python -m pytest -q -x tests/test_turn_events.py tests/test_turn_permissions.py tests/test_correlated_turns.py tests/test_execution_workspace.py tests/test_tool_executor.py` with the project Python.
 2. Inspect the normal test and confirm the submitted correlation id returns one `normal` result carrying the complete collected text.
 3. Inspect the active-cancel and two-queued-turn tests: cancel the matching active handle before releasing its fake provider, then cancel the pending second handle while the first is blocked.
 4. Inspect failure and shutdown tests and confirm AED terminal failure becomes `failed` while run-loop shutdown settles an unprocessed queued handle `cancelled`; a control already claimed during the dequeue/bind race makes its private envelope skip provider dispatch.
@@ -137,6 +139,8 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
    execution paths, lifecycle observers reach serial/parallel tool workers, a
    consecutive unobserved turn sees no stale observer, and observer failure does
    not alter tool execution or settlement.
+8. Inspect permission tests: absent brokerage passes through; a bound broker sees
+   only safe identity; exceptions/invalid decisions deny; consecutive turns reset scope.
 
 ### Expected evidence
 - [ ] All focused tests pass without a provider or network call.
