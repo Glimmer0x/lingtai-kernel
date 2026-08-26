@@ -230,13 +230,18 @@ def test_permission_wire_allows_only_matching_allow_once_then_lifecycle_progress
         "method": "session/request_permission",
         "params": {
             "sessionId": session_id,
-            "toolCall": pending["params"]["update"],
+            "toolCall": {
+                "toolCallId": safe_id,
+                "title": "shell",
+                "status": "pending",
+            },
             "options": [
                 {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
                 {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
             ],
         },
     }
+    assert "sessionUpdate" not in request["params"]["toolCall"]
     projected = json.dumps((pending, request))
     for forbidden in (
         "arguments", "command", "paths", "env", "results", "content",
@@ -248,9 +253,12 @@ def test_permission_wire_allows_only_matching_allow_once_then_lifecycle_progress
         "jsonrpc": "2.0",
         "id": request["id"],
         "result": {
-            "outcome": "selected",
-            "optionId": "allow_once",
             "_meta": {"source": "client"},
+            "outcome": {
+                "outcome": "selected",
+                "optionId": "allow_once",
+                "_meta": {"source": "user"},
+            },
         },
     })
     waiter.join(timeout=2)
@@ -296,7 +304,9 @@ def test_guessed_allow_before_permission_request_flush_cannot_authorize():
     responder = threading.Thread(target=lambda: server._dispatch({
         "jsonrpc": "2.0",
         "id": "lingtai-permission-1",
-        "result": {"outcome": "selected", "optionId": "allow_once"},
+        "result": {
+            "outcome": {"outcome": "selected", "optionId": "allow_once"},
+        },
     }))
     responder.start()
     time.sleep(0.02)
@@ -362,7 +372,9 @@ def test_response_captured_before_request_flush_stays_denied_after_publication()
         target=lambda: server._dispatch({
             "jsonrpc": "2.0",
             "id": pending.request_id,
-            "result": {"outcome": "selected", "optionId": "allow_once"},
+            "result": {
+                "outcome": {"outcome": "selected", "optionId": "allow_once"},
+            },
         }),
     )
     responder.start()
@@ -435,10 +447,22 @@ def test_cancel_during_blocked_pending_write_emits_adjacent_failed_terminal():
 
 
 @pytest.mark.parametrize("response", [
-    {"result": {"outcome": "selected", "optionId": "reject_once"}},
-    {"result": {"outcome": "selected", "optionId": "allow_always"}},
-    {"result": {"outcome": "cancelled"}},
-    {"result": {"outcome": "selected"}},
+    {"result": {"outcome": {
+        "outcome": "selected", "optionId": "reject_once",
+    }}},
+    {"result": {"outcome": {
+        "outcome": "selected", "optionId": "allow_always",
+    }}},
+    {"result": {"outcome": {"outcome": "cancelled"}}},
+    {"result": {"outcome": "selected", "optionId": "allow_once"}},
+    {"result": {"outcome": {"outcome": "selected"}}},
+    {"result": {"outcome": {
+        "outcome": "selected", "optionId": "allow_once", "extra": True,
+    }}},
+    {"result": {
+        "outcome": {"outcome": "selected", "optionId": "allow_once"},
+        "extra": True,
+    }},
     {"error": {"code": -32000, "message": "client failed"}},
 ])
 def test_matching_non_allow_permission_responses_deny_without_response(response):
@@ -486,7 +510,9 @@ def test_permission_timeout_denies_and_late_allow_cannot_authorize(monkeypatch):
     server._dispatch({
         "jsonrpc": "2.0",
         "id": request["id"],
-        "result": {"outcome": "selected", "optionId": "allow_once"},
+        "result": {
+            "outcome": {"outcome": "selected", "optionId": "allow_once"},
+        },
     })
     assert request["id"] not in server._pending_permissions
     server.close()
@@ -545,7 +571,9 @@ def test_unknown_response_id_is_ignored_and_cannot_authorize_pending_request():
     server._dispatch({
         "jsonrpc": "2.0",
         "id": "unknown-permission",
-        "result": {"outcome": "selected", "optionId": "allow_once"},
+        "result": {
+            "outcome": {"outcome": "selected", "optionId": "allow_once"},
+        },
     })
     time.sleep(0.02)
     assert len(_messages(output)) == before
@@ -553,7 +581,7 @@ def test_unknown_response_id_is_ignored_and_cannot_authorize_pending_request():
     server._dispatch({
         "jsonrpc": "2.0",
         "id": request["id"],
-        "result": {"outcome": "cancelled"},
+        "result": {"outcome": {"outcome": "cancelled"}},
     })
     waiter.join(timeout=2)
     assert result == [PermissionDecision.DENY]

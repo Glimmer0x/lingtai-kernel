@@ -87,7 +87,8 @@ A minimal client sequence is:
    list. ResourceLink metadata is forwarded to Core as compact text; this slice
    does not fetch the URI.
 5. For each tool, answer `session/request_permission` with
-   `selected/allow_once` to permit it or reject/cancel to deny it. Then read the
+   `{"result":{"outcome":{"outcome":"selected","optionId":"allow_once"}}}`
+   to permit it, or a nested reject/cancel outcome to deny it. Then read the
    minimal lifecycle `session/update` frames, followed by zero or one
    completed Text `agent_message_chunk`, then the response carrying
    `stopReason: "end_turn"`.
@@ -106,8 +107,9 @@ Example shapes (one compact object per real line in an actual transport):
 ## Tool lifecycle projection
 
 For each tool call, the server first emits a pending `tool_call` and a
-`session/request_permission` carrying the same safe id/title/status and only
-Allow once / Reject options. Only Allow once received after the request frame's
+`session/request_permission` carrying a plain `ToolCallUpdate` with the same
+safe id/title/status, no `sessionUpdate` discriminator, and only Allow once /
+Reject options. Only the exact nested selected Allow once outcome received after the request frame's
 physical write+flush boundary dispatches. Response arrival and the post-flush
 published bit linearize under the state lock, so a pre-flush response stays denied
 even if it resumes after publication. The per-request publication lock does not

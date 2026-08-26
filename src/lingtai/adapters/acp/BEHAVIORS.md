@@ -47,11 +47,14 @@ maintenance: |
 2. Inspect the captured normal-turn frames in the passing wire test: initialize result, session/new result, one `session/update` with `sessionUpdate=agent_message_chunk` and Text content, then the original prompt result with `stopReason=end_turn`; inspect the ResourceLink case and confirm validated link metadata reaches the Core text boundary.
 3. Inspect lifecycle tests: serial, parallel, denied, and failed tools emit minimal ordered `tool_call`/`tool_call_update` status frames before terminal response; collector-owned future exceptions, timeout boundaries after worker return, and cancellation each produce one FAILED terminal with no late completion; arguments/results/raw payloads are absent; observer exceptions, late terminal events, and close do not leak or alter Core execution.
 4. Inspect permission tests: every otherwise-allowed known tool emits pending and
-   the exact two-option request; only matching `selected/allow_once` received
-   after request write+flush reaches STARTED. A response captured before flush
+   the exact two-option request with a plain `ToolCallUpdate` carrying no
+   `sessionUpdate`; only the exact nested result
+   `{outcome: {outcome: "selected", optionId: "allow_once"}}` received after
+   request write+flush reaches STARTED. A response captured before flush
    remains denied after publication; cancel-before-registration emits no orphan,
    and cancel during a blocked pending write yields pending→failed without request;
-   reject/cancel, malformed/error/late responses, timeout, close, queue/write/
+   nested reject/cancel, flattened legacy, malformed/extra-field/error/late
+   responses, timeout, close, queue/write/
    flush failure deny and wake without exposing private tool data.
 5. Inspect the cancellation test: while the original prompt is unresolved, send a no-id `session/cancel` for the same session and confirm only the original prompt id receives `stopReason=cancelled`.
 6. Inspect every Adapter-authored stdout line with `json.loads`; confirm there is one complete JSON-RPC object per physical line and Python boot/runtime/stop `print` output is captured only on stderr. Confirm docs prohibit native fd 1, pre-captured stdout, and child stdout rather than claiming to quarantine them.
