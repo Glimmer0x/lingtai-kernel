@@ -8,12 +8,16 @@ related_files:
   - src/lingtai/kernel/stream_progress/__init__.py
   - src/lingtai/adapters/stream_progress.py
   - src/lingtai/kernel/session.py
+  - src/lingtai/kernel/llm_utils.py
+  - src/lingtai/kernel/llm/base.py
+  - src/lingtai/kernel/llm/streaming.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/cli.py
   - src/lingtai/tools/system/settings.py
   - docs/references/stream-progress.md
   - tests/test_stream_progress.py
+  - tests/test_streaming.py
   - tests/test_architecture_documents.py
 maintenance: |
   <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
@@ -46,13 +50,24 @@ adapters, or any on-disk status schema.
 
 Runtime and coding agents MUST treat stream progress as memory-only state: no
 status file, JSONL record, shared `.lingtai/` schema, output transcript,
-partial output text, or credential may be written or served for it. Each
-provider text delta adds Python `len(delta)` Unicode characters; consumers
-estimate tokens as integer `streamed_chars / 4`. The snapshot lifecycle is per
-provider response: `begin` runs before the session starts waiting on the
-provider (`generation += 1`, `active = true`, `streamed_chars = 0`); every text
-delta increments; success and failure both clear (`active = false`,
-`streamed_chars = 0`) in a `finally`. A failure inside progress publication
+partial output text, or credential may be written or served for it. Progress
+has one rule: **provider output arrived, so its length is added.** Whatever
+form the model's output takes, and whether or not the kernel retains,
+normalizes, or can read it, each fragment adds the Python `len` of the
+representation the provider delivered (Unicode characters for text — the
+`chars / 4` approximation; the delivered representation's length for
+bytes/base64/opaque strings; canonical JSON length for structured payloads).
+The boundary neither distinguishes nor documents kinds of output. Request
+input, prompts, tool schemas, tool results, usage metadata, and
+transport/lifecycle framing are not model output and add zero. The same output
+is never counted twice: a terminal echo of output already delivered as deltas
+adds nothing; output delivered only as a terminal payload counts once. Content
+is never retained. Consumers estimate tokens as integer `streamed_chars / 4`.
+The snapshot lifecycle is per provider response: `begin` runs before the
+session starts waiting on the provider (`generation += 1`, `active = true`,
+`streamed_chars = 0`); every output fragment increments; success and failure
+both clear (`active = false`, `streamed_chars = 0`) in a `finally`. A failure
+inside progress publication
 MUST never fail the LLM call, and a bind or read failure of the local endpoint
 MUST leave the agent (and any consumer) running without the badge. LLM output
 streaming is System-owned for production agents: valid `LINGTAI_STREAMING` >
@@ -68,8 +83,8 @@ exactly three operations, bound together by a generation token:
 
 1. `begin() -> int` — a new provider response starts; returns the new
    generation the caller binds the next two operations to.
-2. `add_chars(generation: int, count: int)` — a text delta of `count` Unicode
-   characters arrived for `generation` (called from the LLM worker thread);
+2. `add_chars(generation: int, count: int)` — provider output of length
+   `count` arrived for `generation` (called from the LLM worker thread);
    counted only while that generation is the active one.
 3. `end(generation: int)` — the response for `generation` finished, success or
    failure; clears only while that generation is the active one.
@@ -114,19 +129,39 @@ and is not registered through a selector. Core never imports it.
 
 1. `SessionManager.__init__` accepts an optional `stream_progress` Port. With
    `None`, `_send_streaming` issues the pre-existing
-   `send_with_timeout_stream` call with no `on_chunk` argument (byte-for-byte
-   unchanged call shape). With a Port it calls `begin()` before the provider
-   wait and captures the returned generation, passes a worker-thread
-   `on_chunk` closure built for that call that publishes
-   `add_chars(generation, len(delta))` for `str` deltas (0 otherwise), and
-   calls `end(generation)` for that same generation in a `finally`. Every Port
-   call is wrapped fail-open with one warning per session; a `begin()` that
-   raises or returns a non-`int` issues no generation, so that call passes no
-   `on_chunk` and calls no `end`. Response, tool-call,
-   `_text_already_streamed`, and `_intermediate_text_streamed` semantics are
-   unchanged.
-2. Provider adapters and `StreamingAccumulator` are unchanged; the canonical
-   `ChatSession.send_stream(message, on_chunk)` is the only delta source.
+   `send_with_timeout_stream` call with no callback argument (byte-for-byte
+   unchanged `send_stream(message)` call shape). With a Port it calls
+   `begin()` before the provider wait and captures the returned generation,
+   passes a worker-thread count-only `on_output_chars` closure built for that
+   call that publishes `add_chars(generation, count)` for each positive `int`
+   it receives (anything else publishes nothing), and calls
+   `end(generation)` for that same generation in a `finally`. The session
+   passes no other callback. Every Port call is wrapped fail-open with one
+   warning per session; a `begin()` that raises or returns a non-`int` issues
+   no generation, so that call passes no `on_output_chars` and calls no
+   `end`. Response, tool-call, `_text_already_streamed`, and
+   `_intermediate_text_streamed` semantics are unchanged.
+2. The neutral `ChatSession.send_stream(message, on_chunk=None,
+   on_output_chars=None)` boundary (`src/lingtai/kernel/llm/base.py`) adds
+   the optional, independent, backward-compatible
+   `on_output_chars: Callable[[int], None]` count-only callback: positive
+   `int` lengths, never content. The pre-existing `on_chunk` keeps its legacy
+   semantics for compatibility only — a detail of the LLM interface docs, not
+   of this boundary, which knows no output kinds. `send_with_timeout_stream`
+   passes each callback only when not `None`, and passes `on_output_chars`
+   only when the session's `send_stream` accepts that keyword (named or via
+   `**kwargs`); a session that cannot accept it, or whose signature cannot
+   be inspected, is called without it exactly once and simply publishes no
+   progress — fail-open, never a `TypeError`, never a retry. `OutputProgress`
+   (`src/lingtai/kernel/llm/streaming.py`) is the one provider-neutral count
+   seam: every streaming adapter (Anthropic, OpenAI Chat Completions,
+   OpenAI/custom Responses, Codex, Gemini Interactions, the gate proxy) hands
+   it every output fragment it receives — including ones
+   `StreamingAccumulator` never retains — and it publishes only lengths,
+   counting a terminal payload once and never after its output was already
+   delivered; no provider identity enters Core. A session
+   inheriting the non-streaming fallback reports the whole response's length
+   once after `send()` returns and never claims temporal streaming.
 3. `BaseAgent.__init__` accepts an optional defaulted-`None`
    `stream_progress_factory: Callable[[str], StreamProgressPort | None]`. When
    `streaming` is true it is called exactly once, after the stable `agent_id`
@@ -167,14 +202,21 @@ discovery arithmetic reproduces pinned known vectors (shared with the Go
 client); the state transitions (begin/delta/end, inactive and wrong-generation
 deltas/ends ignored, including the old-generation-after-new-begin regression)
 and the exact seven-field snapshot; `SessionManager` begins before the
-provider wait, publishes per-delta `len(delta)` bound to the returned
-generation, clears that generation in `finally` on success and on failure, is
-immune to an abandoned worker's late callbacks/end during a newer response, is
-fail-open when the Port raises (begin, add, or end) or returns a non-`int`
+provider wait, passes only the count-only callback, publishes every output
+fragment's length bound to the returned generation, ignores non-positive or
+non-`int` counts, clears that generation in `finally` on success and failure,
+is immune to an abandoned worker's late callbacks/end during a newer response,
+is fail-open when the Port raises (begin, add, or end) or returns a non-`int`
 generation, uses `send` untouched with explicit `streaming=False`, and keeps
-the no-Port call shape; the System-owned production policy (`LINGTAI_STREAMING`
-then v2 settings then fixed false), the legacy-manifest non-owner rule, and the
-explicit-false path (factory never called, non-stream send); `BaseAgent` factory injection
+the no-Port call shape. `send_with_timeout_stream` passes only the callbacks it
+was given; the `ChatSession` fallback keeps legacy `on_chunk` behavior and
+reports the whole response once; every streaming adapter (Responses/Codex
+parametrized, Anthropic, Chat Completions, Gemini) counts identity, arguments,
+reasoning, signatures, opaque payloads, and other delta forms, terminal echoes
+once. `tests/test_streaming.py` pins `OutputProgress` itself. The System-owned
+production policy is valid `LINGTAI_STREAMING`, then v2 System settings, then
+fixed false; a legacy manifest key is not an owner. The explicit-false path
+(factory never called, non-stream send), `BaseAgent` factory injection
 with the stable `agent_id` and factory fail-open; and the loopback endpoint
 (`127.0.0.1` bind on a discovery candidate, schema/identity/`no-store`, 404/405,
 live transition readback, next-free-candidate binding with reader-side

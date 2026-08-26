@@ -4,11 +4,13 @@ Covers the Port shape and Core technology-neutrality, the shared discovery
 known vectors (pinned identically in the Go client), the memory-only
 generation-bound state lifecycle (an old generation's late deltas/end never
 touch a newer active snapshot), `SessionManager` bracketing (begin-before-wait,
-per-delta counts bound to the generation `begin` returned, `finally`-clear of
-that same generation on success and failure, fail-open, explicit
-`streaming=False`, unchanged no-Port call shape), the System-runtime-policy sources,
-`BaseAgent` factory injection (never called for an explicit `streaming=False`),
-and the loopback read-only endpoint.
+every output fragment's length from the count-only `on_output_chars` callback
+bound to the generation `begin` returned, `finally`-clear of that same
+generation on success and failure, fail-open, explicit `streaming=False`, and
+unchanged no-Port call shape), the `ChatSession`/`send_with_timeout_stream`
+boundary, every streaming adapter feeding the one count seam, the System v2
+runtime-policy sources, `BaseAgent` factory injection (never called for an
+explicit `streaming=False`), and the loopback read-only endpoint.
 """
 from __future__ import annotations
 
@@ -19,7 +21,10 @@ import os
 import socket
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,6 +36,10 @@ from lingtai.adapters.stream_progress import (
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.config import AgentConfig
 from lingtai.kernel.config_resolve import parse_jsonc
+from lingtai.kernel.llm.base import ChatSession, LLMResponse, ToolCall, UsageMetadata
+from lingtai.kernel.llm.interface import ChatInterface
+from lingtai.kernel.llm.streaming import OutputProgress
+from lingtai.kernel.llm_utils import send_with_timeout_stream
 from lingtai.kernel.session import SessionManager
 from lingtai.kernel.stream_progress import (
     STREAM_PROGRESS_PATH,
@@ -241,8 +250,19 @@ class _ProbingState(StreamProgressState):
         self.after_delta.append(self.snapshot())
 
 
-def _make_session(port, *, streaming: bool = True, deltas=(), fail: Exception | None = None,
-                  probe=None):
+# Provider output the fake session receives: ``(fragment, visible)`` pairs.
+# Every fragment reaches the count-only seam; only visible text reaches the
+# legacy ``on_chunk``.
+MIXED_OUTPUT = (("héllo", True), ('{"path":"foo.py"}', False), ("sig-bytes", False),
+                ("", True), ({"q": "x"}, False), ("器灵", True))
+
+
+def _make_session(port, *, streaming: bool = True, deltas=(), output=None,
+                  fail: Exception | None = None, probe=None):
+    """A ``SessionManager`` over a fake session that streams like an adapter:
+    it hands every output fragment to a real ``OutputProgress`` and records
+    exactly which callbacks the session passed."""
+    output = output if output is not None else tuple((d, True) for d in deltas)
     svc = MagicMock()
     svc.model = "test-model"
     chat = MagicMock()
@@ -250,18 +270,20 @@ def _make_session(port, *, streaming: bool = True, deltas=(), fail: Exception | 
     chat.interface.estimate_context_tokens.return_value = 5000
     chat.interface.current_system_prompt = "test prompt"
     response = MagicMock(
-        text="".join(deltas), tool_calls=[], thoughts=[],
+        text="".join(f for f, visible in output if visible), tool_calls=[], thoughts=[],
         usage=MagicMock(input_tokens=100, output_tokens=50, thinking_tokens=10,
                         cached_tokens=20, extra={}),
     )
     calls: list[dict] = []
 
-    def send_stream(message, on_chunk=None):
-        calls.append({"on_chunk": on_chunk is not None, "probe": probe() if probe else None,
-                      "chunk_fn": on_chunk})
-        for delta in deltas:
-            if on_chunk is not None:
-                on_chunk(delta)
+    def send_stream(message, on_chunk=None, on_output_chars=None):
+        calls.append({"on_chunk": on_chunk is not None, "on_output_chars": on_output_chars is not None,
+                      "probe": probe() if probe else None, "count_fn": on_output_chars})
+        progress = OutputProgress(on_output_chars)
+        for fragment, visible in output:
+            progress.add(fragment)
+            if visible and on_chunk is not None:
+                on_chunk(fragment)
         if fail is not None:
             raise fail
         return response
@@ -282,33 +304,34 @@ def _make_session(port, *, streaming: bool = True, deltas=(), fail: Exception | 
     return sm, chat, calls, response
 
 
-def test_session_begins_before_the_provider_wait() -> None:
+def test_session_begins_before_the_provider_wait_and_passes_only_the_count_callback() -> None:
     state = StreamProgressState("s", pid=1)
     sm, _, calls, _ = _make_session(state, deltas=("hi",), probe=state.snapshot)
     sm.send("hello")
     seen = calls[0]["probe"]
-    assert calls[0]["on_chunk"] is True
+    assert (calls[0]["on_output_chars"], calls[0]["on_chunk"]) == (True, False)
     assert (seen.generation, seen.active, seen.streamed_chars) == (1, True, 0)
 
 
-def test_session_publishes_len_delta_unicode_characters_bound_to_generation() -> None:
+def test_session_publishes_every_output_fragment_length_bound_to_generation() -> None:
+    # Whatever the provider outputs — text, tool JSON, a signature, a
+    # structured payload — its length is added; an empty fragment adds nothing.
     recorder = _RecorderPort()
-    deltas = ("héllo", "", " wörld", "🙂", "器灵")
-    sm, _, _, _ = _make_session(recorder, deltas=deltas)
+    sm, _, calls, _ = _make_session(recorder, output=MIXED_OUTPUT)
     sm.send("hello")
-    assert recorder.calls == [
-        ("begin",), ("add", 1, 5), ("add", 1, 0), ("add", 1, 6), ("add", 1, 1), ("add", 1, 2), ("end", 1),
-    ]
+    expected = [5, 17, 9, 9, 2]
+    assert recorder.calls == [("begin",), *[("add", 1, n) for n in expected], ("end", 1)]
+    for bogus in (0, -3, True, "abc", None, 2.5):  # non-positive / non-int: nothing published
+        calls[0]["count_fn"](bogus)
+    assert len(recorder.calls) == 7
     # The second response carries the generation ``begin`` returned for it.
     sm.send("again")
-    assert recorder.calls[7:] == [
-        ("begin",), ("add", 2, 5), ("add", 2, 0), ("add", 2, 6), ("add", 2, 1), ("add", 2, 2), ("end", 2),
-    ]
+    assert recorder.calls[7:] == [("begin",), *[("add", 2, n) for n in expected], ("end", 2)]
 
     probing = _ProbingState()
-    sm, _, _, _ = _make_session(probing, deltas=deltas)
+    sm, _, _, _ = _make_session(probing, output=MIXED_OUTPUT)
     sm.send("hello")
-    assert [s.streamed_chars for s in probing.after_delta] == [5, 5, 11, 12, 14]
+    assert [s.streamed_chars for s in probing.after_delta] == [5, 22, 31, 40, 42]
     assert all(s.active and s.generation == 1 for s in probing.after_delta)
 
 
@@ -347,23 +370,24 @@ def test_session_abandoned_old_worker_cannot_contaminate_newer_generation() -> N
     sm, _, calls, _ = _make_session(state, deltas=("ab",), fail=TimeoutError("provider timeout"))
     with pytest.raises(TimeoutError):
         sm.send("first")
-    old_chunk = calls[0]["chunk_fn"]
+    old_count = calls[0]["count_fn"]
     assert (state.snapshot().generation, state.snapshot().active) == (1, False)
 
-    # Late delta after the old response was cleared: still cleared.
-    old_chunk("late-after-end")
+    # Late count after the old response was cleared: still cleared.
+    old_count(14)
     assert (state.snapshot().active, state.snapshot().streamed_chars) == (False, 0)
 
     # A new response begins on the same session while the old worker lives on.
     seen: list[StreamProgressSnapshot] = []
 
-    def send_stream(message, on_chunk=None):
-        on_chunk("x" * 6)
-        old_chunk("ZZZZZZZZZZ")  # abandoned generation-1 worker emits mid-stream
+    def send_stream(message, on_chunk=None, on_output_chars=None):
+        assert on_chunk is None
+        on_output_chars(6)
+        old_count(10)  # abandoned generation-1 worker emits mid-stream
         seen.append(state.snapshot())
         state.end(1)  # and its late ``end`` lands
         seen.append(state.snapshot())
-        on_chunk("yy")
+        on_output_chars(2)
         return MagicMock(text="xxxxxxyy", tool_calls=[], thoughts=[],
                          usage=MagicMock(input_tokens=1, output_tokens=1, thinking_tokens=0,
                                          cached_tokens=0, extra={}))
@@ -388,14 +412,14 @@ def test_session_is_fail_open_when_the_port_raises(caplog) -> None:
 
     # begin raises: no generation exists, so nothing further is published for
     # that call (no unbound add/end), the provider is still called with no
-    # on_chunk, and the response is returned.
+    # progress callback, and the response is returned.
     caplog.clear()
     recorder = _RecorderPort(raise_on=frozenset({"begin"}))
     sm, _, calls, response = _make_session(recorder, deltas=("abc",))
     with caplog.at_level("WARNING"):
         assert sm.send("hello") is response
     assert recorder.calls == [("begin",)]
-    assert calls[0]["on_chunk"] is False
+    assert (calls[0]["on_output_chars"], calls[0]["on_chunk"]) == (False, False)
     assert sum("stream_progress_publish_failed" in r.getMessage() for r in caplog.records) == 1
 
 
@@ -410,7 +434,7 @@ def test_session_treats_non_int_generation_from_begin_as_publish_failure(caplog)
     with caplog.at_level("WARNING"):
         assert sm.send("hello") is response
     assert port.calls == [("begin",)]
-    assert calls[0]["on_chunk"] is False
+    assert (calls[0]["on_output_chars"], calls[0]["on_chunk"]) == (False, False)
     assert any("stream_progress_publish_failed" in r.getMessage() for r in caplog.records)
 
 
@@ -428,7 +452,204 @@ def test_session_without_port_keeps_pre_existing_call_shape() -> None:
     sm, _, calls, _ = _make_session(None, deltas=("abc",))
     assert sm.stream_progress is None
     sm.send("hello")
-    assert calls == [{"on_chunk": False, "probe": None, "chunk_fn": None}]
+    assert calls == [{"on_chunk": False, "on_output_chars": False, "probe": None, "count_fn": None}]
+
+
+# ---------------------------------------------------------------------------
+# ChatSession / send_with_timeout_stream boundary
+# ---------------------------------------------------------------------------
+
+def test_send_with_timeout_stream_omits_the_progress_callback_a_session_cannot_accept() -> None:
+    """A legacy override without ``on_output_chars`` is called once, without it,
+    and returns normally (fail-open: no progress, no TypeError, no retry);
+    sessions that accept the keyword — named or via ``**kwargs`` — receive it."""
+    response = LLMResponse(text="", tool_calls=[], usage=UsageMetadata())
+    seen: list[dict] = []
+
+    class _Legacy:
+        def send_stream(self, message, on_chunk=None):
+            seen.append({"chat": "legacy", "on_chunk": on_chunk})
+            return response
+
+    class _Supporting:
+        def send_stream(self, message, on_chunk=None, on_output_chars=None):
+            seen.append({"chat": "supporting", "on_output_chars": on_output_chars})
+            return response
+
+    count_fn = lambda count: None  # noqa: E731
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        for chat in (_Legacy(), _Supporting(), MagicMock(**{"send_stream.return_value": response})):
+            assert send_with_timeout_stream(chat, "m", pool, 5.0, "agent", None, on_output_chars=count_fn) is response
+    assert seen == [{"chat": "legacy", "on_chunk": None}, {"chat": "supporting", "on_output_chars": count_fn}]
+    chat.send_stream.assert_called_once_with("m", on_output_chars=count_fn)  # ``**kwargs`` accepts it
+
+
+class _NonStreamingSession(ChatSession):
+    """Implements only ``send``; inherits the non-streaming fallback."""
+
+    def __init__(self, response: LLMResponse) -> None:
+        self._response, self._interface = response, ChatInterface()
+
+    @property
+    def interface(self):
+        return self._interface
+
+    def send(self, message):
+        return self._response
+
+
+def test_chat_session_fallback_keeps_legacy_on_chunk_and_reports_the_whole_response_once() -> None:
+    response = LLMResponse(text="hi", tool_calls=[ToolCall(name="x", args={"a": 1}, id="id1")],
+                           usage=UsageMetadata(), thoughts=["think"])
+    chunks, counts = [], []
+    assert _NonStreamingSession(response).send_stream("m", on_chunk=chunks.append, on_output_chars=counts.append) is response
+    assert chunks == ["hi"]  # legacy on_chunk: visible text, exactly as before
+    assert counts == [2 + 5 + 1 + 3 + len('{"a":1}')]  # text, thought, name, id, args — once
+    empty = LLMResponse(text="", tool_calls=[], usage=UsageMetadata())
+    assert _NonStreamingSession(empty).send_stream("m", on_output_chars=counts.append) is empty
+    assert counts[1:] == []  # nothing arrived: never invoked
+    assert _NonStreamingSession(response).send_stream("m") is response  # legacy call shape
+
+
+# ---------------------------------------------------------------------------
+# Streaming adapters feed the one seam: whatever the provider outputs counts
+# ---------------------------------------------------------------------------
+
+ns = SimpleNamespace
+
+
+def _responses_cases():
+    from tests.test_openai_responses_streaming import (
+        Event, _completed, _function_call_delta_only_events, _function_call_done_only_events,
+        _function_call_events, _reasoning_events,
+    )
+
+    name = len("report_answer")
+    return {
+        # The live codex-pool case: a tool-call-only generation advances
+        # progress by its identity and every argument delta; on_chunk gets nothing.
+        "tool_call_deltas": (_function_call_delta_only_events(), [name + len("call_delta_only"), 9, 6], []),
+        # Only terminal payloads deliver the arguments: counted once, though two carry them.
+        "terminal_args_only": (_function_call_done_only_events(), [name + len("call_spark"), 15], []),
+        # Deltas delivered the arguments: the terminal echoes add nothing.
+        "terminal_args_after_deltas": (_function_call_events(), [name + len("call_fake123"), 9, 6], []),
+        # Reasoning item id and summary deltas count; the done/item echoes add nothing.
+        "reasoning_summary": (_reasoning_events(), [len("rs_fake"), len("I should call "), len("the report tool.")], []),
+        # Opaque output counts like any other output.
+        "encrypted_reasoning": ([
+            Event("response.output_item.added", item=ns(type="reasoning", id="rs_enc")),
+            Event("response.output_item.done", item=ns(type="reasoning", id="rs_enc", summary=[], content=[],
+                                                       encrypted_content="opaque-blob")),
+            Event("response.output_item.done", item=ns(type="reasoning", id="rs_enc", summary=[], content=[],
+                                                       encrypted_content="opaque-blob")),
+        ], [len("rs_enc"), len("opaque-blob")], []),
+        # Any other delta form counts; a terminal item repeating streamed raw reasoning adds nothing.
+        "other_delta_forms": ([
+            Event("response.refusal.delta", delta="no"),
+            Event("response.reasoning_text.delta", delta="raw", item_id="rs_raw"),
+            Event("response.output_item.done", item=ns(type="reasoning", id="rs_raw", summary=[],
+                                                       content=[ns(type="reasoning_text", text="raw")])),
+        ], [2, 3], []),
+        "visible_text": ([Event("response.output_text.delta", delta="héllo"),
+                          Event("response.output_text.delta", delta=" 🙂")], [5, 2], ["héllo", " 🙂"]),
+    }, _completed
+
+
+@pytest.mark.parametrize("session_kind", ["generic_responses", "codex"])
+@pytest.mark.parametrize("case", ["tool_call_deltas", "terminal_args_only", "terminal_args_after_deltas",
+                                  "reasoning_summary", "encrypted_reasoning", "other_delta_forms", "visible_text"])
+def test_responses_adapters_count_all_output_once(session_kind, case) -> None:
+    from tests.test_openai_responses_streaming import _create_codex_session, _create_openai_responses_session
+
+    cases, completed = _responses_cases()
+    events, expected_counts, expected_chunks = cases[case]
+    make = _create_codex_session if session_kind == "codex" else _create_openai_responses_session
+    chunks, counts = [], []
+    make(events + [completed()]).send_stream("go", on_chunk=chunks.append, on_output_chars=counts.append)
+    assert (counts, chunks) == (expected_counts, expected_chunks)
+
+
+def _sys_interface():
+    interface = ChatInterface()
+    interface.add_system("sys")
+    return interface
+
+
+def _anthropic_session():
+    from lingtai.llm.anthropic.adapter import AnthropicChatSession
+
+    start = lambda **b: ns(type="content_block_start", content_block=ns(**b))  # noqa: E731
+    delta = lambda **f: ns(type="content_block_delta", delta=ns(**f))  # noqa: E731
+    stop = ns(type="content_block_stop")
+    events = [
+        start(type="thinking"), delta(type="thinking_delta", thinking="Let me "), delta(type="thinking_delta", thinking="look."),
+        delta(type="signature_delta", signature="sigsig"), stop, start(type="redacted_thinking", data="opaque-redacted"), stop,
+        start(type="text"), delta(type="text_delta", text="Reading "), stop, start(type="tool_use", id="toolu_1", name="read_file"),
+        delta(type="input_json_delta", partial_json='{"path":'), delta(type="input_json_delta", partial_json=' "foo.py"}'), stop,
+    ]
+    final = ns(usage=None, content=[ns(type="text", text="Reading "),
+                                    ns(type="tool_use", id="toolu_1", name="read_file", input={"path": "foo.py"})])
+    class _Stream:
+        def __iter__(self):
+            return iter(events)
+
+        def get_final_message(self):
+            return final
+
+    @contextmanager
+    def messages_stream(**kwargs):
+        yield _Stream()
+
+    return AnthropicChatSession(client=ns(messages=ns(stream=messages_stream)), model="m", system_prompt="sys",
+                                interface=_sys_interface(), tools=None, tool_choice=None, extra_kwargs={})
+
+
+def _chat_completions_session():
+    from lingtai.llm.openai.adapter import OpenAIChatSession
+
+    empty = {"content": None, "refusal": None, "reasoning": None, "reasoning_content": None, "tool_calls": None}
+    chunk = lambda **d: ns(choices=[ns(delta=ns(**{**empty, **d}))], usage=None)  # noqa: E731
+    tc = lambda index, id=None, name=None, arguments=None: ns(index=index, id=id, function=ns(name=name, arguments=arguments))  # noqa: E731
+    client = MagicMock()
+    client.chat.completions.create.return_value = [
+        chunk(reasoning="hmm"), chunk(content="ok "), chunk(refusal="nope"),
+        chunk(tool_calls=[tc(0, id="call_1", name="search", arguments='{"q":')]),
+        chunk(tool_calls=[tc(0, arguments='"x"}'), tc(1, id="call_2", name="noop")]), chunk(content=""),
+    ]
+    return OpenAIChatSession(client=client, model="m", interface=_sys_interface(), tools=None, tool_choice=None,
+                             extra_kwargs={}, client_kwargs={})
+
+
+def _gemini_session():
+    from lingtai.llm.gemini.adapter import InteractionsChatSession
+
+    events = [
+        ns(event_type="interaction.created", interaction=ns(id="int_1")),
+        ns(event_type="step.start", step=ns(type="thought", summary=[ns(type="text", text="plan")])),
+        ns(event_type="step.delta", delta=ns(type="text", text="Sure")),
+        ns(event_type="step.start", step=ns(type="function_call", name="default_api:search", arguments={"q": "x"}, id="fc_1")),
+        ns(event_type="interaction.completed", interaction=ns(id="int_1", usage=None)),
+    ]
+    return InteractionsChatSession(client=ns(interactions=ns(create=lambda **kw: iter(events))), model="m", config_kwargs={})
+
+
+@pytest.mark.parametrize(
+    ("make", "expected_counts", "expected_chunks"),
+    [
+        # thinking, thinking, signature, redacted data, text, tool id+name, json, json
+        (_anthropic_session, [7, 5, 6, 15, 8, 16, 8, 10], ["Reading "]),
+        # reasoning, content, refusal, id+name+args, args, id+name (empty content adds nothing)
+        (_chat_completions_session, [3, 3, 4, 17, 4, 10], ["ok "]),
+        # thought text, text delta, function id+name+args (once)
+        (_gemini_session, [4, 4, len("fc_1") + len("default_api:search") + len('{"q":"x"}')], ["Sure"]),
+    ],
+    ids=["anthropic", "chat_completions", "gemini_interactions"],
+)
+def test_other_streaming_adapters_count_every_output_fragment_once(make, expected_counts, expected_chunks) -> None:
+    chunks, counts = [], []
+    result = make().send_stream("go", on_chunk=chunks.append, on_output_chars=counts.append)
+    assert (counts, chunks) == (expected_counts, expected_chunks)
+    assert result.tool_calls[0].args  # the normalized response is unaffected by counting
 
 
 # ---------------------------------------------------------------------------
@@ -451,11 +672,11 @@ def _make_agent(tmp_path, **kwargs):
     )
 
 
-def test_baseagent_streaming_defaults_on_and_explicit_false_stays_false(tmp_path) -> None:
+def test_baseagent_streaming_defaults_off_and_explicit_false_stays_false(tmp_path) -> None:
     params = inspect.signature(BaseAgent.__init__).parameters
-    assert params["streaming"].default is True
+    assert params["streaming"].default is False
     assert params["stream_progress_factory"].default is None
-    assert _make_agent(tmp_path)._session.streaming is True
+    assert _make_agent(tmp_path)._session.streaming is False
     assert _make_agent(tmp_path / "off", streaming=False)._session.streaming is False
 
 
@@ -474,7 +695,7 @@ def test_agent_wrapper_passes_streaming_default_through(tmp_path) -> None:
     with patch.object(BaseAgent, "__init__", fake_init):
         with pytest.raises(_Captured):
             Agent(make_mock_service(), working_dir=tmp_path / "sp-wrapper")
-    assert "streaming" not in captured  # BaseAgent's default (True) applies
+    assert "streaming" not in captured  # BaseAgent's default (False) applies
     assert "stream_progress_factory" not in captured  # wrapper composes no endpoint
 
 
@@ -548,7 +769,7 @@ def test_baseagent_calls_factory_once_with_stable_agent_id_and_binds_port(tmp_pa
         seen.append(agent_id)
         return port
 
-    agent = _make_agent(tmp_path, stream_progress_factory=factory)
+    agent = _make_agent(tmp_path, streaming=True, stream_progress_factory=factory)
     assert seen == [agent.agent_id]
     assert agent.agent_id
     assert agent._stream_progress is port
@@ -598,7 +819,7 @@ def test_baseagent_factory_failure_is_fail_open(tmp_path) -> None:
     def factory(agent_id: str):
         raise OSError("no loopback today")
 
-    agent = _make_agent(tmp_path, stream_progress_factory=factory)
+    agent = _make_agent(tmp_path, streaming=True, stream_progress_factory=factory)
     assert agent._stream_progress is None
     assert agent._session.streaming is True
 

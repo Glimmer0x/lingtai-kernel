@@ -5,8 +5,12 @@ related_files:
   - src/lingtai/kernel/stream_progress/__init__.py
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/llm/ANATOMY.md
   - src/lingtai/adapters/stream_progress.py
   - src/lingtai/kernel/session.py
+  - src/lingtai/kernel/llm_utils.py
+  - src/lingtai/kernel/llm/base.py
+  - src/lingtai/kernel/llm/streaming.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/cli.py
   - src/lingtai/tools/system/settings.py
@@ -52,12 +56,29 @@ manual [`docs/references/stream-progress.md`](../../../../docs/references/stream
 
 - `SessionManager(stream_progress=...)` stores the Port; `_send_streaming`
   calls `_progress_begin` (fail-open `begin()` → generation or `None`) before
-  `send_with_timeout_stream`, passes the per-call closure from
-  `_make_stream_delta_callback(progress, generation)` as `on_chunk` (worker
-  thread → `add_chars(generation, len(delta))`), and calls `end(generation)`
-  in a `finally`; `_progress_call`/`_warn_progress_failure` are the one
-  fail-open wrapper and its once-per-session warning
-  (`src/lingtai/kernel/session.py`).
+  `send_with_timeout_stream`, passes the per-call count-only closure from
+  `_make_output_chars_callback(progress, generation)` as `on_output_chars`
+  (worker thread → `add_chars(generation, count)` for positive `int` counts),
+  and calls `end(generation)` in a `finally`;
+  `_progress_call`/`_warn_progress_failure` are the one fail-open wrapper and
+  its once-per-session warning (`src/lingtai/kernel/session.py`).
+- The count reaches the session through the neutral LLM boundary:
+  `send_with_timeout_stream(..., on_chunk=None, on_output_chars=None)`
+  forwards each callback only when given, and `on_output_chars` only when
+  `_accepts_keyword` finds the session's `send_stream` takes it
+  (`src/lingtai/kernel/llm_utils.py`);
+  `ChatSession.send_stream(message, on_chunk=None, on_output_chars=None)`
+  declares the two independent callbacks and its non-streaming fallback
+  reports one `response_output_chars` count (`src/lingtai/kernel/llm/base.py`);
+  `OutputProgress` is the one count seam — `add(*fragments)` publishes the
+  summed `output_length` of whatever the adapter hands it,
+  `add_stream`/`add_final` keep terminal echoes from counting twice, and
+  `output_values` lets an adapter count an event shape whole
+  (`src/lingtai/kernel/llm/streaming.py`; see
+  [`src/lingtai/kernel/llm/ANATOMY.md`](../llm/ANATOMY.md)). Every streaming
+  provider adapter under `src/lingtai/llm/` feeds it each output fragment it
+  receives, alongside its unchanged `StreamingAccumulator`; none is named in
+  Core.
 - `BaseAgent.__init__(stream_progress_factory=...)` calls the factory once with
   the stable `agent_id` right after identity resolution — only when
   `streaming` is true; an explicit `streaming=False` never calls it — stores
@@ -83,6 +104,9 @@ manual [`docs/references/stream-progress.md`](../../../../docs/references/stream
   promises, the documented v1 API, and the contract tests.
 - **Sibling relationship:** `base_agent/` composes the Port through its factory
   kwarg; see [`src/lingtai/kernel/base_agent/ANATOMY.md`](../base_agent/ANATOMY.md).
+  `llm/` owns the neutral `ChatSession.send_stream` boundary and the
+  `OutputProgress` seam the Port's counts come from; see
+  [`src/lingtai/kernel/llm/ANATOMY.md`](../llm/ANATOMY.md).
 
 ## State
 
@@ -98,5 +122,6 @@ This is a navigation-only Port anatomy; the lifecycle, fail-open, configuration,
 schema, and discovery rules are normative in the paired
 [`CONTRACT.md`](CONTRACT.md). There is no dedicated anatomy for the one-file
 portable loopback adapter — its structure is owned by this governed pair and
-the source-root composition map. Provider adapters and `StreamingAccumulator`
-are deliberately untouched by this boundary.
+the source-root composition map. Provider adapters only hand each output
+fragment they receive to `OutputProgress`; the rule — output arrived, add its
+length — lives once in Core, never per provider.

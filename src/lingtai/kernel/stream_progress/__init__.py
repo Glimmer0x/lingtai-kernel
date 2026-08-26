@@ -96,8 +96,8 @@ class StreamProgressPort(ABC):
 
     ``SessionManager`` calls ``begin()`` before it starts waiting on the
     provider and captures the returned generation token; its worker-thread
-    chunk callback calls ``add_chars(generation, n)`` for every text delta
-    (``n = len(delta)`` in Unicode characters); and ``end(generation)`` runs in
+    count-only callback calls ``add_chars(generation, n)`` for every provider
+    output fragment; and ``end(generation)`` runs in
     a ``finally`` so success and failure both clear the snapshot. The token
     is what makes an abandoned (timed-out) provider worker harmless: its late
     deltas and its late ``end`` carry an older generation and are ignored, so
@@ -115,7 +115,7 @@ class StreamProgressPort(ABC):
 
     @abstractmethod
     def add_chars(self, generation: int, count: int) -> None:
-        """A text delta of ``count`` Unicode characters arrived for
+        """Provider output with representation length ``count`` arrived for
         ``generation``; ignored unless that generation is the active one."""
         ...
 

@@ -44,22 +44,41 @@ The state has five moving parts and is memory-only:
 | `agent_id` | the agent's stable manifest identity |
 | `generation` | increments on every provider response start (process-local) |
 | `active` | `true` between response start and its success/failure |
-| `streamed_chars` | Unicode characters received so far in this response; `0` when inactive |
+| `streamed_chars` | length of all provider output received so far in this response; `0` when inactive |
 | `updated_unix_ms` | last transition time (wall clock, integer ms) |
 | `pid` | the publishing agent process |
 
-Each provider text delta adds Python `len(delta)`. Consumers estimate tokens as
-the integer `streamed_chars / 4`. There is **no text field** and there never
-will be in v1.
+Consumers estimate tokens as the integer `streamed_chars / 4`. There is **no
+text field** and there never will be in v1.
+
+## What counts
+
+One rule, the same for every provider: **provider output arrived, so its
+length is added.** Text, reasoning, tool identity and arguments, signatures,
+opaque or encrypted payloads, and whatever a provider streams next all count
+the same way — the Python length of the representation actually delivered
+(Unicode characters for text, which is the `chars / 4` approximation Claude
+Code uses; the delivered representation's length for bytes/base64/opaque
+strings; canonical JSON length for structured payloads). A generation that
+spends twelve seconds composing a tool call therefore shows progress while it
+happens. Request input, prompts, tool results, usage metadata, and transport
+framing are not model output and add nothing; a terminal event that repeats
+output already delivered as deltas adds nothing, and output delivered only as
+a terminal payload is counted once. Content is never retained — the count-only
+`on_output_chars: Callable[[int], None]` callback on
+`ChatSession.send_stream(message, on_chunk=None, on_output_chars=None)`
+receives integers, nothing else. A session that only inherits the
+non-streaming fallback reports the whole response once after the call returns.
 
 ## Lifecycle inside the kernel
 
-`SessionManager._send_streaming` brackets the unchanged
-`ChatSession.send_stream(message, on_chunk)` call:
+`SessionManager._send_streaming` brackets the
+`ChatSession.send_stream(message, on_output_chars=...)` call:
 
 1. `generation = begin()` — before the session starts waiting on the provider.
-2. `add_chars(generation, len(delta))` — from the worker thread, for every
-   text delta, through a callback closure built for this one call.
+2. `add_chars(generation, count)` — from the worker thread, for every
+   provider output fragment, through a count-only callback closure built for
+   this one call; anything that is not a positive integer publishes nothing.
 3. `end(generation)` — in a `finally`, so a raised timeout, a provider error,
    and a normal completion all clear the snapshot (`active=false`,
    `streamed_chars=0`).
@@ -134,5 +153,8 @@ once and the agent keeps running without a badge.
 
 No filesystem progress state; no output preview; no bind beyond `127.0.0.1`;
 no authentication or write API; no generic plugin/tool; no change to mail,
-status, or Portal schemas. Provider adapters and `StreamingAccumulator` are
-untouched.
+status, or Portal schemas; no sampling thread, history, rate, or chart in the
+kernel — every temporal derivation (tokens per second, diffs, retention) is
+downstream of the single current snapshot. Provider adapters only hand each
+output fragment they receive to the one Core count seam; no provider identity
+enters Core.

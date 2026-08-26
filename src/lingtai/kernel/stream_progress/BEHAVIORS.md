@@ -33,7 +33,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
 - **estimate**: ≈ 10 minutes
 
 ### Steps
-1. From `<repo>`, run `python -m pytest tests/test_stream_progress.py -q` and capture the outcome.
+1. From `<repo>`, run `python -m pytest tests/test_stream_progress.py tests/test_streaming.py -q` and capture the outcome.
 2. Write `<scratch>/sp001.py` with the following content and run it with the project's Python:
 
 ```python
@@ -65,7 +65,7 @@ pub.close(); print("SP001 OK", pub.candidates)
 3. While step 2's publisher is alive (add `input()` before `pub.close()` if needed), run `curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:<port>/v1/stream-progress` and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:<port>/other`; also check `git status --short` and `ls -a <scratch>` for any new file the publisher could have written.
 
 ### Expected evidence
-- [ ] Step 1: the stream-progress suite passes, pinning the three-operation generation-bound Port shape, begin-before-wait, per-delta `len(delta)` bound to the returned generation, `finally`-clear of that generation, old-generation callbacks ignored after a newer begin, fail-open, default-on sources (factory never called for explicit `streaming: false`), and the loopback API.
+- [ ] Step 1: the stream-progress and streaming suites pass, pinning the three-operation generation-bound Port shape, begin-before-wait, the count-only `on_output_chars` seam (every provider output fragment adds its delivered length, bound to the returned generation; terminal echoes counted once; legacy `on_chunk` untouched), `finally`-clear of that generation, old-generation callbacks ignored after a newer begin, fail-open, default-on sources (factory never called for explicit `streaming: false`), and the loopback API.
 - [ ] Step 2: the script prints `SP001 OK` — bound port is a discovery candidate, body carries exactly the seven v1 fields with no text, `Cache-Control: no-store`, `begin`/`add_chars`/`end` are read back live, and a stale-generation `add_chars`/`end` leaves the active snapshot untouched.
 - [ ] Step 3: POST answers `405`, an unknown path answers `404`, and no new file appears anywhere (progress is RAM-only).
 

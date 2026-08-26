@@ -576,24 +576,26 @@ class SessionManager:
 
         When a stream-progress Port is injected, the provider call is
         bracketed: ``begin()`` runs before the wait starts and returns the
-        generation token; the ``on_chunk`` closure built for *this* call adds
-        ``len(delta)`` characters to that same generation from the worker
+        generation token; the count-only ``on_output_chars`` closure built
+        for *this* call adds the length of every provider output fragment
+        (counts only, never content) to that same generation from the worker
         thread; and ``end(generation)`` runs in a ``finally`` so success and
         failure both clear the snapshot. Because the closure and the ``end``
         are bound to one generation, a timed-out worker that keeps emitting
         after a later ``_send_streaming`` has begun cannot touch the newer
-        snapshot. Without a Port the call shape is byte-for-byte the
+        snapshot. The visible-text ``on_chunk`` callback is never used for
+        progress. Without a Port the call shape is byte-for-byte the
         pre-existing one.
         """
         self._message_seq += 1
 
         progress = self._stream_progress
-        on_chunk = None
+        on_output_chars = None
         generation: int | None = None
         if progress is not None:
             generation = self._progress_begin(progress)
             if generation is not None:
-                on_chunk = self._make_stream_delta_callback(progress, generation)
+                on_output_chars = self._make_output_chars_callback(progress, generation)
 
         try:
             response = send_with_timeout_stream(
@@ -603,7 +605,7 @@ class SessionManager:
                 retry_timeout=retry_timeout,
                 agent_name=self._display_name,
                 logger=logger,
-                on_chunk=on_chunk,
+                on_output_chars=on_output_chars,
             )
         finally:
             if progress is not None and generation is not None:
@@ -632,16 +634,21 @@ class SessionManager:
             self._warn_progress_failure()
             return None
 
-    def _make_stream_delta_callback(
+    def _make_output_chars_callback(
         self, progress: StreamProgressPort, generation: int
     ) -> Callable[[Any], None]:
-        """Build the worker-thread chunk callback bound to one generation."""
+        """Build the worker-thread count-only callback bound to one generation.
 
-        def on_chunk(delta: Any) -> None:
-            count = len(delta) if isinstance(delta, str) else 0
+        Receives output lengths from the provider adapter's ``OutputProgress``
+        seam; anything that is not a positive ``int`` publishes nothing.
+        """
+
+        def on_output_chars(count: Any) -> None:
+            if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+                return
             self._progress_call(progress.add_chars, generation, count)
 
-        return on_chunk
+        return on_output_chars
 
     def _progress_call(self, fn: Callable[..., None], *args: Any) -> None:
         """Invoke one Port operation fail-open; warn once per session."""
