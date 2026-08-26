@@ -602,6 +602,37 @@ def test_methodless_nonresponse_remains_an_invalid_request():
     server.close()
 
 
+@pytest.mark.parametrize("request_id", [None, -(1 << 63), (1 << 63) - 1, "req-1"])
+def test_initialize_accepts_and_echoes_valid_request_ids(request_id):
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(_Handle("placeholder")), io.StringIO(), output)
+
+    _request(server, request_id, "initialize", {"protocolVersion": 1})
+
+    response = _wait_for(output, 1)[0]
+    assert response["id"] == request_id
+    assert response["result"]["protocolVersion"] == 1
+    server.close()
+
+
+@pytest.mark.parametrize(
+    "request_id",
+    [True, False, 1.5, [], {}, -(1 << 63) - 1, 1 << 63],
+)
+def test_invalid_request_ids_use_null_diagnostic_id(request_id):
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(_Handle("placeholder")), io.StringIO(), output)
+
+    _request(server, request_id, "initialize", {"protocolVersion": 1})
+
+    assert _wait_for(output, 1) == [{
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request"},
+    }]
+    server.close()
+
+
 def test_cancelled_turn_cannot_register_a_new_permission_request():
     handle = _Handle("placeholder")
     agent = _Agent(handle)
@@ -925,7 +956,8 @@ def test_failure_busy_second_session_and_unsupported_inputs_are_explicit():
     messages = _wait_for(output, 4)
     errors = {message.get("id"): message.get("error") for message in messages}
     assert errors[3]["code"] == -32004
-    assert errors[5]["code"] == -32000
+    assert errors[5]["code"] == -32010
+    assert errors[5]["code"] not in {-32000, -32001, -32002}
 
     handle._future.set_result(
         TurnResult(handle.correlation_id, TurnOutcome.FAILED, error="secret detail")
@@ -984,8 +1016,11 @@ def test_initialize_negotiates_v1_and_enforces_rpc_method_kinds():
     assert _wait_for(fresh_output, 1) == [{
         "jsonrpc": "2.0",
         "id": 3,
-        "error": {"code": -32002, "message": "server is not initialized"},
+        "error": {"code": -32011, "message": "server is not initialized"},
     }]
+    assert _messages(fresh_output)[0]["error"]["code"] not in {
+        -32000, -32001, -32002
+    }
     fresh.close()
 
 

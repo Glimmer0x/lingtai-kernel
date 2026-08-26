@@ -97,7 +97,14 @@ library JSON/threading streams directly.
    `protocolVersion` and negotiates by returning this Agent's latest supported
    `protocolVersion: 1`, plus empty
    `agentCapabilities`, LingTai `agentInfo`, and `authMethods: []`. Unsupported
-   methods/params use JSON-RPC errors; notifications receive no response.
+   methods/params use JSON-RPC errors; notifications receive no response. An
+   included request id may be a string, non-boolean signed 64-bit integer, or explicit null
+   and is echoed exactly; a missing id alone denotes a notification. Invalid
+   ids produce the JSON-RPC diagnostic id null. Local session busy and
+   not-initialized errors use unreserved server-error codes `-32010` and
+   `-32011`, respectively, rather than colliding with ACP's predefined
+   authentication `-32000` / resource-not-found `-32002` meanings or this
+   Adapter's established session-not-found `-32001` meaning.
 2. `acp-local-stdio.session.v1` — one process owns at most one initialized ACP
    session and one active prompt. A second `session/new` or concurrent prompt
    fails explicitly. `cwd` must be absolute, exist, and be a directory; it is
@@ -200,7 +207,8 @@ library JSON/threading streams directly.
 
 ## Contract tests
 
-`tests/test_acp_stdio.py` pins initialize/session/prompt/update/end-turn framing,
+`tests/test_acp_stdio.py` pins request-id and error-taxonomy conformance,
+initialize/session/prompt/update/end-turn framing,
 permission response arbitration and fail-closed teardown,
 cancel settlement, ResourceLink projection, fixed failure redaction, single-
 session/busy/unsupported errors, strict JSON line framing, invalid UTF-8, EOF,

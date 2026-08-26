@@ -25,15 +25,17 @@ from lingtai.services.session_mcp import StdioMCPServerConfig
 
 JSONRPC_VERSION = "2.0"
 ACP_PROTOCOL_VERSION = 1
+_REQUEST_ID_MIN = -(1 << 63)
+_REQUEST_ID_MAX = (1 << 63) - 1
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
-SERVER_NOT_INITIALIZED = -32002
+SERVER_NOT_INITIALIZED = -32011
 SESSION_NOT_FOUND = -32001
-SESSION_BUSY = -32000
+SESSION_BUSY = -32010
 UNSUPPORTED = -32004
 
 
@@ -46,7 +48,7 @@ class _RpcError(Exception):
 
 @dataclass(slots=True)
 class _ActivePrompt:
-    request_id: str | int
+    request_id: str | int | None
     session_id: str
     handle: TurnHandle
     generation: int
@@ -431,9 +433,17 @@ class AcpStdioServer:
 
     @staticmethod
     def _valid_id(value: Any) -> bool:
-        # ACP's generated request-id shape is integer-or-string. In particular,
-        # reject bool (an int subclass), null, and fractional JSON-RPC numbers.
-        return isinstance(value, (str, int)) and not isinstance(value, bool)
+        # ACP v1 permits string, signed-int64, or explicit null request ids.
+        # Reject bool (an int subclass), fractional numbers, and out-of-range ints.
+        return (
+            value is None
+            or isinstance(value, str)
+            or (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and _REQUEST_ID_MIN <= value <= _REQUEST_ID_MAX
+            )
+        )
 
     @staticmethod
     def _params_object(params: Any) -> dict[str, Any]:
@@ -583,7 +593,7 @@ class AcpStdioServer:
             raise _RpcError(SESSION_NOT_FOUND, "session not found")
         return session_id
 
-    def _prompt(self, params: Any, request_id: str | int) -> None:
+    def _prompt(self, params: Any, request_id: str | int | None) -> None:
         params = self._params_object(params)
         session_id = self._validate_session(params)
         prompt = params.get("prompt")

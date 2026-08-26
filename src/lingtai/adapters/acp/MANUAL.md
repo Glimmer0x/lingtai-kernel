@@ -104,6 +104,10 @@ Example shapes (one compact object per real line in an actual transport):
 {"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<returned-id>","prompt":[{"type":"text","text":"Hello"}]}}
 ```
 
+ACP v1 request ids may be strings, signed 64-bit integers, or explicit `null`; the response
+echoes an included id exactly. Omitting `id` instead makes the message a
+notification, so these two wire shapes are not interchangeable.
+
 ## Tool lifecycle projection
 
 For each tool call, the server first emits a pending `tool_call` and a
@@ -167,11 +171,17 @@ stdout: code launched in this host must not use those paths. Common explicit err
   tool-name collision closes earlier clients and publishes nothing;
 - non-empty `additionalDirectories`: unsupported (additional roots are not advertised);
 - second `session/new`: unsupported;
-- second prompt while one is active: session busy;
+- second prompt while one is active: session busy (`-32010`);
+- session methods before initialization: server not initialized (`-32011`);
 - ResourceLink without non-empty `uri`/`name` or with invalid metadata: invalid params;
 - image/audio/embedded-resource prompt block: unsupported;
 - failed Core turn: fixed `LingTai turn failed` Internal error, with details kept
   out of the ACP wire.
+
+The two local session-state codes are distinct from ACP v1's predefined
+authentication (`-32000`) and resource-not-found (`-32002`) errors, and from
+this Adapter's existing session-not-found code (`-32001`); clients must not
+interpret them as any of those errors.
 
 After correcting client input, launch a fresh process if session creation already
 succeeded; the one-session state is intentionally process-local. For agent boot
