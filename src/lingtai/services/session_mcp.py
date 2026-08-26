@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from lingtai.kernel.llm import FunctionSchema
+from lingtai.kernel.session import SessionManager
 from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
 
 from . import mcp as mcp_service
@@ -87,7 +88,11 @@ def _surface_lock(agent) -> threading.RLock:
 def _update_live_tools(agent) -> None:
     chat = getattr(agent, "_chat", None)
     if chat is not None:
-        chat.update_tools(agent._build_tool_schemas())
+        session = getattr(agent, "_session", None)
+        if isinstance(session, SessionManager) and session.chat is chat:
+            session._rebuild_session(chat.interface)
+        else:
+            chat.update_tools(agent._build_tool_schemas())
     agent._token_decomp_dirty = True
 
 
