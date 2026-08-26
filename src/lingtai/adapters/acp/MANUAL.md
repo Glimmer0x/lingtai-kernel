@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
+  - src/lingtai/kernel/turn_permissions.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -15,6 +16,7 @@ related_files:
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
+  - tests/test_turn_permissions.py
   - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_lifecycle_daemon_shutdown.py
@@ -42,13 +44,13 @@ This slice supports exactly:
 - zero or more session-scoped stdio MCP servers mounted all-or-nothing;
 - one active `session/prompt` at a time;
 - baseline Text and ResourceLink prompt blocks;
-- minimal tool lifecycle projected as `tool_call` / `tool_call_update`;
+- one-shot fail-closed tool permission and minimal lifecycle projection;
 - one completed response projected as `agent_message_chunk`;
 - terminal `end_turn`, cooperative `cancelled`, or a fixed JSON-RPC failure;
 - `session/cancel` for the active turn.
 
 It deliberately does **not** provide session load/persistence, multiple sessions,
-remote MCP servers, additional workspace roots, permission requests,
+remote MCP servers, additional workspace roots, persistent permission choices,
 capability-gated image/audio/embedded-resource content, message/usage streaming,
 tool arguments/results/content, remote transport,
 authentication, or ACP v2.
@@ -84,7 +86,9 @@ A minimal client sequence is:
 4. Send `session/prompt` with that id and a non-empty Text/ResourceLink block
    list. ResourceLink metadata is forwarded to Core as compact text; this slice
    does not fetch the URI.
-5. Read any minimal tool lifecycle `session/update` frames, then zero or one
+5. For each tool, answer `session/request_permission` with
+   `selected/allow_once` to permit it or reject/cancel to deny it. Then read the
+   minimal lifecycle `session/update` frames, followed by zero or one
    completed Text `agent_message_chunk`, then the response carrying
    `stopReason: "end_turn"`.
 6. While step 4 is unresolved, a client may send the `session/cancel`
@@ -101,8 +105,14 @@ Example shapes (one compact object per real line in an actual transport):
 
 ## Tool lifecycle projection
 
-For each observed tool call, the first lifecycle event uses `tool_call` with a
-session-unique `toolCallId`, the tool name as `title`, and current status. Later
+For each tool call, the server first emits a pending `tool_call` and a
+`session/request_permission` carrying the same safe id/title/status and only
+Allow once / Reject options. Only Allow once received after the request frame's
+physical write+flush boundary dispatches. Response arrival and the post-flush
+published bit linearize under the state lock, so a pre-flush response stays denied
+even if it resumes after publication. The per-request publication lock does not
+hold the global state lock over client stdout. Approval then emits
+`tool_call_update` with `in_progress`; later
 states use `tool_call_update` with that id and status. Status is only
 `in_progress`, `completed`, or `failed`; local guard denial is `failed` without
 executing the tool. For parallel dispatch, workers announce only start and the
@@ -114,7 +124,13 @@ dropped.
 
 This is deliberately metadata-only. The Adapter does not send tool arguments,
 results, content, locations, `rawInput`, `rawOutput`, or internal error text.
-Observer/projection exceptions cannot change Core tool execution; fatal bounded
+Observer/projection exceptions cannot change Core tool execution. The initial
+pending record becomes announced only after its frame flushes; a pre-emission
+denial uses a valid initial failed record. If denial races an already-started
+pending write, the writer closes the physically emitted record with an adjacent
+failed update and suppresses the request; Core lifecycle observation still never
+blocks behind stuck client stdout. Permission
+broker errors, timeout, cancellation, or transport failure deny; fatal bounded
 queue/framing failure still aborts the transport.
 
 ## Cancellation semantics

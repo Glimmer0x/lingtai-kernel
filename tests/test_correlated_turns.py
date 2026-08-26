@@ -25,6 +25,7 @@ from lingtai.kernel.turns import (
     submit_turn,
 )
 from lingtai.kernel.turn_events import current_turn_tool_observer
+from lingtai.kernel.turn_permissions import current_turn_permission_broker
 
 
 class _Interface:
@@ -183,6 +184,33 @@ def test_consecutive_correlated_turns_reset_tool_observer(tmp_path, monkeypatch)
     assert second.result(timeout=1).outcome is TurnOutcome.NORMAL
     assert seen == [("observed", observer), ("plain", None)]
     assert current_turn_tool_observer() is None
+
+
+def test_consecutive_correlated_turns_reset_permission_broker(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    broker = SimpleNamespace(request_permission=lambda _request: None)
+    first = submit_turn(
+        agent,
+        "brokered",
+        correlation_id="turn-brokered",
+        permission_broker=broker,
+    )
+    second = submit_turn(agent, "plain", correlation_id="turn-plain")
+    seen = []
+
+    def fake_handle(current, msg):
+        seen.append((msg.content, current_turn_permission_broker()))
+        if msg.content == "plain":
+            current._shutdown.set()
+        return {"text": msg.content, "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert first.result(timeout=1).outcome is TurnOutcome.NORMAL
+    assert second.result(timeout=1).outcome is TurnOutcome.NORMAL
+    assert seen == [("brokered", broker), ("plain", None)]
+    assert current_turn_permission_broker() is None
 
 
 def test_matching_active_cancel_wins_before_terminal_settlement(tmp_path, monkeypatch):

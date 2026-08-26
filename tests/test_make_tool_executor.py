@@ -11,6 +11,12 @@ from pathlib import Path
 
 from lingtai.kernel.base_agent import turn
 from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.turn_permissions import (
+    PermissionDecision,
+    bind_turn_permission_broker,
+    reset_turn_permission_broker,
+)
+from lingtai.kernel.tool_call_guard import ToolProposal
 
 
 class _FakeService:
@@ -77,3 +83,29 @@ def test_make_tool_executor_honors_distinct_guards(tmp_path):
 
     assert turn._make_tool_executor(agent, g_request)._guard is g_request
     assert turn._make_tool_executor(agent, g_tcwake)._guard is g_tcwake
+
+
+def test_make_tool_executor_brokers_after_risky_action_check(tmp_path, monkeypatch):
+    calls = []
+
+    def risky(_proposal):
+        calls.append("risky")
+        return True
+
+    monkeypatch.setattr(turn, "build_risky_action_check", lambda _root: risky)
+    broker = type("Broker", (), {
+        "request_permission": lambda self, request: (
+            calls.append(("broker", request.tool_name)), PermissionDecision.ALLOW
+        )[1]
+    })()
+    token = bind_turn_permission_broker(broker)
+    try:
+        executor = turn._make_tool_executor(_FakeAgent(tmp_path), LoopGuard())
+        decision = executor._tool_call_guard.evaluate(
+            ToolProposal("custom_tool", {}, tool_trace_id="trace-1")
+        )
+    finally:
+        reset_turn_permission_broker(token)
+
+    assert decision.allowed
+    assert calls == ["risky", ("broker", "custom_tool")]

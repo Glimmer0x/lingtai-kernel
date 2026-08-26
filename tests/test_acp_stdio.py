@@ -17,22 +17,31 @@ from lingtai.adapters.acp.server import AcpStdioServer
 from lingtai.kernel.base_agent import BaseAgent, StopResult, StopStatus
 from lingtai.kernel.turns import TurnOutcome, TurnResult, control_from_message
 from lingtai.kernel.turn_events import ToolLifecycleEvent, ToolLifecycleState
+from lingtai.kernel.turn_permissions import (
+    PermissionDecision,
+    ToolPermissionRequest,
+)
 
 
 class _Handle:
     def __init__(self, correlation_id: str, result: TurnResult | None = None):
         self.correlation_id = correlation_id
         self._future = Future()
+        self._cancel_requested = threading.Event()
         if result is not None:
             self._future.set_result(result)
 
     def cancel(self):
         if self._future.done():
             return False
+        self._cancel_requested.set()
         self._future.set_result(
             TurnResult(self.correlation_id, TurnOutcome.CANCELLED)
         )
         return True
+
+    def cancel_requested(self):
+        return self._cancel_requested.is_set()
 
     def result(self, timeout=None):
         return self._future.result(timeout=timeout)
@@ -52,6 +61,7 @@ class _Agent:
         correlation_id,
         execution_workspace=None,
         tool_observer=None,
+        permission_broker=None,
     ):
         self.submissions.append({
             "content": content,
@@ -59,6 +69,7 @@ class _Agent:
             "correlation_id": correlation_id,
             "execution_workspace": execution_workspace,
             "tool_observer": tool_observer,
+            "permission_broker": permission_broker,
         })
         self.handle.correlation_id = correlation_id
         return self.handle
@@ -183,6 +194,422 @@ def test_acp_prompt_queues_canonical_workspace_through_real_base_agent(tmp_path)
     assert control.execution_workspace is server._execution_workspace
     assert control.execution_workspace.root == workspace.resolve()
     assert control.tool_observer is not None
+    assert control.permission_broker is not None
+
+
+def test_permission_wire_allows_only_matching_allow_once_then_lifecycle_progresses():
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    result = []
+    waiter = threading.Thread(
+        target=lambda: result.append(broker.request_permission(
+            ToolPermissionRequest("safe-trace", "shell")
+        ))
+    )
+    waiter.start()
+    messages = _wait_for(output, 4)
+    pending, request = messages[2:4]
+    safe_id = f"{handle.correlation_id}:safe-trace"
+    assert pending["params"]["update"] == {
+        "sessionUpdate": "tool_call",
+        "toolCallId": safe_id,
+        "title": "shell",
+        "status": "pending",
+    }
+    assert request == {
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": session_id,
+            "toolCall": pending["params"]["update"],
+            "options": [
+                {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+                {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
+            ],
+        },
+    }
+    projected = json.dumps((pending, request))
+    for forbidden in (
+        "arguments", "command", "paths", "env", "results", "content",
+        "locations", "rawInput", "rawOutput", "private",
+    ):
+        assert forbidden not in projected
+
+    server._dispatch({
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "result": {
+            "outcome": "selected",
+            "optionId": "allow_once",
+            "_meta": {"source": "client"},
+        },
+    })
+    waiter.join(timeout=2)
+    assert not waiter.is_alive()
+    assert result == [PermissionDecision.ALLOW]
+
+    broker.on_tool_lifecycle(
+        ToolLifecycleEvent("safe-trace", "shell", ToolLifecycleState.STARTED)
+    )
+    broker.on_tool_lifecycle(
+        ToolLifecycleEvent("safe-trace", "shell", ToolLifecycleState.COMPLETED)
+    )
+    updates = _wait_for(output, 6)[4:6]
+    assert [item["params"]["update"]["status"] for item in updates] == [
+        "in_progress", "completed"
+    ]
+    assert all(
+        item["params"]["update"]["sessionUpdate"] == "tool_call_update"
+        for item in updates
+    )
+
+
+def test_guessed_allow_before_permission_request_flush_cannot_authorize():
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = _BlockingOutput(block_on=3)
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    result = []
+    waiter = threading.Thread(target=lambda: result.append(
+        broker.request_permission(ToolPermissionRequest("guessed", "shell"))
+    ))
+    waiter.start()
+    assert output.blocked.wait(timeout=5)
+    assert "lingtai-permission-1" in server._pending_permissions
+    before = len(_messages(output))
+
+    responder = threading.Thread(target=lambda: server._dispatch({
+        "jsonrpc": "2.0",
+        "id": "lingtai-permission-1",
+        "result": {"outcome": "selected", "optionId": "allow_once"},
+    }))
+    responder.start()
+    time.sleep(0.02)
+    assert responder.is_alive(), "response must wait on in-flight publication"
+    assert result == []
+    assert len(_messages(output)) == before
+
+    output.release.set()
+    responder.join(timeout=2)
+    waiter.join(timeout=2)
+    assert not responder.is_alive()
+    assert not waiter.is_alive()
+    assert result == [PermissionDecision.DENY]
+    assert not server._pending_permissions
+    server.close()
+
+
+def test_response_captured_before_request_flush_stays_denied_after_publication():
+    class ExitGateLock:
+        def __init__(self, lock):
+            self._lock = lock
+            self.captured = threading.Event()
+            self.release = threading.Event()
+            self.tripped = False
+
+        def __enter__(self):
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            self._lock.release()
+            if (
+                threading.current_thread().name == "preflush-response"
+                and not self.tripped
+            ):
+                self.tripped = True
+                self.captured.set()
+                assert self.release.wait(timeout=5)
+            return False
+
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = _BlockingOutput(block_on=4)
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    decisions = []
+    waiter = threading.Thread(target=lambda: decisions.append(
+        broker.request_permission(ToolPermissionRequest("captured", "shell"))
+    ))
+    waiter.start()
+    assert output.blocked.wait(timeout=5)
+    pending = server._pending_permissions["lingtai-permission-1"]
+    gate = ExitGateLock(server._state_lock)
+    server._state_lock = gate
+
+    responder = threading.Thread(
+        name="preflush-response",
+        target=lambda: server._dispatch({
+            "jsonrpc": "2.0",
+            "id": pending.request_id,
+            "result": {"outcome": "selected", "optionId": "allow_once"},
+        }),
+    )
+    responder.start()
+    assert gate.captured.wait(timeout=5)
+    assert not pending.published
+
+    output.release.set()
+    _wait_until(lambda: pending.published, message="permission publication")
+    gate.release.set()
+    responder.join(timeout=2)
+    waiter.join(timeout=2)
+
+    assert not responder.is_alive()
+    assert not waiter.is_alive()
+    assert decisions == [PermissionDecision.DENY]
+    server.close()
+
+
+def test_cancel_during_blocked_pending_write_emits_adjacent_failed_terminal():
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = _BlockingOutput(block_on=3)
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    decisions = []
+    waiter = threading.Thread(target=lambda: decisions.append(
+        broker.request_permission(ToolPermissionRequest("cancelled-write", "shell"))
+    ))
+    waiter.start()
+    assert output.blocked.wait(timeout=5)
+
+    server._dispatch({
+        "jsonrpc": "2.0",
+        "method": "session/cancel",
+        "params": {"sessionId": session_id},
+    })
+    waiter.join(timeout=2)
+    assert not waiter.is_alive()
+    assert decisions == [PermissionDecision.DENY]
+    broker.on_tool_lifecycle(ToolLifecycleEvent(
+        "cancelled-write", "shell", ToolLifecycleState.DENIED
+    ))
+
+    output.release.set()
+    messages = _wait_for(output, 5)
+    updates = [
+        message["params"]["update"]
+        for message in messages
+        if message.get("method") == "session/update"
+    ]
+    assert [(update["sessionUpdate"], update["status"]) for update in updates] == [
+        ("tool_call", "pending"),
+        ("tool_call_update", "failed"),
+    ]
+    assert not any(
+        message.get("method") == "session/request_permission"
+        for message in messages
+    )
+    assert any(
+        message.get("id") == 3
+        and message.get("result") == {"stopReason": "cancelled"}
+        for message in messages
+    )
+    server.close()
+
+
+@pytest.mark.parametrize("response", [
+    {"result": {"outcome": "selected", "optionId": "reject_once"}},
+    {"result": {"outcome": "selected", "optionId": "allow_always"}},
+    {"result": {"outcome": "cancelled"}},
+    {"result": {"outcome": "selected"}},
+    {"error": {"code": -32000, "message": "client failed"}},
+])
+def test_matching_non_allow_permission_responses_deny_without_response(response):
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    result = []
+    waiter = threading.Thread(target=lambda: result.append(
+        broker.request_permission(ToolPermissionRequest("trace", "file"))
+    ))
+    waiter.start()
+    request = _wait_for(output, 4)[3]
+    before = len(_messages(output))
+    server._dispatch({"jsonrpc": "2.0", "id": request["id"], **response})
+    waiter.join(timeout=2)
+    assert result == [PermissionDecision.DENY]
+    time.sleep(0.02)
+    assert len(_messages(output)) == before
+    server.close()
+
+
+def test_permission_timeout_denies_and_late_allow_cannot_authorize(monkeypatch):
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    monkeypatch.setattr(server, "_PERMISSION_TIMEOUT_SECONDS", 0.01)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    assert broker.request_permission(
+        ToolPermissionRequest("timeout-trace", "shell")
+    ) is PermissionDecision.DENY
+    request = _wait_for(output, 4)[3]
+    server._dispatch({
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "result": {"outcome": "selected", "optionId": "allow_once"},
+    })
+    assert request["id"] not in server._pending_permissions
+    server.close()
+
+
+@pytest.mark.parametrize("terminal", ["close", "cancel"])
+def test_close_and_cancel_wake_permission_waiter_with_denial(terminal):
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    result = []
+    waiter = threading.Thread(target=lambda: result.append(
+        broker.request_permission(ToolPermissionRequest("trace", "file"))
+    ))
+    waiter.start()
+    _wait_for(output, 4)
+    if terminal == "close":
+        server.close()
+    else:
+        server._dispatch({
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": {"sessionId": session_id},
+        })
+    waiter.join(timeout=2)
+    assert not waiter.is_alive()
+    assert result == [PermissionDecision.DENY]
+    server.close()
+
+
+def test_unknown_response_id_is_ignored_and_cannot_authorize_pending_request():
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    result = []
+    waiter = threading.Thread(target=lambda: result.append(
+        broker.request_permission(ToolPermissionRequest("trace", "file"))
+    ))
+    waiter.start()
+    request = _wait_for(output, 4)[3]
+    before = len(_messages(output))
+    server._dispatch({
+        "jsonrpc": "2.0",
+        "id": "unknown-permission",
+        "result": {"outcome": "selected", "optionId": "allow_once"},
+    })
+    time.sleep(0.02)
+    assert len(_messages(output)) == before
+    assert request["id"] in server._pending_permissions
+    server._dispatch({
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "result": {"outcome": "cancelled"},
+    })
+    waiter.join(timeout=2)
+    assert result == [PermissionDecision.DENY]
+    server.close()
+
+
+def test_methodless_nonresponse_remains_an_invalid_request():
+    output = io.StringIO()
+    server = AcpStdioServer(_Agent(_Handle("placeholder")), io.StringIO(), output)
+
+    server._dispatch({"jsonrpc": "2.0", "id": 99})
+
+    assert _wait_for(output, 1) == [{
+        "jsonrpc": "2.0",
+        "id": 99,
+        "error": {"code": -32600, "message": "Invalid Request"},
+    }]
+    server.close()
+
+
+def test_cancelled_turn_cannot_register_a_new_permission_request():
+    handle = _Handle("placeholder")
+    agent = _Agent(handle)
+    output = io.StringIO()
+    server = AcpStdioServer(agent, io.StringIO(), output)
+    session_id = _open_session(server, output)
+    _request(server, 3, "session/prompt", {
+        "sessionId": session_id,
+        "prompt": [{"type": "text", "text": "use a tool"}],
+    })
+    broker = agent.submissions[0]["permission_broker"]
+    handle._cancel_requested.set()
+    before = len(_messages(output))
+
+    assert broker.request_permission(
+        ToolPermissionRequest("cancelled-before-register", "shell")
+    ) is PermissionDecision.DENY
+    time.sleep(0.02)
+    assert len(_messages(output)) == before
+    assert not server._pending_permissions
+
+    broker.on_tool_lifecycle(ToolLifecycleEvent(
+        "cancelled-before-register",
+        "shell",
+        ToolLifecycleState.DENIED,
+    ))
+    failed = _wait_for(output, before + 1)[-1]["params"]["update"]
+    assert failed == {
+        "sessionUpdate": "tool_call",
+        "toolCallId": (
+            f"{handle.correlation_id}:cancelled-before-register"
+        ),
+        "title": "shell",
+        "status": "failed",
+    }
+    server.close()
 
 
 def test_tool_lifecycle_projects_ordered_private_free_updates_before_terminal():
@@ -1046,7 +1473,8 @@ def test_outbound_queue_full_aborts_transport_and_cancels_active_prompt(monkeypa
     monkeypatch.setattr(AcpStdioServer, "_OUTBOUND_QUEUE_BATCHES", 1)
     output = _BlockingOutput(block_on=1)
     handle = _Handle("placeholder")
-    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    agent = _Agent(handle)
+    server = AcpStdioServer(agent, io.StringIO(), output)
 
     _request(server, 1, "initialize", {"protocolVersion": 1})
     assert output.blocked.wait(timeout=5)
@@ -1055,7 +1483,10 @@ def test_outbound_queue_full_aborts_transport_and_cancels_active_prompt(monkeypa
         "sessionId": server._session_id,
         "prompt": [{"type": "text", "text": "wait"}],
     })
-    _request(server, 4, "unknown/method", {})
+    broker = agent.submissions[0]["permission_broker"]
+    assert broker.request_permission(
+        ToolPermissionRequest("queue-full", "file")
+    ) is PermissionDecision.DENY
 
     assert server._aborted and server._closing
     assert server._active is None
@@ -1108,17 +1539,25 @@ def test_stdout_write_or_flush_failure_aborts_and_cancels_active_prompt(failure)
 
     handle = _Handle("placeholder")
     output = FailingOutput()
-    server = AcpStdioServer(_Agent(handle), io.StringIO(), output)
+    agent = _Agent(handle)
+    server = AcpStdioServer(agent, io.StringIO(), output)
     session_id = _open_session(server, output)
     _request(server, 3, "session/prompt", {
         "sessionId": session_id,
         "prompt": [{"type": "text", "text": "wait"}],
     })
     _wait_until(lambda: server._active is not None, message="active prompt")
-
-    _request(server, 99, "unknown/method", {})
+    broker = agent.submissions[0]["permission_broker"]
+    result = []
+    waiter = threading.Thread(target=lambda: result.append(
+        broker.request_permission(ToolPermissionRequest("transport-failure", "shell"))
+    ))
+    waiter.start()
 
     _wait_until(lambda: server._aborted, message=f"{failure} abort")
+    waiter.join(timeout=2)
+    assert not waiter.is_alive()
+    assert result == [PermissionDecision.DENY]
     assert server._closing
     assert server._active is None
     assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED

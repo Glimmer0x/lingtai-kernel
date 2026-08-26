@@ -17,6 +17,7 @@ from uuid import uuid4
 from .message import MSG_CORRELATED_TURN, Message, _make_message
 from .execution_workspace import ExecutionWorkspace
 from .turn_events import TurnToolObserver
+from .turn_permissions import TurnPermissionBroker
 
 
 class TurnOutcome(str, Enum):
@@ -45,6 +46,7 @@ class _TurnControl:
     sender: str
     execution_workspace: ExecutionWorkspace | None = None
     tool_observer: TurnToolObserver | None = None
+    permission_broker: TurnPermissionBroker | None = None
     cancel_requested: threading.Event = field(default_factory=threading.Event)
     future: Future[TurnResult] = field(default_factory=Future)
     cancel_callback: Callable[[str], bool] | None = None
@@ -110,6 +112,7 @@ def submit_turn(
     correlation_id: str | None = None,
     execution_workspace: str | Path | ExecutionWorkspace | None = None,
     tool_observer: TurnToolObserver | None = None,
+    permission_broker: TurnPermissionBroker | None = None,
 ) -> TurnHandle:
     """Queue one text turn and return its correlated terminal handle."""
 
@@ -125,6 +128,10 @@ def submit_turn(
         getattr(tool_observer, "on_tool_lifecycle", None)
     ):
         raise TypeError("tool_observer must define on_tool_lifecycle(event)")
+    if permission_broker is not None and not callable(
+        getattr(permission_broker, "request_permission", None)
+    ):
+        raise TypeError("permission_broker must define request_permission(request)")
 
     shutdown = getattr(agent, "_shutdown", None)
     if shutdown is not None and shutdown.is_set():
@@ -141,6 +148,7 @@ def submit_turn(
         sender=sender,
         execution_workspace=execution_workspace,
         tool_observer=tool_observer,
+        permission_broker=permission_broker,
     )
     control.cancel_callback = lambda requested_id: cancel_turn(agent, requested_id)
     with lock:
