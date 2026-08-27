@@ -423,6 +423,7 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     assert observed["fixed_execution_workspace"].root == workspace
     assert observed.get("forced_disable") is None
     assert observed["turn_origin_policy"] is RUNTIME_POLICY
+    assert observed["requires_turn_origin_policy"] is True
     assert observed["provider_call_admission_port"] is RUNTIME_POLICY
     assert observed["puffo_runtime"] == runtime
 
@@ -549,3 +550,17 @@ def test_profile_admits_only_authenticated_adapter_turns(tmp_path):
     )
     assert not handle.done()
     assert not agent.inbox.empty()
+
+
+def test_constrained_profile_with_a_missing_origin_policy_fails_closed():
+    class MissingPolicyAgent:
+        def __init__(self):
+            import queue
+
+            self.inbox = queue.Queue()
+            self._shutdown = None
+            self._requires_turn_origin_policy = True
+
+    with pytest.raises(TurnAdmissionError) as denied:
+        submit_turn(MissingPolicyAgent(), "must not run")
+    assert denied.value.decision.reason_code == "required_policy_missing"

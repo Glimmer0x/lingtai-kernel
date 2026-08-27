@@ -17,6 +17,17 @@ MSG_CORRELATED_TURN = "correlated_turn"
 # and system notifications (mail arrival, bounce, future MCP listeners).
 MSG_TC_WAKE = "tc_wake"
 
+# The closed set of message kinds accepted by the BaseAgent inbox.  Turn
+# admission derives its negative surface from this set: a constrained profile
+# rejects every canonical kind except the private correlated-turn envelope
+# unless that envelope has separately passed typed origin admission.
+MESSAGE_TYPES = frozenset({
+    MSG_REQUEST,
+    MSG_USER_INPUT,
+    MSG_CORRELATED_TURN,
+    MSG_TC_WAKE,
+})
+
 
 @dataclass
 class Message:

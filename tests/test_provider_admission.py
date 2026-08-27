@@ -77,20 +77,30 @@ def test_raw_provider_service_construction_inventory_is_explicit():
     """A new raw service constructor must be classified before it can land.
 
     Root composition and refresh create an LLMService before BaseAgent wraps it
-    at the provider boundary.  The historical daemon constructor is deliberately
+    at the provider boundary. The historical daemon constructor is deliberately
     listed as an uncovered derived route until the driver-mediated adapter is
-    wired.  This is not an assertion that every listed path is admitted; it is
-    an inventory tripwire: a newly introduced constructor fails review until it
-    is classified and its profile semantics are made explicit.
+    wired. This recognizes direct names, imported aliases, and attribute calls;
+    it is not a whole-program proof over dynamic factories or subclasses. It is
+    an inventory tripwire: a newly introduced direct constructor fails review
+    until it is classified and its profile semantics are made explicit.
     """
     root = Path(__file__).resolve().parents[1]
     counts: dict[str, int] = {}
     for source in (root / "src" / "lingtai").rglob("*.py"):
         tree = ast.parse(source.read_text(encoding="utf-8"))
+        aliases = {"LLMService"}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            for imported in node.names:
+                if imported.name == "LLMService":
+                    aliases.add(imported.asname or imported.name)
         count = sum(
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "LLMService"
+            and (
+                isinstance(node.func, ast.Name) and node.func.id in aliases
+                or isinstance(node.func, ast.Attribute) and node.func.attr == "LLMService"
+            )
             for node in ast.walk(tree)
         )
         if count:

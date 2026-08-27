@@ -216,6 +216,7 @@ class Agent(BaseAgent):
         disable: list[str] | None = None,
         _forced_disable: frozenset[str] | None = None,
         _turn_origin_policy: Any | None = None,
+        _requires_turn_origin_policy: bool = False,
         _from_init_boot: bool = False,
         **kwargs: Any,
     ):
@@ -224,6 +225,7 @@ class Agent(BaseAgent):
         self._from_init_boot = _from_init_boot
         self._forced_disable = frozenset(_forced_disable or ())
         self._turn_origin_policy = _turn_origin_policy
+        self._requires_turn_origin_policy = _requires_turn_origin_policy
 
         # Default karma authority for the primary agent (本我)
         kwargs.setdefault("admin", {"karma": True})

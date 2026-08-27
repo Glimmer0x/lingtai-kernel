@@ -15,6 +15,7 @@ from ..message import (
     MSG_REQUEST,
     MSG_USER_INPUT,
     MSG_TC_WAKE,
+    MESSAGE_TYPES,
 )
 from ..i18n import t as _t
 from ..logging import get_logger
@@ -1723,6 +1724,7 @@ def _run_loop_body(agent) -> None:
 
 
 _TEXT_MSG_TYPES = (MSG_REQUEST, MSG_USER_INPUT)
+_UNTRUSTED_PROVIDER_ORIGIN_MESSAGE_TYPES = MESSAGE_TYPES - {MSG_CORRELATED_TURN}
 
 
 def _concat_queued_messages(agent, msg: Message) -> Message:
@@ -1773,10 +1775,10 @@ def _concat_queued_messages(agent, msg: Message) -> Message:
 
 def _handle_message(agent, msg: Message) -> dict | None:
     """Route message by type. Subclasses may override for routing."""
-    if msg.type in (MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE):
+    if msg.type in _UNTRUSTED_PROVIDER_ORIGIN_MESSAGE_TYPES:
         # These legacy/involuntary inbox shapes carry no authenticated adapter
-        # admission. A constrained outer profile may keep their state/notice
-        # effects while preventing them from driving any provider work.
+        # admission. A constrained outer profile rejects them before any
+        # downstream request, continuation, state, or notice handler runs.
         from ..turns import TurnAdmissionError, TurnOrigin, admit_turn_origin
 
         try:

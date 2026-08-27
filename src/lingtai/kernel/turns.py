@@ -146,12 +146,27 @@ def admit_turn_origin(agent, origin: TurnOrigin) -> TurnAdmissionDecision:
     """Apply an optional typed origin policy without trusting sender strings.
 
     Generic ``BaseAgent`` callers retain the historical default-allow behavior.
-    A profile installs a policy explicitly; malformed policy output denies rather
-    than allowing an unclassified turn to reach the provider.
+    A constrained profile sets ``_requires_turn_origin_policy`` at composition;
+    if its policy is absent, admission fails closed instead of silently taking
+    the generic default. Malformed policy output also denies rather than
+    allowing an unclassified turn to reach the provider.
     """
 
     policy = getattr(agent, "_turn_origin_policy", None)
     if policy is None:
+        if getattr(agent, "_requires_turn_origin_policy", False):
+            decision = TurnAdmissionDecision(
+                False, origin, "required-policy-missing", "required_policy_missing"
+            )
+            logger = getattr(agent, "_log", None)
+            if callable(logger):
+                logger(
+                    "turn_origin_rejected",
+                    origin=origin.value,
+                    policy_version=decision.policy_version,
+                    reason_code=decision.reason_code,
+                )
+            raise TurnAdmissionError(decision)
         return TurnAdmissionDecision(True, origin, "legacy-default", "allowed")
     try:
         decision = policy.admit_turn_origin(origin)

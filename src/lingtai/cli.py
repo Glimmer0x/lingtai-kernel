@@ -129,6 +129,7 @@ def build_agent(
     *,
     _forced_disable: frozenset[str] | None = None,
     _turn_origin_policy=None,
+    _requires_turn_origin_policy: bool = False,
     _provider_call_admission_port=None,
 ) -> Agent:
     """Construct Agent from validated init data.
@@ -179,6 +180,7 @@ def build_agent(
         streaming=m.get("streaming", False),
         _forced_disable=_forced_disable,
         _turn_origin_policy=_turn_origin_policy,
+        _requires_turn_origin_policy=_requires_turn_origin_policy,
         provider_call_admission_port=_provider_call_admission_port,
         _from_init_boot=True,
     )

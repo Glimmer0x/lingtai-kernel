@@ -13,7 +13,14 @@ from lingtai.kernel.execution_workspace import (
     ExecutionWorkspace,
     current_execution_workspace,
 )
-from lingtai.kernel.message import MSG_REQUEST, MSG_TC_WAKE, MSG_USER_INPUT, _make_message
+from lingtai.kernel.message import (
+    MESSAGE_TYPES,
+    MSG_CORRELATED_TURN,
+    MSG_REQUEST,
+    MSG_TC_WAKE,
+    MSG_USER_INPUT,
+    _make_message,
+)
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.turns import (
     TurnOrigin,
@@ -413,7 +420,9 @@ def test_claimed_correlated_envelope_is_skipped_without_provider_dispatch(
     _stop_loop(agent, worker)
 
 
-@pytest.mark.parametrize("message_type", [MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE])
+@pytest.mark.parametrize(
+    "message_type", sorted(MESSAGE_TYPES - {MSG_CORRELATED_TURN})
+)
 def test_profile_rejects_untrusted_event_before_any_provider_dispatch(
     tmp_path, monkeypatch, message_type
 ):

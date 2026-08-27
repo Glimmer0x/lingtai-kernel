@@ -66,6 +66,7 @@ def run_acp(
     fixed_execution_workspace=None,
     forced_disable: frozenset[str] | None = None,
     turn_origin_policy=None,
+    requires_turn_origin_policy: bool = False,
     provider_call_admission_port=None,
     puffo_runtime=None,
 ) -> None:
@@ -78,6 +79,8 @@ def run_acp(
 
     wire_in = input_stream if input_stream is not None else sys.stdin
     wire_out = output_stream if output_stream is not None else sys.stdout
+    if requires_turn_origin_policy and turn_origin_policy is None:
+        raise ValueError("constrained ACP composition requires a turn-origin policy")
     if input_stream is None:
         reconfigure_in = getattr(wire_in, "reconfigure", None)
         if callable(reconfigure_in):
@@ -138,6 +141,8 @@ def run_acp(
             build_options["_forced_disable"] = forced_disable
         if turn_origin_policy is not None:
             build_options["_turn_origin_policy"] = turn_origin_policy
+        if requires_turn_origin_policy:
+            build_options["_requires_turn_origin_policy"] = True
         if provider_call_admission_port is not None:
             build_options["_provider_call_admission_port"] = provider_call_admission_port
         agent = build_agent(data, agent_dir, **build_options)
@@ -218,6 +223,7 @@ def handle_acp_command(args) -> None:
         fixed_execution_workspace=ExecutionWorkspace(runtime.workspace),
         puffo_runtime=runtime,
         turn_origin_policy=RUNTIME_POLICY,
+        requires_turn_origin_policy=True,
         provider_call_admission_port=RUNTIME_POLICY,
     )
 

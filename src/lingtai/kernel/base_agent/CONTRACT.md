@@ -369,7 +369,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    `derived_admission_port_unconnected` indeterminacy and rejects before
    provider I/O. Historical daemon/avatar routes do not yet bind that parent,
    so they remain outside this gate until the separate driver-mediated adapter
-   is wired. The raw `LLMService` construction inventory is pinned by
+   is wired. The raw `LLMService` direct-construction inventory (including
+   imported aliases and attribute calls) is pinned by
    `tests/test_provider_admission.py`; adding a constructor requires an
    explicit classification rather than silently creating another route. The
    future host Port MUST decide against authority current at that
@@ -377,6 +378,12 @@ Clause IDs are stable; each rule composes the linked normative source.
    accidental or structurally separate non-admitted paths. It does not claim
    that a full-tool Agent sharing the same OS trust domain as Core is sandboxed
    from its own host process.
+   A constrained composition MUST carry its origin policy at startup; a missing
+   required policy rejects rather than falling back to the generic default. Its
+   closed inbox surface is `MESSAGE_TYPES`: every canonical message other than
+   the private correlated-turn envelope is rejected before downstream request,
+   continuation, state, or notice handlers execute. The envelope still needs
+   its independent typed-origin check at the final inbox-to-provider boundary.
 
 ## Contract tests
 
