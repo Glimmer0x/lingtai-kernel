@@ -31,15 +31,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from lingtai.kernel.tool_plugin.settings import (
-    SettingOwner,
-    ToolSettingsContract,
-    settings_input_schema,
-)
 from lingtai.tools.tool_family import (
     RESERVED_MANUAL_NAME,
     RESERVED_SETTINGS_NAME,
     ChildTool,
+    SettingsProvider,
     ToolFamily,
 )
 
@@ -101,7 +97,7 @@ class CuratedMcpPlugin:
     summary: str
     homepage: str
     skill_name: str
-    settings: ToolSettingsContract | None = None
+    settings: bool = False
 
     # Loaded from the package's bundled SKILL.md at construction. Excluded from
     # init/repr/eq: they are derived material, not part of the descriptor's
@@ -124,9 +120,9 @@ class CuratedMcpPlugin:
                 f"CuratedMcpPlugin package {self.package!r} must be the "
                 f"{self.name!r} module so its declared launcher is its own module"
             )
-        if self.settings is not None and not isinstance(self.settings, ToolSettingsContract):
+        if type(self.settings) is not bool:
             raise CuratedMcpPluginError(
-                f"CuratedMcpPlugin {self.name!r} has invalid settings"
+                f"CuratedMcpPlugin {self.name!r} settings must be a boolean"
             )
         frontmatter, body, path = _skill.load_skill(self.package)
         if frontmatter.get("name") != self.skill_name:
@@ -187,7 +183,7 @@ class CuratedMcpPlugin:
     def actions(self, declared: Sequence[str]) -> tuple[str, ...]:
         """Declared actions, optional ``settings``, then reserved ``manual``."""
         self._check_declared_names(declared)
-        settings = (RESERVED_SETTINGS_NAME,) if self.settings is not None else ()
+        settings = (RESERVED_SETTINGS_NAME,) if self.settings else ()
         return (*declared, *settings, MANUAL_ACTION)
 
     def action_input_schemas(
@@ -198,23 +194,31 @@ class CuratedMcpPlugin:
         schemas: dict[str, dict[str, Any]] = {
             action: dict(schema) for action, schema in declared.items()
         }
-        if self.settings is not None:
-            schemas[RESERVED_SETTINGS_NAME] = settings_input_schema()
+        if self.settings:
+            schemas[RESERVED_SETTINGS_NAME] = strict_empty_input_schema()
         schemas[MANUAL_ACTION] = strict_empty_input_schema()
         return schemas
 
-    def build_family(self, declared: Sequence[ChildTool], *,
-                     settings_owner: SettingOwner | None = None) -> ToolFamily:
+    def build_family(
+        self,
+        declared: Sequence[ChildTool],
+        *,
+        settings_provider: SettingsProvider | None = None,
+    ) -> ToolFamily:
         """Compose one family with opted-in settings immediately before manual."""
         self._check_declared_names([child.name for child in declared])
+        if self.settings != (settings_provider is not None):
+            raise CuratedMcpPluginError(
+                f"CuratedMcpPlugin {self.name!r} settings opt-in and provider disagree"
+            )
         return ToolFamily(
             self.name, [*declared, self.manual_child()],
-            settings_contract=self.settings, settings_owner=settings_owner,
+            settings_provider=settings_provider,
         )
 
     def _check_declared_names(self, declared: "Sequence[str] | Any") -> None:
         names = list(declared)
-        if not names and self.settings is None:
+        if not names and not self.settings:
             raise CuratedMcpPluginError(
                 f"CuratedMcpPlugin {self.name!r} must declare an action unless settings is enabled"
             )

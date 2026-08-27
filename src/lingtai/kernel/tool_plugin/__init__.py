@@ -33,23 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
-from .settings import (
-    SETTINGS_ACTION,
-    SettingOwner,
-    SettingSpec,
-    SettingState,
-    ToolSettingsContract,
-    _bound_settings_matches,
-    settings_input_schema,
-)
-
 __all__ = [
     "MANUAL_ACTION",
-    "SETTINGS_ACTION",
-    "SettingOwner",
-    "SettingSpec",
-    "SettingState",
-    "ToolSettingsContract",
     "GRANTABLE_HOST_PORTS",
     "OFFICIAL_TOOL_PLUGIN_NAMES",
     "ToolPluginError",
@@ -94,6 +79,20 @@ __all__ = [
 #: ``src/lingtai/tools/CONTRACT.md`` ``### Dispatch and actions``; this constant
 #: only lets the declaration enforce it before an Agent exists.
 MANUAL_ACTION = "manual"
+
+# Optional read-only discovery action. Its implementation and public row type
+# belong to ``lingtai.tools.tool_family``; the kernel declaration needs only
+# this reserved spelling to advertise an opted-in family.
+_SETTINGS_ACTION = "settings"
+
+
+def _settings_input_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
 
 
 #: Every host port an official declaration may name in ``requires``.
@@ -1011,9 +1010,9 @@ class ToolPluginDeclaration:
     construction so a packaging defect fails loudly at import instead of
     shipping silently.
 
-    ``actions`` are operational. Reserved ``settings`` and ``manual`` are
-    composed generically; settings appears immediately before manual only for
-    an explicit :class:`ToolSettingsContract`. Their schemas come from
+    ``actions`` are operational. Optional ``settings`` and reserved ``manual``
+    are added by :attr:`public_actions`, with ``settings`` immediately before
+    ``manual`` when its boolean opt-in is true. Their schemas come from
     :attr:`public_input_schemas`,
     mirroring ``lingtai.mcp_servers._plugin.CuratedMcpPlugin.actions``. The
     family still owns the manual child's handler and its packaged/installed
@@ -1032,7 +1031,7 @@ class ToolPluginDeclaration:
     binder: Callable[[ToolPluginHost], BoundToolPlugin]
     requires: tuple[str, ...] = ()
     glossary_package: str | None = None
-    settings: ToolSettingsContract | None = None
+    settings: bool = False
 
     def __post_init__(self) -> None:
         for attribute in ("name", "manual", "description"):
@@ -1041,15 +1040,17 @@ class ToolPluginDeclaration:
                 raise ToolPluginDeclarationError(
                     f"ToolPluginDeclaration {attribute!r} must be a non-empty string"
                 )
-        if not isinstance(self.actions, tuple) or (
-            not self.actions and self.settings is None
-        ):
+        if type(self.settings) is not bool:
+            raise ToolPluginDeclarationError(
+                f"ToolPluginDeclaration {self.name!r} settings must be a boolean"
+            )
+        if not isinstance(self.actions, tuple) or (not self.actions and not self.settings):
             raise ToolPluginDeclarationError(
                 f"ToolPluginDeclaration {self.name!r} must declare actions as a "
                 "tuple and may be empty only with settings opt-in"
             )
         reserved = [
-            action for action in (SETTINGS_ACTION, MANUAL_ACTION) if action in self.actions
+            action for action in (_SETTINGS_ACTION, MANUAL_ACTION) if action in self.actions
         ]
         if reserved:
             raise ToolPluginDeclarationError(
@@ -1083,23 +1084,19 @@ class ToolPluginDeclaration:
             raise ToolPluginDeclarationError(
                 f"ToolPluginDeclaration {self.name!r} binder must be callable"
             )
-        if self.settings is not None and not isinstance(self.settings, ToolSettingsContract):
-            raise ToolPluginDeclarationError(
-                f"ToolPluginDeclaration {self.name!r} has invalid settings"
-            )
 
     @property
     def public_actions(self) -> tuple[str, ...]:
         """Public actions, adding opted-in ``settings`` immediately before manual."""
-        if self.settings is None:
+        if not self.settings:
             return (*self.actions, MANUAL_ACTION)
-        return (*self.actions, SETTINGS_ACTION, MANUAL_ACTION)
+        return (*self.actions, _SETTINGS_ACTION, MANUAL_ACTION)
 
     def public_input_schemas(self) -> dict[str, Mapping[str, Any]]:
         """Return declared schemas plus the generically composed reserved schemas."""
         schemas: dict[str, Mapping[str, Any]] = dict(self.input_schemas)
-        if self.settings is not None:
-            schemas[SETTINGS_ACTION] = settings_input_schema()
+        if self.settings:
+            schemas[_SETTINGS_ACTION] = _settings_input_schema()
         schemas[MANUAL_ACTION] = self.manual_input_schema
         return schemas
 
@@ -1107,10 +1104,9 @@ class ToolPluginDeclaration:
         """Compose this family against a granted host facade.
 
         Pure composition: it must not mount, start, spawn, or connect anything.
-        Three declaration gates run on every boot: the bound plugin's name must
-        match the reserved name, the bound settings controller must carry this
-        declaration's exact opt-in identity (or be absent when opted out), and
-        the advertised action inventory must equal :attr:`public_actions`.
+        Two declaration gates run on every boot: the bound plugin's name must
+        match the reserved name, and its advertised action inventory must equal
+        :attr:`public_actions`.
         Declared-versus-shipped agreement is enforced here in the registrar's
         own path, not merely asserted once in a test.
         """
@@ -1134,11 +1130,6 @@ class ToolPluginDeclaration:
             raise ToolPluginDeclarationError(
                 f"ToolPluginDeclaration {self.name!r} bound itself as "
                 f"{bound.name!r}"
-            )
-        if not _bound_settings_matches(bound.handler, self.settings):
-            raise ToolPluginDeclarationError(
-                f"ToolPluginDeclaration {self.name!r} bound settings from a "
-                "different declaration contract"
             )
         advertised = _advertised_actions(bound.schema)
         if advertised is None:

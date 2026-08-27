@@ -48,11 +48,13 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
-from lingtai.kernel.tool_plugin.settings import SETTINGS_ACTION, SettingOwner, ToolSettingsContract
+from .settings import SettingRow, SettingsProvider
 
 __all__ = [
     "ChildTool",
     "DiagnosticDescriptor",
+    "SettingRow",
+    "SettingsProvider",
     "ToolFamily",
     "ToolFamilyError",
     "TRIGGER_UNSUPPORTED_INPUT_FIELD",
@@ -63,7 +65,7 @@ __all__ = [
 # silently — see ``tools/CONTRACT.md`` "Every LingTai-owned family MUST offer
 # a `manual` action" and the ManualTool stable contract.
 RESERVED_MANUAL_NAME = "manual"
-RESERVED_SETTINGS_NAME = SETTINGS_ACTION
+RESERVED_SETTINGS_NAME = "settings"
 
 # Envelope root fields admitted alongside ``action``/``input``.
 _ROOT_FIELDS = {"action", "input", "reasoning", "_reasoning", "summarize"}
@@ -187,12 +189,11 @@ class ToolFamily:
         name: str,
         children: Sequence[ChildTool],
         *,
-        settings_contract: ToolSettingsContract | None = None,
-        settings_owner: SettingOwner | None = None,
+        settings_provider: SettingsProvider | None = None,
     ) -> None:
         if not name or not isinstance(name, str):
             raise ToolFamilyError("ToolFamily name must be a non-empty string")
-        if not children and settings_contract is None:
+        if not children and settings_provider is None:
             raise ToolFamilyError(f"ToolFamily {name!r} must register at least one child")
         seen: dict[str, ChildTool] = {}
         for child in children:
@@ -210,32 +211,27 @@ class ToolFamily:
                     f"ToolFamily {name!r} has a duplicate child name {child.name!r}"
                 )
             seen[child.name] = child
-        if settings_contract is None and settings_owner is not None:
-            raise ToolFamilyError(
-                f"ToolFamily {name!r} cannot bind a settings owner without a contract"
-            )
         ordered_children = list(children)
-        if settings_contract is not None:
+        if settings_provider is not None:
             from .settings import build_settings_child
 
+            if not any(child.name == RESERVED_MANUAL_NAME for child in ordered_children):
+                raise ToolFamilyError(
+                    f"ToolFamily {name!r} settings require a manual child"
+                )
             try:
-                settings_child = build_settings_child(settings_contract, settings_owner)
+                settings_child = build_settings_child(settings_provider)
             except ValueError as exc:
                 raise ToolFamilyError(f"ToolFamily {name!r} has invalid settings: {exc}") from exc
             manual_index = next(
-                (
-                    index
-                    for index, child in enumerate(ordered_children)
-                    if child.name == RESERVED_MANUAL_NAME
-                ),
-                len(ordered_children),
+                (i for i, child in enumerate(ordered_children)
+                 if child.name == RESERVED_MANUAL_NAME), len(ordered_children)
             )
             ordered_children.insert(manual_index, settings_child)
         self.name = name
         self._children = {child.name: child for child in ordered_children}
         # Preserve caller-declared order for deterministic schema branches.
         self._order: tuple[str, ...] = tuple(child.name for child in ordered_children)
-        self._settings_enabled = settings_contract is not None
 
     @property
     def child_names(self) -> tuple[str, ...]:
@@ -243,10 +239,6 @@ class ToolFamily:
 
     def has_manual(self) -> bool:
         return RESERVED_MANUAL_NAME in self._children
-
-    def _tool_settings_handler(self) -> Callable[[Mapping[str, Any]], dict[str, Any]] | None:
-        child = self._children.get(RESERVED_SETTINGS_NAME)
-        return None if child is None else child.handler
 
     def build_schema(self) -> dict[str, Any]:
         """Compose the model-facing schema.
@@ -313,7 +305,9 @@ class ToolFamily:
                     },
                 }
             )
-        input_branches_keyword = "anyOf" if self._settings_enabled else "oneOf"
+        input_branches_keyword = (
+            "anyOf" if RESERVED_SETTINGS_NAME in self._children else "oneOf"
+        )
         return {
             "type": "object",
             "properties": {

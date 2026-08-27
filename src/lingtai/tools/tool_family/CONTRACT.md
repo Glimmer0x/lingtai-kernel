@@ -128,10 +128,6 @@ entirely and dispatch by hand — `web` uses it internally but still owns its
 own outer `handle()` to stamp family-specific diagnostics onto envelope
 failures, which this package has no knowledge of.
 
-An explicit contract injects one isolated `settings` child before `manual`, or
-last without it; `None` preserves the old registry. Zero ordinary children are
-supported only when the contract supplies this reserved child.
-
 `build_manual_child` builds the reserved `manual` `ChildTool`: strict empty
 input — the module-level `MANUAL_INPUT_SCHEMA` literal, exported so a family
 that also composes a schema-only `ToolFamily` advertises the identical object
@@ -154,19 +150,11 @@ layer — never inside this builder, its handler, or a wrapping `ChildTool`.
 
 ## Port
 
-### Opt-in settings controller
+### Optional settings provider
 
-Guarded by: [T011](BEHAVIORS.md#behavior-t011).
-
-Input is exactly `{}` and the controller performs fresh read-only inventory.
-It validates owner state, declared kind, and source, then projects only the
-declared progressive-disclosure fields. Sensitive current/default values are
-redacted while safe metadata and `manual_ref` remain visible. Malformed owner
-results fail loudly without owner prose or fabricated values. The entire
-canonical JSON response is bounded at 65,536 UTF-8 bytes; an oversized result
-is replaced by one small `SETTINGS_RESPONSE_TOO_LARGE` failure with no partial
-rows. The [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
-teaches external change routing and conformance.
+The optional `SettingsProvider` callable returns fresh `SettingRow` display
+facts for the injected read-only action; the [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
+teaches the seam, and [T011](BEHAVIORS.md#behavior-t011) guards it.
 
 The provider-neutral boundary is `ChildTool.input_schema` (each child's own
 canonical JSON Schema for `input`) and `ChildTool.handler`
@@ -463,19 +451,13 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006) and
 - A `ToolFamily`'s child registry MUST be validated at construction: duplicate
   child names and more than one child named the reserved `manual` MUST raise
   `ToolFamilyError`, not register silently or resolve by precedence.
-- A child named reserved `settings` MUST be rejected. Only an explicit
-  `ToolSettingsContract` may inject it; absence MUST preserve the legacy
-  registry and `oneOf` schema, while opt-in MUST insert it before `manual` (or
-  last without manual) with an isolated universal schema/controller.
-- The injected `settings` child MUST accept only the exact empty object and
-  MUST resolve current state only. It MUST NOT expose set/reset inputs or call
-  generic mutation/env/config machinery. Inventory rows MUST retain safe
-  metadata when values are redacted, MUST point through required `manual_ref`
-  instead of duplicating owner documentation, and MUST fail with
-  `SETTINGS_RESPONSE_TOO_LARGE` and no rows when the complete sorted,
-  compact, non-ASCII-escaped canonical JSON response exceeds 65,536 UTF-8
-  bytes. Owner exceptions or malformed results MUST yield bounded resolve
-  diagnostics without leaking owner prose or inventing current truth.
+- A reserved `settings` child MUST be injected only for an explicit provider,
+  immediately before `manual`, and accept exactly `{}`; it MUST expose only
+  key, effective/source or bounded unavailability, default presence/value,
+  configurability, optional canonical config key/timing, exact `manual_ref`,
+  and sensitivity, redact sensitive values, return one fixed failure for any
+  provider or row defect, stop incrementally at 65,536 complete-response bytes
+  with one fixed no-row failure, and offer no mutation operation.
 - `build_schema()` MUST declare the aggregate `input` property as direct
   `type: object`, then embed each child's own object `input_schema` verbatim
   (no copy-and-reshape) under a branch pairing it with that child's `title`.
@@ -561,10 +543,8 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006) and
 
 ## Contract tests
 
-`tests/test_tool_settings_contract.py` proves the synthetic SHOW contract,
-whole-response bound, safe redaction projection, malformed-owner refusal, and
-production opt-out. T011 traces those normative rules to executable behavior.
-Existing production suites remain the schema/dispatch non-regression evidence.
+T011 runs `tests/test_tool_settings_contract.py`; production suites remain the
+schema/dispatch non-regression evidence.
 
 `tests/test_tool_family_generic.py` proves the infrastructure is generic using
 a fake `widget` family unrelated to `web`: deterministic registration order,

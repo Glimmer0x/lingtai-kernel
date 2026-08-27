@@ -1,6 +1,6 @@
 ---
 name: declared-host-tool-plugin-behavior-tests
-behavior_version: 2
+behavior_version: 1
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -8,8 +8,6 @@ related_files:
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/__init__.py
-  - src/lingtai/kernel/tool_plugin/settings.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/avatar/__init__.py
@@ -32,7 +30,6 @@ related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
   - tests/test_tool_plugin_declaration.py
-  - tests/test_tool_settings_contract.py
   - tests/test_deep_refresh.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
@@ -56,8 +53,7 @@ maintenance: |
   with CONTRACT.md and ANATOMY.md (tridirectional loop): when a behavior clause
   of the declared host-plugin contract changes — the static-declaration rule,
   the least-privilege grant, the reserved official name list, or the
-  check-before-bind ordering, or settings SHOW opt-in — update the guarding
-  LABT here in the same change.
+  check-before-bind ordering — update the guarding LABT here in the same change.
   Keep every command copy-paste executable from the repository root. When a
   further family recuts onto the contract, or when authoring-time line numbers
   drift, extend the affected evidence with that family's own focused proof rather
@@ -349,52 +345,6 @@ File installs anywhere except `file-manual`, or if the kernel package imports
 `lingtai.tools`.
 Record the exact command output in the task report. This task performs no
 writes.
-
-## Behavior TP003 — settings opt-in adds one identity-bound SHOW action and nothing else
-
-- **id**: TP003
-- **title**: settings opt-in adds one identity-bound SHOW action and nothing else
-- **guards**: `declared-host-tool-plugin` § [Behavior](CONTRACT.md#behavior),
-  § [Optional settings declaration Port](CONTRACT.md#optional-settings-declaration-port),
-  and § [Contract rules](CONTRACT.md#contract-rules) rule 10
-- **runner**: any LingTai agent with `shell` and `file` access to a clean
-  checkout of the `lingtai-kernel` repository
-- **prerequisites**: a clean checkout; a working `.venv/`
-- **estimate**: ≈ 1 minute
-
-### Steps
-
-1. Run the focused declaration and public-surface proof:
-
-   ```bash
-   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" \
-     .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_settings_contract.py
-   ```
-
-2. Read the selected test names in the output source and confirm they prove all
-   official and packaged curated declarations remain at `settings=None`, an
-   explicit contract inserts exactly one `settings` immediately before
-   `manual`, the strict input schema has no `set` or `reset`, binding checks the
-   exact contract identity, and all four owner-authoring types share the public
-   `lingtai.kernel.tool_plugin` export surface.
-
-### Expected evidence
-
-- [ ] The focused suite passes with no production family opted in.
-- [ ] An absent declaration retains its old actions and schemas; an explicit
-      declaration advertises `settings` immediately before `manual`.
-- [ ] `settings` accepts only `{}` and exposes no mutation symbol, operation,
-      receipt, or owner method.
-- [ ] Binding rejects a composed controller backed by a different contract
-      identity.
-
-### Pass / Fail
-
-Pass when every box above is observed. Fail if settings appears without an
-explicit declaration, any mutation input or receipt survives, a production
-family is opted in, or bind accepts the wrong contract identity. Record the
-exact command output in the task report. This task performs no writes.
 
 ## Behavior TP002 — a reserved official name is claimed once and a conflict is refused before any bind or mount
 

@@ -18,7 +18,6 @@ related_files:
   - tests/test_mcp_sdk_v2_contract.py
   - src/lingtai/mcp_servers/_skill.py
   - src/lingtai/mcp_servers/_plugin.py
-  - src/lingtai/kernel/tool_plugin/settings.py
   - src/lingtai/tools/tool_family/settings.py
   - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/mcp_servers/daemon_common/server.py
@@ -161,7 +160,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 | File / folder | Role |
 |---|---|
 | `_skill.py` | Shared bundled-skill helper: re-exports the kernel-owned `split_frontmatter` from `lingtai.kernel._frontmatter` (one impl shared with the prompt-section catalog; kernel never imports the wrapper), `load_skill()` loads package `SKILL.md`, `manual_action_description()` injects frontmatter into the schema, and `manual_payload()` returns the manual body + absolute path without sidecar lists (`_skill.py:36-79`). |
-| `_plugin.py` | Curated-MCP **plugin packaging** descriptor: `CuratedMcpPlugin` binds package identity, bundled `SKILL.md`, stdio declaration, and reserved `manual`; optional read-only `settings` uses the same family seam while all six packaged descriptors remain opted out. `actions()` / `action_input_schemas()` / `build_family()` reject hand-authored reserved actions and compose `settings` immediately before `manual` (`_plugin.py:185-230`); `mcp_declaration()` remains declarative (`_plugin.py:234-251`) and performs no discovery, import-by-name, spawning, registration, or config reading. Activation/execution/lifecycle stay with the host. |
+| `_plugin.py` | Curated-MCP **plugin packaging** descriptor: `CuratedMcpPlugin` (`_plugin.py:77-255`) binds package identity, bundled `SKILL.md`, stdio declaration, and reserved `manual`; its boolean `settings` opt-in delegates SHOW to the family provider while all six packaged descriptors remain opted out. Declarative only — no discovery, import-by-name, spawning, registration, or config reading; activation/execution/lifecycle stay with the host. |
 | `_identity.py` | Shared public-identity envelope/path/write helper for curated messaging MCPs: builds the `lingtai.mcp.identity.v1` document, computes `system/mcp_identities/<name>.json`, and performs the newline-terminated atomic JSON write. Provider-specific account fields and redaction stay in each provider. |
 | `_config.py` | Shared env-var → path → strict-JSON config loading sequence for the simple addon loaders; each addon keeps its own public `load_config()` wrapper and return type. WeChat deliberately opts out (two-candidate resolver, status diagnostics, second credentials file). |
 | `_entrypoint.py` | The single copy of the stdio entrypoint every curated `__main__.py` used to duplicate: INFO logging to **stderr** so JSON-RPC stdout stays clean, `asyncio.run(serve())`, and a swallowed `KeyboardInterrupt`. |

@@ -101,9 +101,7 @@ The router table is the routing authority; this list is the inventory.
 - name: tool-plugin-settings
   location: reference/tool-plugin-settings/SKILL.md
   description: |
-    Developer reference for opting exactly one ToolPlugin or curated descriptor
-    into the bounded SHOW-only settings inventory, implementing resolve-only
-    owner state, manual references, redaction, and focused conformance tests.
+    Developer reference for one ToolFamily's optional SHOW-only settings provider.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
@@ -144,7 +142,7 @@ The router table is the routing authority; this list is the inventory.
 | About to call `system(action="refresh")`; preset swap/revert pre-flight; "will this refresh break something?"; refresh returned but MCP/tools/LLM look wrong; refresh failed | `reference/refresh-precheck/SKILL.md` |
 | Kernel update lifecycle; runtime/source discovery; `kernel_version` and `source_drift`; heartbeat nudge dispatch; `.notification/nudge.json`; durable state; sync/wake/dismiss mechanics; packaged vs editable/source installs; refresh vs TUI-managed update; verification/troubleshooting | `reference/runtime-update-checks/SKILL.md` |
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
-| Inspect or implement one ToolPlugin/curated settings owner; SHOW-only `settings(input={})`; bounded declarations; current/default/source; redaction; canonical external change route; owner conformance | `reference/tool-plugin-settings/SKILL.md` |
+| Add or inspect a ToolFamily SHOW-only settings provider | `reference/tool-plugin-settings/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
 | LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |

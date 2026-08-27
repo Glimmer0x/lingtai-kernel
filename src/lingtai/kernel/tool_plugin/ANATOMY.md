@@ -3,8 +3,6 @@ related_files:
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/BEHAVIORS.md
   - src/lingtai/kernel/tool_plugin/__init__.py
-  - src/lingtai/kernel/tool_plugin/settings.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
@@ -96,7 +94,7 @@ maintenance: |
   this anatomy in the same change that moves files, symbols, connections,
   composition, or state — in particular when a host port is added, when a family
   recuts onto the declared contract, or when OFFICIAL_TOOL_PLUGIN_NAMES changes.
-  Name the guarding LABT ids (TP001, TP002, TP003) beside the implementing code. Verify
+  Name the guarding LABT ids (TP001, TP002) beside the implementing code. Verify
   every changed citation and run the architecture-document validation before
   merge. Follow the root Anatomy/Contract pairing rule, report mismatches, and do
   not duplicate or auto-fix the rule here.
@@ -152,19 +150,14 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     internal mount seam; its constructor rejects caller-supplied declaration /
     plugin pairs;
   - `ToolPluginDeclaration`, the frozen static declaration, validated in
-    `__post_init__` (guarded by TP001 and TP003), with `public_actions`,
+    `__post_init__` (guarded by TP001), with `public_actions`,
     `public_input_schemas()`, and `bind()` — which checks the bound plugin's
     name *and* its advertised action inventory against the declaration, via the
-    module-private `_advertised_actions` reader;
+    module-private `_advertised_actions` reader; its `settings` boolean only
+    adds the reserved read-only action immediately before `manual`;
   - `register_official_tool_plugins`, the fail-fast registrar whose two-phase
     body — check every name, then bind/activate/mount — is the ordering promise
     (guarded by TP002).
-- `settings.py` — the complete public owner-authoring surface: immutable
-  `SettingSpec`, `SettingState`, `ToolSettingsContract`, and resolve-only
-  `SettingOwner`, plus bounded value normalization, opt-in contract identity,
-  the 65,536-byte response limit constant, and the strict-empty reserved input
-  schema. It performs no resolution, configuration I/O, or mutation
-  (`settings.py:1-275`, guarded by TP003).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
   outside the kernel package. It supplies callback-only adapters for File's
   concrete operations/facts, Plugin's detached read-only catalog projection,
@@ -440,9 +433,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 `import lingtai.tools.vision`, or `import lingtai.tools.web_search` →
 `import lingtai.tools.email`, or `import lingtai.tools.notification` →
 `ToolPluginDeclaration.__post_init__` validates
-its declared shape, with no Agent in existence. `settings=None` is absent; an
-explicit contract inserts the identity-bound, read-only `settings` child before
-`manual`.
+its declared shape, with no Agent in existence.
 
 Direct `Agent.__init__` composes constructor-time official boot normally. The
 wrapper-only `cli.build_agent` passes private `_from_init_boot=True` to make an

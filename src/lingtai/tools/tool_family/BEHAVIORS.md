@@ -10,7 +10,6 @@ related_files:
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/settings.py
   - src/lingtai/tools/tool_family/manual.py
-  - src/lingtai/kernel/tool_plugin/settings.py
   - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/avatar/CONTRACT.md
@@ -624,50 +623,31 @@ raw value/path/exception string, or if any wording implies
 molt call (with or without a diagnostic) must shed no context and write no
 new snapshot/summary/session state.
 
-## Behavior T011 — settings SHOW is fresh, redaction-safe, bounded, and never mutates
+## Behavior T011 — settings SHOW is redaction-safe, bounded, and read-only
 
 - **id**: T011
-- **title**: settings SHOW is fresh, redaction-safe, bounded, and never mutates
-- **guards**: `tool-family` §
-  [Opt-in settings controller](CONTRACT.md#opt-in-settings-controller) and §
-  [Contract rules](CONTRACT.md#contract-rules)
-- **runner**: any LingTai agent with `shell` and `file` access to a clean
-  checkout of the `lingtai-kernel` repository
-- **prerequisites**: a clean checkout; a working `.venv/`
+- **title**: settings SHOW is redaction-safe, bounded, and read-only
+- **guards**: tool-family § [Optional settings provider](CONTRACT.md#optional-settings-provider)
+  and § [Contract rules](CONTRACT.md#contract-rules)
+- **runner**: any LingTai agent with shell and file access to a clean checkout
+- **prerequisites**: a clean checkout; a working .venv/
 - **estimate**: ≈ 1 minute
 
 ### Steps
 
-1. Run the focused SHOW controller proof:
+1. Run:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" \
-     .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_settings_contract.py
+   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" .venv/bin/python \
+     -m pytest -q -p no:cacheprovider tests/test_tool_settings_contract.py
    ```
-
-2. Confirm the cases exercise fresh resolve-only owner reads, public and
-   redacted rows, unavailable and malformed owner results, forbidden non-empty
-   input, and an inventory whose complete canonical encoding exceeds 65,536
-   UTF-8 bytes.
 
 ### Expected evidence
 
-- [ ] Every inventory row contains its required `manual_ref`; redacted rows
-      retain safe metadata while current/default values are `<redacted>`.
-- [ ] Invalid input performs no owner call, and neither configurable nor fixed
-      rows cause any owner state change.
-- [ ] An owner exception, wrong state type, wrong value kind, or undeclared
-      source yields bounded `OWNER_RESOLVE_FAILED` output with no owner prose or
-      fabricated effective value.
-- [ ] An oversized complete response yields only
-      `SETTINGS_RESPONSE_TOO_LARGE` with `max_bytes: 65536` and no `settings`
-      rows or truncated values.
+- [ ] Opt-in/order, exact input, projection/redaction/manual route, fixed
+      provider failures, incremental bounding, exports, and production opt-out pass.
 
 ### Pass / Fail
 
-Pass when every box above is observed. Fail if the action mutates state, accepts
-anything except `{}`, hides the manual route during redaction, leaks owner
-details, truncates an inventory, or returns a partial oversized response.
-Record the exact command output in the task report. This task performs no
-writes.
+Pass when the suite passes; fail on leakage, partial rows, mutation operations,
+or unbounded provider consumption. This task performs no writes.

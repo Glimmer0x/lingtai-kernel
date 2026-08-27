@@ -62,8 +62,8 @@ that generic dispatch route.
 - `ChildTool` — a frozen descriptor pairing one child's canonical name,
   `input_schema`, `handler`, and an optional `diagnostics` sidecar; name
   doubles as the model `action` constant and dispatch key
-  (`__init__.py:141-169`, preceded by the `DiagnosticDescriptor` dataclass at
-  `__init__.py:123-138`). `diagnostics` maps a structural trigger name
+  (`__init__.py:143-170`, preceded by the `DiagnosticDescriptor` dataclass at
+  `__init__.py:125-140`). `diagnostics` maps a structural trigger name
   (today: only
   `TRIGGER_UNSUPPORTED_INPUT_FIELD`) to the static `DiagnosticDescriptor`
   (`code`/`expected_form`/`reason`/`fix`) that action owns for it — see
@@ -77,7 +77,7 @@ that generic dispatch route.
   and strips root `summarize`, rejects unknown root fields, and rejects
   `input` keys outside the selected child's own declared schema properties
   before calling that child's handler with only its `input`
-  (`__init__.py:171-478`). Two enforcement layers correlate `action` with
+  (`__init__.py:173-472`). Two enforcement layers correlate `action` with
   `input`, generated purely from the child registry with no name/schema
   mapping table: (1) schema-level — a root `allOf` with one `if`/`then`
   condition per child, each `if` testing `action` via `const` against that
@@ -89,11 +89,9 @@ that generic dispatch route.
   correlation was adopted after a live non-strict Codex Responses probe on
   2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
   the current route (see `CONTRACT.md` "Contract rules").
-- `settings.py` — the identity-bearing SHOW controller: exact-empty input,
-  fresh resolve-only owner reads, bounded kind/source validation, safe-metadata
-  projection with value redaction, and one 65,536-byte canonical-JSON bound
-  that refuses the whole inventory instead of truncating it
-  (`settings.py:1-161`, guarded by T011).
+- `settings.py` — owns the public `SettingRow`/`SettingsProvider` seam and the
+  injected SHOW child with redaction and incremental response bounding
+  (`settings.py:1-167`, guarded by T011).
 
 ### Diagnostics sidecar
 
@@ -302,7 +300,7 @@ boundaries.
 No mutable state lives at package root. `ToolFamily` instances are immutable
 after construction (a frozen child registry); `build_schema()` recomputes the
 model-facing schema on every call rather than caching one at construction.
-Any per-Agent state (engine specs, setting-owner state, service caches)
+Any per-Agent state (engine specs, settings diagnostics, service caches)
 belongs to the consuming family, as `WebManager` demonstrates.
 
 ## Notes
@@ -315,7 +313,3 @@ real intrinsic with a different composition shape. Building a family on
 `ToolFamily` is optional: a family may hand-write an equivalent
 `handle()`/schema composition instead, exactly as `web` did before adopting
 this package.
-
-This is SHOW-only opt-in machinery. The [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
-routes later owner PRs to the canonical external change procedure; no
-production family is activated here.
