@@ -362,14 +362,16 @@ Clause IDs are stable; each rule composes the linked normative source.
    correlation ids, paths, registry digests, prompt content, and tool output
    are not credentials. A derived daemon/avatar call uses a typed parent with
    an internal non-serializable handle and crosses the Port again for each
-   actual provider call; it cannot reuse a root grant. Until the driving host
-   connects derived admission, the profile returns explicit
+   actual provider call; it cannot reuse a root grant. A host that binds a
+   derived parent before its transport is connected receives explicit
    `derived_admission_port_unconnected` indeterminacy and rejects before
-   provider I/O. The future host Port MUST decide against authority current at
-   that call, not a turn-start snapshot or an implicit cache. This rule
-   prevents accidental or structurally separate non-admitted paths. It does
-   not claim that a full-tool Agent sharing the same OS trust domain as Core is
-   sandboxed from its own host process.
+   provider I/O. Historical daemon/avatar routes do not yet bind that parent,
+   so they remain outside this gate until the separate driver-mediated adapter
+   is wired. The future host Port MUST decide against authority current at that
+   call, not a turn-start snapshot or an implicit cache. This rule prevents
+   accidental or structurally separate non-admitted paths. It does not claim
+   that a full-tool Agent sharing the same OS trust domain as Core is sandboxed
+   from its own host process.
 
 ## Contract tests
 

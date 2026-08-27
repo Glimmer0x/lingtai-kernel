@@ -156,8 +156,8 @@ def test_puffo_root_only_policy_fails_closed_for_derived_model_calls():
     assert denied.reason_code == "derived_admission_port_unconnected"
 
 
-def test_unconnected_derived_admission_is_explicit_and_never_reaches_provider_io():
-    """Attack oracle: unconnected transport is not a permissive placeholder."""
+def test_bound_unconnected_derived_admission_never_reaches_provider_io():
+    """Attack oracle for the future derived adapter's unconnected state."""
 
     inner = _InnerService()
     service = ProviderAdmittedLLMService(inner, RUNTIME_POLICY)

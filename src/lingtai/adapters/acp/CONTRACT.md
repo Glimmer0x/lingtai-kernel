@@ -239,11 +239,13 @@ argv, environment, or MCP command from the remote caller.
     direct authenticated ACP root prompts at the actual root provider request,
     while inbox, task-card, alarm, mail/MCP wake, and other independent root
     events are denied before provider dispatch. Daemon and avatar still use
-    their historical independent execution routes; their current derived
-    admission result is explicit `derived_admission_port_unconnected` and is
-    rejected before provider I/O. They require the separate driver-mediated
-    derived-admission transport before this profile can claim all
-    provider/model turns are covered. This controls who may start a root
+    their historical independent execution routes and remain outside this
+    root-only gate. A future route that binds a derived parent before its host
+    transport is connected will receive explicit
+    `derived_admission_port_unconnected` and reject before provider I/O. The
+    separate driver-mediated derived-admission transport must wire those
+    historical routes before this profile can claim all provider/model turns
+    are covered. This controls who may start a root
     turn, not what state a later admitted turn may read: non-ACP sources may
     still write state. The profile adds no `external_send` approval
     boundary and does not promise workspace-only writes, process containment,
