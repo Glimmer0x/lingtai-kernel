@@ -225,7 +225,11 @@ argv, environment, or MCP command from the remote caller.
     10: only the existing minimal metadata projection reaches the ACP client;
     a permission answer cannot change startup configuration. `puffo-v0` creates
     neither a persistent ACP session nor a background worker, and it does not
-    make ordinary tool side effects safe to retry. A revoked registry entry
+    make ordinary tool side effects safe to retry. Registry provision/revoke
+    mutations are process-serialized; its POSIX directory is owner-only
+    (`0700`) and its lock, temporary, and registry files are owner-only
+    (`0600`), independent of umask. This Phase A registry fails closed on
+    Windows until an equivalent owner-only ACL adapter exists. A revoked entry
     denies only future profile spawns. This is a controlled-entrypoint guard,
     not host isolation: an OS principal able to edit the registry or launch the
     generic `--agent-dir` command remains outside this profile's threat model.

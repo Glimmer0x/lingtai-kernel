@@ -59,8 +59,11 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 - `__init__.py` — small public package export for the protocol version and server.
 - `puffo_v0.py` — local operator registry for the constrained `puffo-v0`
   profile. It resolves an opaque runtime id to one canonical persistent identity
-  and workspace, verifies a configuration digest, and refuses missing, malformed,
-  tampered, or revoked entries before Agent construction.
+  and workspace, verifies a configuration digest, serializes provision/revoke
+  read-modify-write operations with a POSIX lock, and refuses missing, malformed,
+  tampered, or revoked entries before Agent construction. Its Phase A
+  owner-only-filesystem implementation deliberately rejects Windows until an
+  equivalent ACL-backed adapter exists.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
   quarantines Python application stdout to stderr before Agent construction,
   composes the existing Agent, consumes the typed bounded stop proof, and hard-

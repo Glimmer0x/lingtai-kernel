@@ -4,6 +4,10 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import multiprocessing
+import os
+import stat
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,6 +111,132 @@ def test_registry_rejects_tampering_and_revoked_runtime(tmp_path):
     revoke_runtime("active-id", registry_path=registry)
     with pytest.raises(PuffoV0RegistryError, match="inactive"):
         resolve_runtime("active-id", registry_path=registry)
+
+
+def test_registry_mutations_are_linearized_so_revoke_cannot_be_resurrected(
+    monkeypatch, tmp_path
+):
+    """A stale provision snapshot must never overwrite a completed revoke."""
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+    original_write = puffo_v0._write_registry
+    provision_waiting = threading.Event()
+    release_provision = threading.Event()
+    revoke_write_seen = threading.Event()
+    failures: list[BaseException] = []
+
+    def controlled_write(path, data):
+        entry_a = data["runtimes"].get("runtime-a", {})
+        if "runtime-b" in data["runtimes"] and entry_a.get("status") == "active":
+            provision_waiting.set()
+            assert release_provision.wait(timeout=5)
+        if entry_a.get("status") == "revoked":
+            revoke_write_seen.set()
+        original_write(path, data)
+
+    monkeypatch.setattr(puffo_v0, "_write_registry", controlled_write)
+
+    def provision() -> None:
+        try:
+            provision_runtime("runtime-b", agent_dir, workspace, registry_path=registry)
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            failures.append(exc)
+
+    def revoke() -> None:
+        try:
+            revoke_runtime("runtime-a", registry_path=registry)
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            failures.append(exc)
+
+    provision_thread = threading.Thread(target=provision)
+    provision_thread.start()
+    assert provision_waiting.wait(timeout=5)
+    revoke_thread = threading.Thread(target=revoke)
+    revoke_thread.start()
+
+    # Without a mutation lock, revoke writes while provision is paused and the
+    # stale provision snapshot subsequently resurrects runtime-a.  With the
+    # lock, revoke cannot reach its write until provision releases the lock.
+    revoke_write_seen.wait(timeout=0.2)
+    release_provision.set()
+    provision_thread.join(timeout=5)
+    revoke_thread.join(timeout=5)
+    assert not provision_thread.is_alive()
+    assert not revoke_thread.is_alive()
+    assert not failures
+
+    data = json.loads(registry.read_text(encoding="utf-8"))
+    assert data["runtimes"]["runtime-a"]["status"] == "revoked"
+    assert data["runtimes"]["runtime-b"]["status"] == "active"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="puffo-v0 registry is POSIX-only")
+def test_registry_mutation_lock_blocks_a_second_process(tmp_path):
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+    context = multiprocessing.get_context("fork")
+    provisioned = context.Event()
+
+    def provision_in_child() -> None:
+        provision_runtime("runtime-b", agent_dir, workspace, registry_path=registry)
+        provisioned.set()
+
+    with puffo_v0._registry_mutation_lock(registry):
+        child = context.Process(target=provision_in_child)
+        child.start()
+        assert not provisioned.wait(timeout=0.2)
+    child.join(timeout=5)
+    assert child.exitcode == 0
+    assert provisioned.is_set()
+    assert resolve_runtime("runtime-b", registry_path=registry).runtime_id == "runtime-b"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_registry_directory_and_files_are_owner_only_even_with_a_permissive_umask(
+    monkeypatch, tmp_path
+):
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "private" / "registry.json"
+    observed: dict[str, int] = {}
+    original_replace = os.replace
+
+    def inspect_temporary(source, target):
+        observed["temporary"] = stat.S_IMODE(Path(source).stat().st_mode)
+        original_replace(source, target)
+
+    monkeypatch.setattr(puffo_v0.os, "replace", inspect_temporary)
+    previous_umask = os.umask(0)
+    try:
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(registry.parent.stat().st_mode) == 0o700
+    assert observed["temporary"] == 0o600
+    assert stat.S_IMODE(registry.stat().st_mode) == 0o600
+    assert stat.S_IMODE(registry.with_name(".registry.json.lock").stat().st_mode) == 0o600
 
 
 def test_profile_session_rejects_remote_workspace_and_mcp_inputs(tmp_path):

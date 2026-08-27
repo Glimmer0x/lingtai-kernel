@@ -1,13 +1,15 @@
 """Operator-managed runtime registry for the constrained Puffo ACP profile."""
 from __future__ import annotations
 
+from contextlib import contextmanager, suppress
 import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 PROFILE_NAME = "puffo-v0"
@@ -69,6 +71,65 @@ def _digest(entry: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _require_posix_registry_security() -> None:
+    """Fail closed until puffo-v0 has an owner-only Windows ACL adapter.
+
+    POSIX file modes are part of this profile's control-plane confidentiality
+    boundary.  Windows cannot provide the equivalent guarantee through chmod,
+    so this Phase A registry deliberately has no Windows implementation rather
+    than silently creating a broadly readable registry there.
+    """
+
+    if os.name != "posix":
+        raise PuffoV0RegistryError(
+            "puffo-v0 registry requires POSIX owner-only filesystem permissions"
+        )
+
+
+def _secure_registry_directory(path: Path) -> None:
+    """Create and harden the registry parent independently of umask."""
+
+    _require_posix_registry_security()
+    try:
+        path.mkdir(parents=True, mode=0o700, exist_ok=True)
+        os.chmod(path, 0o700)
+    except OSError as exc:
+        raise PuffoV0RegistryError(
+            "puffo-v0 runtime registry directory could not be secured"
+        ) from exc
+
+
+@contextmanager
+def _registry_mutation_lock(path: Path) -> Iterator[None]:
+    """Serialize one registry read-modify-write across local processes."""
+
+    _secure_registry_directory(path.parent)
+    lock_path = path.with_name(f".{path.name}.lock")
+    try:
+        flags = os.O_CREAT | os.O_RDWR
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(lock_path, flags, 0o600)
+        os.fchmod(descriptor, 0o600)
+    except OSError as exc:
+        raise PuffoV0RegistryError("puffo-v0 runtime registry lock is unavailable") from exc
+
+    try:
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    except OSError as exc:
+        with suppress(OSError):
+            os.close(descriptor)
+        raise PuffoV0RegistryError("puffo-v0 runtime registry lock is unavailable") from exc
+    try:
+        yield
+    finally:
+        with suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        with suppress(OSError):
+            os.close(descriptor)
+
+
 def _read_registry(path: Path) -> dict[str, Any]:
     try:
         raw = path.read_text(encoding="utf-8")
@@ -83,19 +144,26 @@ def _read_registry(path: Path) -> dict[str, Any]:
 
 
 def _write_registry(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    _secure_registry_directory(path.parent)
+    temporary: Path | None = None
     try:
-        temporary.write_text(
-            json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
+        descriptor, raw_temporary = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
         )
+        temporary = Path(raw_temporary)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        os.chmod(path, 0o600)
     except OSError as exc:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise PuffoV0RegistryError("puffo-v0 runtime registry could not be written") from exc
 
 
@@ -118,17 +186,18 @@ def provision_runtime(
     if not (agent_dir / "init.json").is_file():
         raise PuffoV0RegistryError("agent_dir must contain init.json")
     path = registry_path or default_registry_path()
-    if path.exists():
-        registry = _read_registry(path)
-    else:
-        registry = {"version": REGISTRY_VERSION, "runtimes": {}}
-    runtimes = registry["runtimes"]
-    if runtime_id in runtimes:
-        raise PuffoV0RegistryError("runtime_id is already provisioned")
-    entry = _canonical_entry(runtime_id, agent_dir, workspace)
-    entry["config_digest"] = _digest(entry)
-    runtimes[runtime_id] = entry
-    _write_registry(path, registry)
+    with _registry_mutation_lock(path):
+        if path.exists():
+            registry = _read_registry(path)
+        else:
+            registry = {"version": REGISTRY_VERSION, "runtimes": {}}
+        runtimes = registry["runtimes"]
+        if runtime_id in runtimes:
+            raise PuffoV0RegistryError("runtime_id is already provisioned")
+        entry = _canonical_entry(runtime_id, agent_dir, workspace)
+        entry["config_digest"] = _digest(entry)
+        runtimes[runtime_id] = entry
+        _write_registry(path, registry)
     return PuffoV0Runtime(runtime_id, agent_dir, workspace, entry["config_digest"])
 
 
@@ -136,14 +205,16 @@ def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> Non
     """Mark a provisioned profile identity unavailable for future ACP spawns."""
 
     runtime_id = _valid_runtime_id(runtime_id)
-    registry = _read_registry(registry_path or default_registry_path())
-    entry = registry["runtimes"].get(runtime_id)
-    if not isinstance(entry, dict):
-        raise PuffoV0RegistryError("runtime_id is not provisioned")
-    entry["status"] = "revoked"
-    canonical = {key: value for key, value in entry.items() if key != "config_digest"}
-    entry["config_digest"] = _digest(canonical)
-    _write_registry(registry_path or default_registry_path(), registry)
+    path = registry_path or default_registry_path()
+    with _registry_mutation_lock(path):
+        registry = _read_registry(path)
+        entry = registry["runtimes"].get(runtime_id)
+        if not isinstance(entry, dict):
+            raise PuffoV0RegistryError("runtime_id is not provisioned")
+        entry["status"] = "revoked"
+        canonical = {key: value for key, value in entry.items() if key != "config_digest"}
+        entry["config_digest"] = _digest(canonical)
+        _write_registry(path, registry)
 
 
 def resolve_runtime(
@@ -152,6 +223,7 @@ def resolve_runtime(
     """Resolve one active runtime id into an immutable local spawn specification."""
 
     runtime_id = _valid_runtime_id(runtime_id)
+    _require_posix_registry_security()
     registry = _read_registry(registry_path or default_registry_path())
     entry = registry["runtimes"].get(runtime_id)
     if not isinstance(entry, dict):
