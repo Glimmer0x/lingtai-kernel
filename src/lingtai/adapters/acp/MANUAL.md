@@ -101,6 +101,9 @@ through the local operator registry (`~/.lingtai/puffo-v0/runtime-registry.json`
 to its bound persistent identity and workspace. The profile rejects an unknown,
 tampered, or revoked id before constructing the Agent. Revoke a future launch
 with `lingtai-agent puffo-v0 revoke --runtime-id puffo-agent-7`.
+Revocation does not terminate an already-running ACP host or invalidate its
+in-progress turn; stop that host separately when incident response must stop
+existing work.
 
 Provision stores each directory's canonical path and POSIX device/inode/owner/
 group identity. An active agent directory or workspace may be bound to only one

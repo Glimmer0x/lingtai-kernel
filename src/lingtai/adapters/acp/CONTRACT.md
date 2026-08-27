@@ -260,7 +260,10 @@ argv, environment, or MCP command from the remote caller.
     equivalent owner-only ACL adapter exists. The local control plane is its
     only supported writer: manual or third-party mutation is unsupported and
     malformed/rollback state is rejected rather than treated as authority. A
-    revoked entry denies only future profile spawns. This is a controlled-entrypoint guard,
+    revoked entry denies only future profile spawns; it does not terminate an
+    already-running ACP host or invalidate a turn already in progress. Incident
+    response that must stop existing work must separately stop that host. This
+    is a controlled-entrypoint guard,
     not host isolation: an OS principal able to edit the registry or launch the
     generic `--agent-dir` command remains outside this profile's threat model.
     The required Puffo integration seam is outside this repository: before ACP
