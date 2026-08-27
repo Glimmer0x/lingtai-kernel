@@ -128,6 +128,7 @@ def build_agent(
     working_dir: Path,
     *,
     _forced_disable: frozenset[str] | None = None,
+    _turn_origin_policy=None,
 ) -> Agent:
     """Construct Agent from validated init data.
 
@@ -176,6 +177,7 @@ def build_agent(
         ),
         streaming=m.get("streaming", False),
         _forced_disable=_forced_disable,
+        _turn_origin_policy=_turn_origin_policy,
         _from_init_boot=True,
     )
 

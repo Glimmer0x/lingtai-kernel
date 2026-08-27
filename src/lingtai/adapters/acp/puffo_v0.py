@@ -12,12 +12,39 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
+from lingtai.kernel.turns import TurnAdmissionDecision, TurnOrigin
+
 
 PROFILE_NAME = "puffo-v0"
-REGISTRY_VERSION = 3
+REGISTRY_VERSION = 4
 REVOCATION_LOG_REQUIRED = "required"
-FORCED_DISABLED_CAPABILITIES = frozenset({"avatar", "daemon", "mcp"})
 _RUNTIME_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
+
+
+@dataclass(frozen=True, slots=True)
+class PuffoV0RuntimePolicy:
+    """The full-tool profile's one remaining provider-turn boundary.
+
+    This is intentionally not a tool sandbox. It admits only authenticated
+    driving-adapter turns while leaving the operator-managed LingTai tool
+    surface intact. State written by other sources may still be read during a
+    later admitted turn; the boundary is initiation, not content provenance.
+    """
+
+    policy_version: str = "puffo-v0.full-tool-acp-ingress.v1"
+    tool_surface: str = "operator_managed_full"
+
+    def admit_turn_origin(self, origin: TurnOrigin) -> TurnAdmissionDecision:
+        allowed = origin is TurnOrigin.AUTHENTICATED_ADAPTER
+        return TurnAdmissionDecision(
+            allowed=allowed,
+            origin=origin,
+            policy_version=self.policy_version,
+            reason_code="allowed" if allowed else "origin_not_authenticated_adapter",
+        )
+
+
+RUNTIME_POLICY = PuffoV0RuntimePolicy()
 
 
 class PuffoV0RegistryError(ValueError):
@@ -44,6 +71,7 @@ class PuffoV0Runtime:
     entry_digest: str
     agent_dir_binding: DirectoryBinding
     workspace_binding: DirectoryBinding
+    policy_version: str
 
 
 def default_registry_path() -> Path:
@@ -117,11 +145,13 @@ def _canonical_entry(
     return {
         "agent_dir": str(agent_dir),
         "agent_dir_binding": _binding_payload(agent_dir_binding),
-        "disabled_capabilities": sorted(FORCED_DISABLED_CAPABILITIES),
         "mcp_servers": [],
         "profile": PROFILE_NAME,
         "runtime_id": runtime_id,
         "status": "active",
+        "tool_surface": RUNTIME_POLICY.tool_surface,
+        "turn_origins": [TurnOrigin.AUTHENTICATED_ADAPTER.value],
+        "runtime_policy_version": RUNTIME_POLICY.policy_version,
         "workspace": str(workspace),
         "workspace_binding": _binding_payload(workspace_binding),
     }
@@ -427,6 +457,7 @@ def provision_runtime(
         entry["entry_digest"],
         agent_dir_binding,
         workspace_binding,
+        RUNTIME_POLICY.policy_version,
     )
 
 
@@ -463,8 +494,9 @@ def resolve_runtime(
     if not isinstance(entry, dict):
         raise PuffoV0RegistryError("runtime_id is not provisioned")
     expected_keys = {
-        "agent_dir", "agent_dir_binding", "disabled_capabilities", "entry_digest",
-        "mcp_servers", "profile", "runtime_id", "status", "workspace", "workspace_binding",
+        "agent_dir", "agent_dir_binding", "entry_digest", "mcp_servers",
+        "profile", "runtime_id", "runtime_policy_version", "status", "tool_surface",
+        "turn_origins", "workspace", "workspace_binding",
     }
     if set(entry) != expected_keys:
         raise PuffoV0RegistryError("runtime registry entry has an invalid shape")
@@ -473,8 +505,10 @@ def resolve_runtime(
         entry.get("profile") != PROFILE_NAME
         or entry.get("runtime_id") != runtime_id
         or entry.get("status") != "active"
-        or entry.get("disabled_capabilities") != sorted(FORCED_DISABLED_CAPABILITIES)
         or entry.get("mcp_servers") != []
+        or entry.get("tool_surface") != RUNTIME_POLICY.tool_surface
+        or entry.get("turn_origins") != [TurnOrigin.AUTHENTICATED_ADAPTER.value]
+        or entry.get("runtime_policy_version") != RUNTIME_POLICY.policy_version
         or not isinstance(entry.get("entry_digest"), str)
         or entry["entry_digest"] != _digest(canonical)
     ):
@@ -494,15 +528,17 @@ def resolve_runtime(
         entry["entry_digest"],
         agent_dir_binding,
         workspace_binding,
+        RUNTIME_POLICY.policy_version,
     )
 
 
 __all__ = [
     "DirectoryBinding",
-    "FORCED_DISABLED_CAPABILITIES",
     "PROFILE_NAME",
     "PuffoV0RegistryError",
     "PuffoV0Runtime",
+    "PuffoV0RuntimePolicy",
+    "RUNTIME_POLICY",
     "default_registry_path",
     "provision_runtime",
     "resolve_runtime",

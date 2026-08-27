@@ -1034,13 +1034,36 @@ def _run_loop_body(agent) -> None:
             # stale-latch reset and message-merge boundary. Pending cancellation
             # then becomes the current cooperative latch without affecting the
             # turn ahead of it in the same inbox.
-            from ..turns import begin_turn, correlated_message_text
+            from ..turns import (
+                TurnAdmissionError,
+                TurnOutcome,
+                admit_turn_origin,
+                begin_turn,
+                correlated_message_text,
+                settle_turn,
+            )
 
             turn_control = begin_turn(agent, msg)
             execution_workspace_token = None
             tool_observer_token = None
             permission_broker_token = None
             if turn_control is not None:
+                # Admission was checked synchronously before publication. Check
+                # again at the final inbox-to-provider boundary so a forged or
+                # stale correlated envelope cannot become provider work merely
+                # by reaching the run loop.
+                try:
+                    admit_turn_origin(agent, turn_control.origin)
+                except TurnAdmissionError as exc:
+                    settle_turn(
+                        agent,
+                        turn_control,
+                        outcome=TurnOutcome.FAILED,
+                        error="turn origin was not admitted",
+                        errors=(exc.decision.reason_code,),
+                    )
+                    agent._set_state(AgentState.IDLE, reason="turn origin rejected")
+                    continue
                 from ..execution_workspace import (
                     bind_execution_workspace,
                     clear_execution_workspace,
@@ -1729,6 +1752,16 @@ def _concat_queued_messages(agent, msg: Message) -> Message:
 
 def _handle_message(agent, msg: Message) -> dict | None:
     """Route message by type. Subclasses may override for routing."""
+    if msg.type in (MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE):
+        # These legacy/involuntary inbox shapes carry no authenticated adapter
+        # admission. A constrained outer profile may keep their state/notice
+        # effects while preventing them from driving any provider work.
+        from ..turns import TurnAdmissionError, TurnOrigin, admit_turn_origin
+
+        try:
+            admit_turn_origin(agent, TurnOrigin.INTERNAL_EVENT)
+        except TurnAdmissionError:
+            return None
     if msg.type in (MSG_REQUEST, MSG_USER_INPUT, MSG_CORRELATED_TURN):
         return _handle_request(agent, msg)
     if msg.type == MSG_TC_WAKE:

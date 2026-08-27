@@ -65,6 +65,7 @@ def run_acp(
     output_stream: TextIO | None = None,
     fixed_execution_workspace=None,
     forced_disable: frozenset[str] | None = None,
+    turn_origin_policy=None,
     puffo_runtime=None,
 ) -> None:
     """Compose one Agent and the local ACP stdio driving adapter.
@@ -127,13 +128,19 @@ def run_acp(
         os.environ["LINGTAI_RUNTIME_VENV"] = str(venv_dir)
         data["venv_path"] = str(venv_dir)
 
-        if forced_disable:
-            agent = build_agent(data, agent_dir, _forced_disable=forced_disable)
-        else:
-            agent = build_agent(data, agent_dir)
+        # A profile policy is meaningful even when it deliberately leaves the
+        # operator-managed capability surface fully enabled.  Do not couple it
+        # to the historical forced-disable mechanism.  Preserve the generic
+        # no-private-options call shape for ordinary ACP composition.
+        build_options = {}
+        if forced_disable is not None:
+            build_options["_forced_disable"] = forced_disable
+        if turn_origin_policy is not None:
+            build_options["_turn_origin_policy"] = turn_origin_policy
+        agent = build_agent(data, agent_dir, **build_options)
         agent._venv_path = str(venv_dir)
         agent.start()
-        if fixed_execution_workspace is None and not forced_disable:
+        if fixed_execution_workspace is None and turn_origin_policy is None:
             server = AcpStdioServer(agent, wire_in, wire_out)
         else:
             server = AcpStdioServer(
@@ -141,7 +148,7 @@ def run_acp(
                 wire_in,
                 wire_out,
                 fixed_execution_workspace=fixed_execution_workspace,
-                allow_session_mcp=not bool(forced_disable and "mcp" in forced_disable),
+                allow_session_mcp=fixed_execution_workspace is None,
             )
         try:
             server.serve()
@@ -192,8 +199,8 @@ def handle_acp_command(args) -> None:
         print("error: puffo-v0 requires --runtime-id", file=sys.stderr)
         raise SystemExit(1)
     from lingtai.adapters.acp.puffo_v0 import (
-        FORCED_DISABLED_CAPABILITIES,
         PuffoV0RegistryError,
+        RUNTIME_POLICY,
         resolve_runtime,
     )
     from lingtai.kernel.execution_workspace import ExecutionWorkspace
@@ -206,8 +213,8 @@ def handle_acp_command(args) -> None:
     run_acp(
         runtime.agent_dir,
         fixed_execution_workspace=ExecutionWorkspace(runtime.workspace),
-        forced_disable=FORCED_DISABLED_CAPABILITIES,
         puffo_runtime=runtime,
+        turn_origin_policy=RUNTIME_POLICY,
     )
 
 

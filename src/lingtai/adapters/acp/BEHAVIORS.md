@@ -105,23 +105,26 @@ the evidence trail in the task report.
    with its original directory identity resolves; tampered, retargeted, or
    revoked entries, including a missing required revocation log, fail before
    composition. An active identity and workspace cannot be bound twice.
-3. Inspect the profile session cases: another workspace and every non-empty
-   `mcpServers` input fail; `avatar`, `daemon`, and `mcp` are absent from the
-   composed Agent floor.
+3. Inspect the profile session and turn-origin cases: another workspace and
+   every non-empty `mcpServers` input fail; the operator-managed tool surface is
+   retained, but legacy/inbox/internal events cannot queue or dispatch any
+   provider/model turn. A direct ACP prompt carries the authenticated-adapter
+   origin.
 
 ### Expected evidence
 
 - [ ] A remote ACP payload cannot provide a filesystem path or an MCP process
   launch through the profile.
-- [ ] The profile denies unavailable identities and retains fail-closed,
-  metadata-only permission handling.
+- [ ] The profile denies unavailable identities and every non-ACP origin before
+  provider dispatch, while preserving the configured local tool surface.
 - [ ] The host-boundary non-guarantee remains documented.
 
 ### Pass / Fail
 
 Pass when the focused tests prove every profile startup field comes from the
 local registry and constrained session policy. Fail on a remote-controlled
-workspace/MCP input, enabled derived/background capability, accepted revoked id,
-or any claim that this controlled entrypoint isolates a same-OS principal.
+workspace/MCP input, a non-ACP event that reaches provider dispatch, accepted
+revoked id, or any claim that this controlled entrypoint isolates a same-OS
+principal or contains full-tool runtime behavior.
 This behavior is a registry/session-policy foundation: its entry digest does
 not by itself prove a complete effective tool/action or launch-security policy.

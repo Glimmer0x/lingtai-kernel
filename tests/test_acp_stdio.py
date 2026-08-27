@@ -15,7 +15,7 @@ import pytest
 
 from lingtai.adapters.acp.server import AcpStdioServer
 from lingtai.kernel.base_agent import BaseAgent, StopResult, StopStatus
-from lingtai.kernel.turns import TurnOutcome, TurnResult, control_from_message
+from lingtai.kernel.turns import TurnOrigin, TurnOutcome, TurnResult, control_from_message
 from lingtai.kernel.turn_events import ToolLifecycleEvent, ToolLifecycleState
 from lingtai.kernel.turn_permissions import (
     PermissionDecision,
@@ -62,6 +62,7 @@ class _Agent:
         execution_workspace=None,
         tool_observer=None,
         permission_broker=None,
+        origin=None,
     ):
         self.submissions.append({
             "content": content,
@@ -70,6 +71,7 @@ class _Agent:
             "execution_workspace": execution_workspace,
             "tool_observer": tool_observer,
             "permission_broker": permission_broker,
+            "origin": origin,
         })
         self.handle.correlation_id = correlation_id
         return self.handle
@@ -161,6 +163,7 @@ def test_session_new_canonicalizes_existing_directory_and_mounts_stdio_mcp(tmp_p
         "prompt": [{"type": "text", "text": "go"}],
     })
     assert agent.submissions[0]["execution_workspace"].root == workspace.resolve()
+    assert agent.submissions[0]["origin"] is TurnOrigin.AUTHENTICATED_ADAPTER
     assert agent._working_dir == tmp_path / "agent-identity"
     server.close()
     server.close()
@@ -195,6 +198,7 @@ def test_acp_prompt_queues_canonical_workspace_through_real_base_agent(tmp_path)
     assert control.execution_workspace.root == workspace.resolve()
     assert control.tool_observer is not None
     assert control.permission_broker is not None
+    assert control.origin is TurnOrigin.AUTHENTICATED_ADAPTER
 
 
 def test_permission_wire_allows_only_matching_allow_once_then_lifecycle_progresses():

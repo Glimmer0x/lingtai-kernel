@@ -227,16 +227,24 @@ argv, environment, or MCP command from the remote caller.
     after that check remains within the explicit host trust boundary below.
     `entry_digest` protects the exact registry entry only; it is not a digest
     of `init.json`, effective tool/action policy, executable/argv/environment,
-    or addon/plugin policy. Those full restricted-profile guarantees remain
-    outside this registry/session-policy foundation. A profile session accepts
+    or addon/plugin policy. The driver-owned full launch-plan digest remains a
+    separate cross-process contract. A profile session accepts
     only that workspace and
-    `mcpServers: []`; it never starts a client-supplied process. The composed
-    Agent forcibly disables `avatar`, `daemon`, and `mcp`, including after an
-    in-process refresh. Permission remains one-shot and fail-closed under rule
-    10: only the existing minimal metadata projection reaches the ACP client;
-    a permission answer cannot change startup configuration. `puffo-v0` creates
-    neither a persistent ACP session nor a background worker, and it does not
-    make ordinary tool side effects safe to retry. Registry provision/revoke
+    `mcpServers: []`; it never starts a client-supplied process. This is an
+    identity/workspace-bound **full-tool** profile: operator-managed LingTai
+    capabilities remain available, including after refresh. Its capability
+    boundary is instead provider-turn initiation: every provider/model turn
+    must originate from an authenticated driving Adapter or carry a trusted
+    ancestry from one. In v0 only direct authenticated ACP prompts are
+    implemented; inbox, task-card, alarm, daemon, mail/MCP wake, and other
+    independent events are denied before provider dispatch. This controls who
+    may start a turn, not what state a later admitted turn may read: non-ACP
+    sources may still write state. The profile adds no `external_send` approval
+    boundary and does not promise workspace-only writes, process containment,
+    no background descendants, or network containment. “Authenticated Adapter”
+    is a typed handoff from the Puffo driver that owns the local ACP process;
+    LingTai's stdio server does not independently authenticate a remote Puffo
+    user. Registry provision/revoke
     mutations are process-serialized; revocation additionally writes an
     append-only tombstone before the mutable registry, so a stale full-registry
     snapshot cannot reactivate an id. The versioned registry declares this log
@@ -269,8 +277,10 @@ blocked coordinator/prompt output, FIFO/generation/queue-full/write-failure path
 Agent-stop-with-open-stdin, Windows duplicate-before-cleanup, typed quiescence,
 and CLI Python-stdout quarantine/hard-exit ownership.
 `tests/test_puffo_v0_profile.py` pins opaque-id provisioning/resolution,
-tamper/revocation rejection, forced capability removal, fixed-workspace and
-empty-session-MCP rejection, and profile CLI composition.
+tamper/revocation rejection, full-tool composition, fixed-workspace and
+empty-session-MCP rejection, authenticated-adapter admission, and profile CLI
+composition. `tests/test_correlated_turns.py` independently proves an
+untrusted inbox event cannot reach provider dispatch under this profile policy.
 `tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_turn_permissions.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP
 wire tests pin workspace rooting/escape/isolation, stdio validation, atomic
 publication/rollback, collisions, and close/EOF ownership.

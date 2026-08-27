@@ -66,7 +66,7 @@ from ..runtime_identity import runtime_identity_event_fields
 from ..execution_workspace import ExecutionWorkspace
 from ..turn_events import TurnToolObserver
 from ..turn_permissions import TurnPermissionBroker
-from ..turns import TurnHandle
+from ..turns import TurnHandle, TurnOrigin
 from .lifecycle import StopResult, StopStatus
 
 logger = get_logger()
@@ -2881,6 +2881,7 @@ class BaseAgent:
         execution_workspace: str | Path | ExecutionWorkspace | None = None,
         tool_observer: TurnToolObserver | None = None,
         permission_broker: TurnPermissionBroker | None = None,
+        origin: TurnOrigin = TurnOrigin.LEGACY,
     ) -> TurnHandle:
         """Queue one text turn and return its protocol-neutral terminal handle."""
         from ..turns import submit_turn
@@ -2892,6 +2893,7 @@ class BaseAgent:
             execution_workspace=execution_workspace,
             tool_observer=tool_observer,
             permission_broker=permission_broker,
+            origin=origin,
         )
 
     def cancel_turn(self, correlation_id: str) -> bool:

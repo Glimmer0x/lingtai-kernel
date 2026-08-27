@@ -13,9 +13,10 @@ from lingtai.kernel.execution_workspace import (
     ExecutionWorkspace,
     current_execution_workspace,
 )
-from lingtai.kernel.message import MSG_TC_WAKE, _make_message
+from lingtai.kernel.message import MSG_REQUEST, MSG_TC_WAKE, MSG_USER_INPUT, _make_message
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.turns import (
+    TurnOrigin,
     TurnOutcome,
     begin_turn,
     cancel_all_turns,
@@ -24,6 +25,7 @@ from lingtai.kernel.turns import (
     settle_turn,
     submit_turn,
 )
+from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
 from lingtai.kernel.turn_events import current_turn_tool_observer
 from lingtai.kernel.turn_permissions import current_turn_permission_broker
 
@@ -408,6 +410,26 @@ def test_claimed_correlated_envelope_is_skipped_without_provider_dispatch(
 
     assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
     _stop_loop(agent, worker)
+
+
+@pytest.mark.parametrize("message_type", [MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE])
+def test_profile_rejects_untrusted_event_before_any_provider_dispatch(
+    tmp_path, monkeypatch, message_type
+):
+    """An inbox event cannot obtain provider execution merely by its message type."""
+
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+
+    def must_not_dispatch(*_args, **_kwargs):
+        raise AssertionError("an untrusted event reached provider dispatch")
+
+    monkeypatch.setattr(turn, "_handle_request", must_not_dispatch)
+    monkeypatch.setattr(turn, "_handle_tc_wake", must_not_dispatch)
+    result = turn._handle_message(agent, _make_message(message_type, "mail", "wake"))
+
+    assert result is None
+    assert any(name == "turn_origin_rejected" for name, _ in agent.logs)
 
 
 def test_cancel_and_terminal_settlement_linearize_exactly_once(tmp_path):

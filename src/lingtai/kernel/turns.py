@@ -11,7 +11,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 from uuid import uuid4
 
 from .message import MSG_CORRELATED_TURN, Message, _make_message
@@ -26,6 +26,43 @@ class TurnOutcome(str, Enum):
     NORMAL = "normal"
     CANCELLED = "cancelled"
     FAILED = "failed"
+
+
+class TurnOrigin(str, Enum):
+    """The admission provenance of a request that may call a provider.
+
+    ``AUTHENTICATED_ADAPTER`` deliberately names a protocol-neutral boundary.
+    ACP is one adapter that may hold this origin; ordinary inbox messages and
+    direct callers do not acquire it by choosing a sender string.
+    """
+
+    LEGACY = "legacy"
+    INTERNAL_EVENT = "internal_event"
+    AUTHENTICATED_ADAPTER = "authenticated_adapter"
+
+
+@dataclass(frozen=True, slots=True)
+class TurnAdmissionDecision:
+    """A safe, structured origin-admission result for one provider turn."""
+
+    allowed: bool
+    origin: TurnOrigin
+    policy_version: str
+    reason_code: str
+
+
+class TurnOriginPolicy(Protocol):
+    """Outer policy that admits a typed origin before provider work begins."""
+
+    def admit_turn_origin(self, origin: TurnOrigin) -> TurnAdmissionDecision: ...
+
+
+class TurnAdmissionError(PermissionError):
+    """A policy denied an attempted provider-turn origin."""
+
+    def __init__(self, decision: TurnAdmissionDecision):
+        self.decision = decision
+        super().__init__(f"turn origin rejected: {decision.reason_code}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +81,7 @@ class _TurnControl:
     correlation_id: str
     content: str
     sender: str
+    origin: TurnOrigin
     execution_workspace: ExecutionWorkspace | None = None
     tool_observer: TurnToolObserver | None = None
     permission_broker: TurnPermissionBroker | None = None
@@ -104,6 +142,43 @@ def _ensure_turn_state(agent) -> tuple[threading.Lock, dict[str, _TurnControl]]:
     return lock, controls
 
 
+def admit_turn_origin(agent, origin: TurnOrigin) -> TurnAdmissionDecision:
+    """Apply an optional typed origin policy without trusting sender strings.
+
+    Generic ``BaseAgent`` callers retain the historical default-allow behavior.
+    A profile installs a policy explicitly; malformed policy output denies rather
+    than allowing an unclassified turn to reach the provider.
+    """
+
+    policy = getattr(agent, "_turn_origin_policy", None)
+    if policy is None:
+        return TurnAdmissionDecision(True, origin, "legacy-default", "allowed")
+    try:
+        decision = policy.admit_turn_origin(origin)
+    except Exception:
+        decision = TurnAdmissionDecision(False, origin, "policy-error", "policy_error")
+    if (
+        not isinstance(decision, TurnAdmissionDecision)
+        or decision.origin is not origin
+        or not isinstance(decision.policy_version, str)
+        or not decision.policy_version
+        or not isinstance(decision.reason_code, str)
+        or not decision.reason_code
+    ):
+        decision = TurnAdmissionDecision(False, origin, "policy-error", "invalid_policy_decision")
+    if not decision.allowed:
+        logger = getattr(agent, "_log", None)
+        if callable(logger):
+            logger(
+                "turn_origin_rejected",
+                origin=origin.value,
+                policy_version=decision.policy_version,
+                reason_code=decision.reason_code,
+            )
+        raise TurnAdmissionError(decision)
+    return decision
+
+
 def submit_turn(
     agent,
     content: str,
@@ -113,6 +188,7 @@ def submit_turn(
     execution_workspace: str | Path | ExecutionWorkspace | None = None,
     tool_observer: TurnToolObserver | None = None,
     permission_broker: TurnPermissionBroker | None = None,
+    origin: TurnOrigin = TurnOrigin.LEGACY,
 ) -> TurnHandle:
     """Queue one text turn and return its correlated terminal handle."""
 
@@ -120,6 +196,8 @@ def submit_turn(
         raise TypeError("turn content must be a string")
     if not isinstance(sender, str) or not sender:
         raise ValueError("turn sender must be a non-empty string")
+    if not isinstance(origin, TurnOrigin):
+        raise TypeError("origin must be a TurnOrigin")
     if correlation_id is None:
         correlation_id = f"turn_{uuid4().hex}"
     if not isinstance(correlation_id, str) or not correlation_id:
@@ -137,6 +215,8 @@ def submit_turn(
     if shutdown is not None and shutdown.is_set():
         raise RuntimeError("agent is stopping")
 
+    admit_turn_origin(agent, origin)
+
     lock, controls = _ensure_turn_state(agent)
     if execution_workspace is not None and not isinstance(
         execution_workspace, ExecutionWorkspace
@@ -146,6 +226,7 @@ def submit_turn(
         correlation_id=correlation_id,
         content=content,
         sender=sender,
+        origin=origin,
         execution_workspace=execution_workspace,
         tool_observer=tool_observer,
         permission_broker=permission_broker,
@@ -321,4 +402,13 @@ def cancel_all_turns(agent, *, reason: str = "agent stopped") -> int:
     return len(claimed)
 
 
-__all__ = ["TurnHandle", "TurnOutcome", "TurnResult"]
+__all__ = [
+    "TurnAdmissionDecision",
+    "TurnAdmissionError",
+    "TurnHandle",
+    "TurnOrigin",
+    "TurnOriginPolicy",
+    "TurnOutcome",
+    "TurnResult",
+    "admit_turn_origin",
+]

@@ -111,10 +111,10 @@ it is not host isolation against a same-OS principal that changes the filesystem
 after that final check.
 
 `entry_digest` protects the exact registry record, not the complete effective
-security configuration. In particular, this foundation does not yet freeze or
-hash `init.json`, presets, executable/argv/environment policy, addon/plugin
-policy, or a positive tool/action allowlist. Those constraints need a later,
-typed restricted-runtime policy rather than an implication from this registry.
+launch/security configuration. In particular, it does not freeze or hash
+`init.json`, presets, executable/argv/environment policy, or addon/plugin
+policy. The Puffo driver's versioned launch-plan security projection is a
+separate cross-process contract; do not treat this registry hash as its proxy.
 
 The Phase A registry is POSIX-only: it serializes provision/revoke updates,
 records terminal revocations in an append-only local tombstone log, and creates
@@ -128,17 +128,29 @@ its tombstone log to exist: missing, unreadable, malformed, or mismatched
 history fails closed instead of being interpreted as no prior revocations.
 
 In this profile, `session/new.cwd` must be exactly the provisioned workspace and
-`mcpServers` must be `[]`. The profile disables the `avatar`, `daemon`, and
-`mcp` capabilities even if the agent manifest asks for them, including after an
-in-process refresh. It therefore does not start child avatars, independent
-background work, manifest MCP, or client-supplied MCP processes.
+`mcpServers` must be `[]`. It is an **identity/workspace-bound full-tool ACP
+profile**: local, operator-managed capabilities remain available across initial
+composition and refresh. It does not add an `external_send` human-confirmation
+rule and does not promise shell confinement, workspace-only writes, network
+egress control, no background descendants, or OS process containment.
 
-Permission requests remain intentionally small and fail closed: the client can
-receive only the existing tool id/title/status projection and can allow once or
-reject once. A Puffo UI must bind any approval to that concrete request and
-audit it; it cannot use approval to alter the executable, argv, environment,
-agent identity, workspace, or MCP configuration. This profile does not make a
-tool's already-started side effect safe to replay after an interrupted turn.
+Its capability-side boundary is ACP-only turn initiation. A direct ACP prompt
+is tagged as an authenticated driving-adapter turn; a profile policy denies any
+legacy, inbox, task-card, alarm, daemon, mail/MCP wake, or other independent
+event before it can dispatch a provider/model turn. This applies to **every**
+provider/model turn, not merely a “main” turn. Future child turns must carry a
+verified ancestry from an admitted prompt; v0 does not create such child turns.
+This is an initiation boundary, not content provenance: non-ACP systems can
+still write state which a later authenticated prompt may cause the model to
+read. Existing minimal ACP permission projection does not alter launch inputs,
+and no interrupted side effect becomes retry-safe.
+
+LingTai's local stdio process does not authenticate a Puffo user or route by
+itself. “Authenticated adapter” means the controlled Puffo ACP driver has
+authenticated the remote request and exclusively owns this profile process's
+stdin; that first gate is required outside this repository. A same-OS principal
+able to bypass the driver can invoke generic local APIs and is outside this
+profile's host trust boundary.
 
 `puffo-v0` is a second gate for this controlled entrypoint, not complete host
 isolation. A principal with the same OS authority can edit the local registry or
