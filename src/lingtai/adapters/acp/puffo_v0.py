@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -99,6 +100,80 @@ def _secure_registry_directory(path: Path) -> None:
         ) from exc
 
 
+def _secure_registry_file(path: Path) -> bool:
+    """Harden an existing registry artifact; return false when it is absent."""
+
+    _require_posix_registry_security()
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise PuffoV0RegistryError("puffo-v0 runtime registry is unavailable or invalid") from exc
+    if not stat.S_ISREG(mode):
+        raise PuffoV0RegistryError("puffo-v0 runtime registry has an invalid file type")
+    try:
+        os.chmod(path, 0o600)
+    except OSError as exc:
+        raise PuffoV0RegistryError("puffo-v0 runtime registry could not be secured") from exc
+    return True
+
+
+def _revocation_log_path(path: Path) -> Path:
+    """Return the append-only, owner-only tombstone log beside a registry."""
+
+    return path.with_name(f".{path.name}.revocations.jsonl")
+
+
+def _read_revoked_runtime_ids(path: Path) -> frozenset[str]:
+    """Read monotonic revocation tombstones, rejecting malformed local state."""
+
+    tombstones = _revocation_log_path(path)
+    if not _secure_registry_file(tombstones):
+        return frozenset()
+    try:
+        lines = tombstones.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid") from exc
+    revoked: set[str] = set()
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid") from exc
+        if not isinstance(entry, dict) or set(entry) != {"runtime_id"}:
+            raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid")
+        revoked.add(_valid_runtime_id(entry["runtime_id"]))
+    return frozenset(revoked)
+
+
+def _append_revocation_tombstone(path: Path, runtime_id: str) -> None:
+    """Persist a terminal revocation before the mutable registry is updated."""
+
+    _secure_registry_directory(path.parent)
+    tombstones = _revocation_log_path(path)
+    descriptor: int | None = None
+    try:
+        flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(tombstones, flags, 0o600)
+        os.fchmod(descriptor, 0o600)
+        payload = (json.dumps({"runtime_id": runtime_id}, sort_keys=True) + "\n").encode("utf-8")
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written == 0:
+                raise OSError("short write to puffo-v0 revocation log")
+            offset += written
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise PuffoV0RegistryError("puffo-v0 revocation log could not be written") from exc
+    finally:
+        if descriptor is not None:
+            with suppress(OSError):
+                os.close(descriptor)
+
+
 @contextmanager
 def _registry_mutation_lock(path: Path) -> Iterator[None]:
     """Serialize one registry read-modify-write across local processes."""
@@ -131,6 +206,7 @@ def _registry_mutation_lock(path: Path) -> Iterator[None]:
 
 
 def _read_registry(path: Path) -> dict[str, Any]:
+    _secure_registry_file(path)
     try:
         raw = path.read_text(encoding="utf-8")
         data = json.loads(raw)
@@ -187,6 +263,9 @@ def provision_runtime(
         raise PuffoV0RegistryError("agent_dir must contain init.json")
     path = registry_path or default_registry_path()
     with _registry_mutation_lock(path):
+        revoked_runtime_ids = _read_revoked_runtime_ids(path)
+        if runtime_id in revoked_runtime_ids:
+            raise PuffoV0RegistryError("runtime_id is revoked and cannot be provisioned again")
         if path.exists():
             registry = _read_registry(path)
         else:
@@ -211,6 +290,8 @@ def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> Non
         entry = registry["runtimes"].get(runtime_id)
         if not isinstance(entry, dict):
             raise PuffoV0RegistryError("runtime_id is not provisioned")
+        if runtime_id not in _read_revoked_runtime_ids(path):
+            _append_revocation_tombstone(path, runtime_id)
         entry["status"] = "revoked"
         canonical = {key: value for key, value in entry.items() if key != "config_digest"}
         entry["config_digest"] = _digest(canonical)
@@ -223,8 +304,11 @@ def resolve_runtime(
     """Resolve one active runtime id into an immutable local spawn specification."""
 
     runtime_id = _valid_runtime_id(runtime_id)
-    _require_posix_registry_security()
-    registry = _read_registry(registry_path or default_registry_path())
+    path = registry_path or default_registry_path()
+    _secure_registry_directory(path.parent)
+    if runtime_id in _read_revoked_runtime_ids(path):
+        raise PuffoV0RegistryError("runtime registry entry is inactive or does not match puffo-v0")
+    registry = _read_registry(path)
     entry = registry["runtimes"].get(runtime_id)
     if not isinstance(entry, dict):
         raise PuffoV0RegistryError("runtime_id is not provisioned")

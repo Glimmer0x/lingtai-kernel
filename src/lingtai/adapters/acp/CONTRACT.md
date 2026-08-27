@@ -226,11 +226,16 @@ argv, environment, or MCP command from the remote caller.
     a permission answer cannot change startup configuration. `puffo-v0` creates
     neither a persistent ACP session nor a background worker, and it does not
     make ordinary tool side effects safe to retry. Registry provision/revoke
-    mutations are process-serialized; its POSIX directory is owner-only
-    (`0700`) and its lock, temporary, and registry files are owner-only
-    (`0600`), independent of umask. This Phase A registry fails closed on
-    Windows until an equivalent owner-only ACL adapter exists. A revoked entry
-    denies only future profile spawns. This is a controlled-entrypoint guard,
+    mutations are process-serialized; revocation additionally writes an
+    append-only tombstone before the mutable registry, so a stale full-registry
+    snapshot cannot reactivate an id. Its POSIX directory is owner-only (`0700`)
+    and its lock, temporary, registry, and tombstone files are owner-only
+    (`0600`), independent of umask; existing registry artifacts are tightened
+    before use. This Phase A registry fails closed on Windows until an
+    equivalent owner-only ACL adapter exists. The local control plane is its
+    only supported writer: manual or third-party mutation is unsupported and
+    malformed/rollback state is rejected rather than treated as authority. A
+    revoked entry denies only future profile spawns. This is a controlled-entrypoint guard,
     not host isolation: an OS principal able to edit the registry or launch the
     generic `--agent-dir` command remains outside this profile's threat model.
     The required Puffo integration seam is outside this repository: before ACP

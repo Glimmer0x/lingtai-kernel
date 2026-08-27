@@ -178,6 +178,24 @@ def test_registry_mutations_are_linearized_so_revoke_cannot_be_resurrected(
     assert data["runtimes"]["runtime-b"]["status"] == "active"
 
 
+def test_revocation_tombstone_denies_a_stale_active_registry_snapshot(tmp_path):
+    """The main registry cannot reactivate an id once its tombstone is written."""
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    stale_active_snapshot = registry.read_text(encoding="utf-8")
+
+    revoke_runtime("runtime-a", registry_path=registry)
+    registry.write_text(stale_active_snapshot, encoding="utf-8")
+
+    with pytest.raises(PuffoV0RegistryError, match="inactive"):
+        resolve_runtime("runtime-a", registry_path=registry)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="puffo-v0 registry is POSIX-only")
 def test_registry_mutation_lock_blocks_a_second_process(tmp_path):
     import lingtai.adapters.acp.puffo_v0 as puffo_v0
@@ -237,6 +255,23 @@ def test_registry_directory_and_files_are_owner_only_even_with_a_permissive_umas
     assert observed["temporary"] == 0o600
     assert stat.S_IMODE(registry.stat().st_mode) == 0o600
     assert stat.S_IMODE(registry.with_name(".registry.json.lock").stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_resolve_tightens_legacy_registry_file_and_directory_modes(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "legacy" / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    registry.parent.chmod(0o755)
+    registry.chmod(0o644)
+
+    assert resolve_runtime("runtime-a", registry_path=registry).runtime_id == "runtime-a"
+    assert stat.S_IMODE(registry.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(registry.stat().st_mode) == 0o600
 
 
 def test_profile_session_rejects_remote_workspace_and_mcp_inputs(tmp_path):

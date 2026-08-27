@@ -60,8 +60,9 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 - `puffo_v0.py` — local operator registry for the constrained `puffo-v0`
   profile. It resolves an opaque runtime id to one canonical persistent identity
   and workspace, verifies a configuration digest, serializes provision/revoke
-  read-modify-write operations with a POSIX lock, and refuses missing, malformed,
-  tampered, or revoked entries before Agent construction. Its Phase A
+  read-modify-write operations with a POSIX lock, records terminal revocations
+  in an append-only tombstone log, and refuses missing, malformed, tampered, or
+  revoked entries before Agent construction. Its Phase A
   owner-only-filesystem implementation deliberately rejects Windows until an
   equivalent ACL-backed adapter exists.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,

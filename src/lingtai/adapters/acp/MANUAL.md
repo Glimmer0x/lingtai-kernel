@@ -102,10 +102,14 @@ to the entire canonical spawn configuration. The profile rejects an unknown,
 tampered, or revoked id before constructing the Agent. Revoke a future launch
 with `lingtai-agent puffo-v0 revoke --runtime-id puffo-agent-7`.
 
-The Phase A registry is POSIX-only: it serializes provision/revoke updates and
-creates its registry directory as `0700` and registry, temporary, and lock files
-as `0600`, independent of umask. On Windows the command fails closed until an
-equivalent owner-only ACL implementation is available.
+The Phase A registry is POSIX-only: it serializes provision/revoke updates,
+records terminal revocations in an append-only local tombstone log, and creates
+its registry directory as `0700` and registry, tombstone, temporary, and lock
+files as `0600`, independent of umask. Loading an older registry tightens its
+directory and file modes before use. On Windows the command fails closed until
+an equivalent owner-only ACL implementation is available. The `puffo-v0`
+control-plane commands are the only supported writers; do not hand-edit the
+registry or use a third-party writer.
 
 In this profile, `session/new.cwd` must be exactly the provisioned workspace and
 `mcpServers` must be `[]`. The profile disables the `avatar`, `daemon`, and
