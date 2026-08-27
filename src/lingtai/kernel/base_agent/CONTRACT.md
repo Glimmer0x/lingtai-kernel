@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
+  - src/lingtai/kernel/provider_admission.py
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -33,6 +34,7 @@ related_files:
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
   - tests/test_turn_permissions.py
+  - tests/test_provider_admission.py
   - tests/test_acp_stdio.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/process_scan.py
@@ -155,6 +157,13 @@ This contract owns one new Core Port and composes the linked ones:
   `RefreshWatcherPort`/`RefreshWatcherProcessPort`, `LifecycleClockPort`,
   `NotificationStorePort`, `EventJournalPort` — each normatively owned by its
   linked contract.
+- `ProviderCallAdmissionPort` (`src/lingtai/kernel/provider_admission.py`) —
+  optional, technology-neutral outbound decision Port for a constrained
+  composition. Core installs an opaque, task-local root or derived parent and
+  crosses the Port immediately before every concrete provider `send`,
+  `send_stream`, or direct `generate`. A missing parent, malformed decision, or
+  denial fails before provider I/O. Correlation is audit-only, never authority;
+  transport/authentication remains adapter-owned.
 
 ## Adapters
 
@@ -341,6 +350,19 @@ Clause IDs are stable; each rule composes the linked normative source.
    tool id/name; absent brokerage passes through, while broker exceptions or
    invalid decisions deny. It still promises no hard provider abort or
    running-tool preemption.
+13. `agent-runtime.provider-admission.v1` — A composition that injects a
+   `ProviderCallAdmissionPort` turns the service boundary into the single
+   structural provider-call gate. Core binds a `RootProviderAdmission` only
+   after the final correlated-turn origin check, and service/session proxies
+   call the Port before each provider request. No bound parent, a malformed
+   Port response, a Port exception, or an explicit denial MUST prevent the
+   underlying provider request. The parent is a Core-private in-memory object;
+   correlation ids, paths, registry digests, prompt content, and tool output
+   are not credentials. A derived daemon/avatar call must use a typed derived
+   parent and cross the Port again for each actual provider call; it cannot
+   reuse a root grant. This rule prevents accidental or structurally separate
+   non-admitted paths. It does not claim that a full-tool Agent sharing the
+   same OS trust domain as Core is sandboxed from its own host process.
 
 ## Contract tests
 

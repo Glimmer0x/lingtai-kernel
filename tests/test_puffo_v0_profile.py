@@ -422,6 +422,7 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     assert observed["fixed_execution_workspace"].root == workspace
     assert observed.get("forced_disable") is None
     assert observed["turn_origin_policy"] is RUNTIME_POLICY
+    assert observed["provider_call_admission_port"] is RUNTIME_POLICY
     assert observed["puffo_runtime"] == runtime
 
 

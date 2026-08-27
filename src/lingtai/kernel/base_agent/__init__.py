@@ -484,6 +484,7 @@ class BaseAgent:
         snapshot_port: SnapshotPort,
         source_revision_port: SourceRevisionPort,
         refresh_watcher: RefreshWatcherPort | None = None,
+        provider_call_admission_port=None,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
@@ -502,7 +503,23 @@ class BaseAgent:
     ):
         self.agent_name = agent_name  # true name (真名) — immutable once set
         self.nickname: str | None = None  # mutable alias (别名)
-        self.service = service
+        # A constrained composition injects one Core-owned provider-admission
+        # Port. Wrap the service rather than only the main run loop: the root
+        # session, summaries, soul, and future calls through this Agent service
+        # cross the same boundary. Detached daemon/avatar execution constructs
+        # independent provider services and therefore requires the separate
+        # host-mediated derived-admission adapter; it must not inherit this
+        # ContextVar or be treated as covered here. Generic agents retain the
+        # unwrapped historical path.
+        self._provider_call_admission_port = provider_call_admission_port
+        if provider_call_admission_port is None:
+            self.service = service
+        else:
+            from ..provider_admission import ProviderAdmittedLLMService
+
+            self.service = ProviderAdmittedLLMService(
+                service, provider_call_admission_port
+            )
         self._config = config or AgentConfig()
         # Preset-loader hook: Agent wrapper composes it; None on a bare BaseAgent so `load_preset` fails loud.
         self._preset_loader: Callable[..., dict] | None = None
@@ -988,7 +1005,7 @@ class BaseAgent:
 
         # Session manager — LLM session, token tracking, compaction
         self._session = SessionManager(
-            llm_service=service,
+            llm_service=self.service,
             config=self._config,
             agent_name=agent_name,
             streaming=streaming,

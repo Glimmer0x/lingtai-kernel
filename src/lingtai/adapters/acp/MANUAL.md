@@ -138,8 +138,14 @@ Its capability-side boundary is ACP-only turn initiation. A direct ACP prompt
 is tagged as an authenticated driving-adapter turn; a profile policy denies any
 legacy, inbox, task-card, alarm, daemon, mail/MCP wake, or other independent
 event before it can dispatch a provider/model turn. This applies to **every**
-provider/model turn, not merely a “main” turn. Future child turns must carry a
-verified ancestry from an admitted prompt; v0 does not create such child turns.
+root provider/model turn, not merely the inbox dispatch step. The Core
+provider-call Port is crossed immediately before each such request, so a
+missing or denied parent cannot fall through to the provider service. The
+currently available daemon and avatar tools still use their historical
+independent execution routes; they are not covered by this root-only Core
+slice. Before treating `puffo-v0` as a complete all-turn profile, the driver
+must provide host-mediated derived admission for each daemon/avatar provider
+call. Future child turns must carry verified ancestry from an admitted prompt.
 This is an initiation boundary, not content provenance: non-ACP systems can
 still write state which a later authenticated prompt may cause the model to
 read. Existing minimal ACP permission projection does not alter launch inputs,

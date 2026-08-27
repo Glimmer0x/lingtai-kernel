@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from lingtai.kernel.turns import TurnAdmissionDecision, TurnOrigin
+from lingtai.kernel.provider_admission import (
+    ProviderAdmissionParent,
+    ProviderCallClass,
+    ProviderCallDecision,
+    RootProviderAdmission,
+)
 
 
 PROFILE_NAME = "puffo-v0"
@@ -41,6 +47,33 @@ class PuffoV0RuntimePolicy:
             origin=origin,
             policy_version=self.policy_version,
             reason_code="allowed" if allowed else "origin_not_authenticated_adapter",
+        )
+
+    def authorize_provider_call(
+        self,
+        parent: ProviderAdmissionParent,
+        call_class: ProviderCallClass,
+    ) -> ProviderCallDecision:
+        """Provide the Core-only structural half of Puffo provider admission.
+
+        The driver-owned socket adapter will replace this root-only policy with
+        a per-call host-mediated implementation for daemon/avatar work.  Until
+        then, fail closed rather than allowing a derived provider call to use a
+        root turn's typed origin as a transferable authority.
+        """
+
+        allowed = (
+            call_class is ProviderCallClass.ROOT
+            and isinstance(parent, RootProviderAdmission)
+            and parent.policy_version == self.policy_version
+        )
+        return ProviderCallDecision(
+            allowed=allowed,
+            reason_code=(
+                "allowed"
+                if allowed
+                else "host_mediated_derived_admission_required"
+            ),
         )
 
 

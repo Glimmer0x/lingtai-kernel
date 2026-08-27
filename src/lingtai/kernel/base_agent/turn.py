@@ -937,11 +937,13 @@ def _run_loop(agent) -> None:
         from ..execution_workspace import clear_execution_workspace
         from ..turn_events import clear_turn_tool_observer
         from ..turn_permissions import clear_turn_permission_broker
+        from ..provider_admission import clear_current_provider_admission
 
         cancel_all_turns(agent, reason="agent run loop stopped")
         clear_execution_workspace()
         clear_turn_tool_observer()
         clear_turn_permission_broker()
+        clear_current_provider_admission()
 
 
 def _run_loop_body(agent) -> None:
@@ -1047,13 +1049,14 @@ def _run_loop_body(agent) -> None:
             execution_workspace_token = None
             tool_observer_token = None
             permission_broker_token = None
+            provider_admission_token = None
             if turn_control is not None:
                 # Admission was checked synchronously before publication. Check
                 # again at the final inbox-to-provider boundary so a forged or
                 # stale correlated envelope cannot become provider work merely
                 # by reaching the run loop.
                 try:
-                    admit_turn_origin(agent, turn_control.origin)
+                    admission_decision = admit_turn_origin(agent, turn_control.origin)
                 except TurnAdmissionError as exc:
                     settle_turn(
                         agent,
@@ -1091,6 +1094,21 @@ def _run_loop_body(agent) -> None:
                 clear_turn_permission_broker()
                 permission_broker_token = bind_turn_permission_broker(
                     turn_control.permission_broker
+                )
+                from ..provider_admission import (
+                    RootProviderAdmission,
+                    bind_provider_admission,
+                )
+
+                # The typed origin is checked immediately above.  Keep its
+                # Core-private parent in a ContextVar for the entire logical
+                # turn so every concrete provider send is gated by the
+                # service wrapper, not merely this root inbox path.
+                provider_admission_token = bind_provider_admission(
+                    RootProviderAdmission(
+                        correlation_id=turn_control.correlation_id,
+                        policy_version=admission_decision.policy_version,
+                    )
                 )
                 msg = correlated_message_text(msg)
             elif msg.type == MSG_CORRELATED_TURN:
@@ -1690,6 +1708,9 @@ def _run_loop_body(agent) -> None:
             if permission_broker_token is not None:
                 from ..turn_permissions import reset_turn_permission_broker
                 reset_turn_permission_broker(permission_broker_token)
+            if provider_admission_token is not None:
+                from ..provider_admission import clear_provider_admission
+                clear_provider_admission(provider_admission_token)
             _settle_correlated_after_turn(
                 agent,
                 turn_control,

@@ -66,6 +66,7 @@ def run_acp(
     fixed_execution_workspace=None,
     forced_disable: frozenset[str] | None = None,
     turn_origin_policy=None,
+    provider_call_admission_port=None,
     puffo_runtime=None,
 ) -> None:
     """Compose one Agent and the local ACP stdio driving adapter.
@@ -137,6 +138,8 @@ def run_acp(
             build_options["_forced_disable"] = forced_disable
         if turn_origin_policy is not None:
             build_options["_turn_origin_policy"] = turn_origin_policy
+        if provider_call_admission_port is not None:
+            build_options["_provider_call_admission_port"] = provider_call_admission_port
         agent = build_agent(data, agent_dir, **build_options)
         agent._venv_path = str(venv_dir)
         agent.start()
@@ -215,6 +218,7 @@ def handle_acp_command(args) -> None:
         fixed_execution_workspace=ExecutionWorkspace(runtime.workspace),
         puffo_runtime=runtime,
         turn_origin_policy=RUNTIME_POLICY,
+        provider_call_admission_port=RUNTIME_POLICY,
     )
 
 

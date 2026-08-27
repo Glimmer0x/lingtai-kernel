@@ -16,6 +16,7 @@ related_files:
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
+  - src/lingtai/kernel/provider_admission.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -28,6 +29,7 @@ related_files:
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
   - tests/test_turn_permissions.py
+  - tests/test_provider_admission.py
   - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_process_match.py
@@ -233,13 +235,15 @@ argv, environment, or MCP command from the remote caller.
     `mcpServers: []`; it never starts a client-supplied process. This is an
     identity/workspace-bound **full-tool** profile: operator-managed LingTai
     capabilities remain available, including after refresh. Its capability
-    boundary is instead provider-turn initiation: every provider/model turn
-    must originate from an authenticated driving Adapter or carry a trusted
-    ancestry from one. In v0 only direct authenticated ACP prompts are
-    implemented; inbox, task-card, alarm, daemon, mail/MCP wake, and other
-    independent events are denied before provider dispatch. This controls who
-    may start a turn, not what state a later admitted turn may read: non-ACP
-    sources may still write state. The profile adds no `external_send` approval
+    boundary is provider-turn initiation: the current PR2 Core slice enforces
+    direct authenticated ACP root prompts at the actual root provider request,
+    while inbox, task-card, alarm, mail/MCP wake, and other independent root
+    events are denied before provider dispatch. Daemon and avatar still use
+    their historical independent execution routes; they require the separate
+    driver-mediated derived-admission transport before this profile can claim
+    all provider/model turns are covered. This controls who may start a root
+    turn, not what state a later admitted turn may read: non-ACP sources may
+    still write state. The profile adds no `external_send` approval
     boundary and does not promise workspace-only writes, process containment,
     no background descendants, or network containment. “Authenticated Adapter”
     is a typed handoff from the Puffo driver that owns the local ACP process;
@@ -281,6 +285,9 @@ tamper/revocation rejection, full-tool composition, fixed-workspace and
 empty-session-MCP rejection, authenticated-adapter admission, and profile CLI
 composition. `tests/test_correlated_turns.py` independently proves an
 untrusted inbox event cannot reach provider dispatch under this profile policy.
+`tests/test_provider_admission.py` independently proves a missing or denied
+provider admission cannot reach the underlying provider service and that the
+typed call class is not inferred from request text.
 `tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_turn_permissions.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP
 wire tests pin workspace rooting/escape/isolation, stdio validation, atomic
 publication/rollback, collisions, and close/EOF ownership.

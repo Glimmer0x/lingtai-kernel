@@ -28,6 +28,7 @@ from lingtai.kernel.turns import (
 from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
 from lingtai.kernel.turn_events import current_turn_tool_observer
 from lingtai.kernel.turn_permissions import current_turn_permission_broker
+from lingtai.kernel.provider_admission import current_provider_admission
 
 
 class _Interface:
@@ -430,6 +431,34 @@ def test_profile_rejects_untrusted_event_before_any_provider_dispatch(
 
     assert result is None
     assert any(name == "turn_origin_rejected" for name, _ in agent.logs)
+
+
+def test_profile_binds_root_provider_admission_only_for_the_admitted_turn(
+    tmp_path, monkeypatch
+):
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    handle = submit_turn(
+        agent,
+        "hello",
+        correlation_id="turn-provider-admission",
+        origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+    )
+    seen = []
+
+    def fake_handle(current, _msg):
+        parent = current_provider_admission()
+        assert parent is not None
+        seen.append((parent.correlation_id, parent.policy_version))
+        current._shutdown.set()
+        return {"text": "ok", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
+    assert seen == [("turn-provider-admission", RUNTIME_POLICY.policy_version)]
+    assert current_provider_admission() is None
 
 
 def test_cancel_and_terminal_settlement_linearize_exactly_once(tmp_path):

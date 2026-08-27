@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
+  - src/lingtai/kernel/provider_admission.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/process_match.py
@@ -26,6 +27,7 @@ related_files:
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
   - tests/test_turn_permissions.py
+  - tests/test_provider_admission.py
   - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_process_match.py
@@ -82,7 +84,7 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   ACP data-plane surface.
 - `../../kernel/process_match.py` — exact duplicate-host grammar for module,
   console, legacy, and quoted Windows `.exe` ACP launch forms.
-- `../../kernel/turns.py`, `../../kernel/execution_workspace.py`, `../../kernel/turn_events.py`, `../../kernel/turn_permissions.py`, and `../../kernel/tool_executor.py` — inward Core boundary consumed by the Adapter:
+- `../../kernel/turns.py`, `../../kernel/execution_workspace.py`, `../../kernel/turn_events.py`, `../../kernel/turn_permissions.py`, `../../kernel/provider_admission.py`, and `../../kernel/tool_executor.py` — inward Core boundary consumed by the Adapter:
   `TurnHandle`, `TurnResult`, terminal outcome, exact correlation, and matching
   cooperative cancellation, immutable workspace metadata, task-local scope, and
   failure-isolated lifecycle observation and fail-closed one-shot permission.
