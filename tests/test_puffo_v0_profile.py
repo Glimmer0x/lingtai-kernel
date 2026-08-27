@@ -196,6 +196,27 @@ def test_revocation_tombstone_denies_a_stale_active_registry_snapshot(tmp_path):
         resolve_runtime("runtime-a", registry_path=registry)
 
 
+def test_missing_required_tombstone_log_fails_closed(tmp_path):
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    stale_active_snapshot = registry.read_text(encoding="utf-8")
+    revoke_runtime("runtime-a", registry_path=registry)
+    puffo_v0._revocation_log_path(registry).unlink()
+    registry.write_text(stale_active_snapshot, encoding="utf-8")
+
+    with pytest.raises(PuffoV0RegistryError, match="revocation log is unavailable"):
+        resolve_runtime("runtime-a", registry_path=registry)
+    with pytest.raises(PuffoV0RegistryError, match="revocation log is unavailable"):
+        provision_runtime("runtime-b", agent_dir, workspace, registry_path=registry)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="puffo-v0 registry is POSIX-only")
 def test_registry_mutation_lock_blocks_a_second_process(tmp_path):
     import lingtai.adapters.acp.puffo_v0 as puffo_v0

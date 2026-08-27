@@ -102,7 +102,8 @@ the evidence trail in the task report.
 
 1. Run `python -m pytest -q -x tests/test_puffo_v0_profile.py`.
 2. Inspect the registry cases: only an active, digest-valid opaque id resolves;
-   tampered and revoked entries fail before composition.
+   tampered and revoked entries, including a missing required revocation log,
+   fail before composition.
 3. Inspect the profile session cases: another workspace and every non-empty
    `mcpServers` input fail; `avatar`, `daemon`, and `mcp` are absent from the
    composed Agent floor.

@@ -228,10 +228,12 @@ argv, environment, or MCP command from the remote caller.
     make ordinary tool side effects safe to retry. Registry provision/revoke
     mutations are process-serialized; revocation additionally writes an
     append-only tombstone before the mutable registry, so a stale full-registry
-    snapshot cannot reactivate an id. Its POSIX directory is owner-only (`0700`)
-    and its lock, temporary, registry, and tombstone files are owner-only
-    (`0600`), independent of umask; existing registry artifacts are tightened
-    before use. This Phase A registry fails closed on Windows until an
+    snapshot cannot reactivate an id. The versioned registry declares this log
+    mandatory: a missing, unreadable, malformed, or mismatched log rejects
+    resolve/provision rather than being treated as an empty history. Its POSIX
+    directory is owner-only (`0700`) and its lock, temporary, registry, and
+    tombstone files are owner-only (`0600`), independent of umask; existing
+    registry artifacts are tightened before use. This Phase A registry fails closed on Windows until an
     equivalent owner-only ACL adapter exists. The local control plane is its
     only supported writer: manual or third-party mutation is unsupported and
     malformed/rollback state is rejected rather than treated as authority. A

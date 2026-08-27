@@ -109,7 +109,9 @@ files as `0600`, independent of umask. Loading an older registry tightens its
 directory and file modes before use. On Windows the command fails closed until
 an equivalent owner-only ACL implementation is available. The `puffo-v0`
 control-plane commands are the only supported writers; do not hand-edit the
-registry or use a third-party writer.
+registry or use a third-party writer. The current versioned registry requires
+its tombstone log to exist: missing, unreadable, malformed, or mismatched
+history fails closed instead of being interpreted as no prior revocations.
 
 In this profile, `session/new.cwd` must be exactly the provisioned workspace and
 `mcpServers` must be `[]`. The profile disables the `avatar`, `daemon`, and

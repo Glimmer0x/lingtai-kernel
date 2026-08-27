@@ -14,7 +14,8 @@ from typing import Any, Iterator
 
 
 PROFILE_NAME = "puffo-v0"
-REGISTRY_VERSION = 1
+REGISTRY_VERSION = 2
+REVOCATION_LOG_REQUIRED = "required"
 FORCED_DISABLED_CAPABILITIES = frozenset({"avatar", "daemon", "mcp"})
 _RUNTIME_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 
@@ -125,12 +126,36 @@ def _revocation_log_path(path: Path) -> Path:
     return path.with_name(f".{path.name}.revocations.jsonl")
 
 
+def _initialize_revocation_log(path: Path) -> None:
+    """Create the mandatory empty tombstone log before first registry write."""
+
+    _secure_registry_directory(path.parent)
+    tombstones = _revocation_log_path(path)
+    descriptor: int | None = None
+    try:
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(tombstones, flags, 0o600)
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+    except FileExistsError as exc:
+        raise PuffoV0RegistryError(
+            "puffo-v0 registry initialization found an unexpected revocation log"
+        ) from exc
+    except OSError as exc:
+        raise PuffoV0RegistryError("puffo-v0 revocation log could not be initialized") from exc
+    finally:
+        if descriptor is not None:
+            with suppress(OSError):
+                os.close(descriptor)
+
+
 def _read_revoked_runtime_ids(path: Path) -> frozenset[str]:
     """Read monotonic revocation tombstones, rejecting malformed local state."""
 
     tombstones = _revocation_log_path(path)
     if not _secure_registry_file(tombstones):
-        return frozenset()
+        raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid")
     try:
         lines = tombstones.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as exc:
@@ -154,7 +179,7 @@ def _append_revocation_tombstone(path: Path, runtime_id: str) -> None:
     tombstones = _revocation_log_path(path)
     descriptor: int | None = None
     try:
-        flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
+        flags = os.O_APPEND | os.O_WRONLY
         flags |= getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(tombstones, flags, 0o600)
         os.fchmod(descriptor, 0o600)
@@ -212,9 +237,13 @@ def _read_registry(path: Path) -> dict[str, Any]:
         data = json.loads(raw)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PuffoV0RegistryError("puffo-v0 runtime registry is unavailable or invalid") from exc
-    if not isinstance(data, dict) or set(data) != {"runtimes", "version"}:
+    if not isinstance(data, dict) or set(data) != {"revocation_log", "runtimes", "version"}:
         raise PuffoV0RegistryError("puffo-v0 runtime registry has an invalid shape")
-    if data["version"] != REGISTRY_VERSION or not isinstance(data["runtimes"], dict):
+    if (
+        data["version"] != REGISTRY_VERSION
+        or data["revocation_log"] != REVOCATION_LOG_REQUIRED
+        or not isinstance(data["runtimes"], dict)
+    ):
         raise PuffoV0RegistryError("puffo-v0 runtime registry has an unsupported version")
     return data
 
@@ -263,13 +292,19 @@ def provision_runtime(
         raise PuffoV0RegistryError("agent_dir must contain init.json")
     path = registry_path or default_registry_path()
     with _registry_mutation_lock(path):
-        revoked_runtime_ids = _read_revoked_runtime_ids(path)
-        if runtime_id in revoked_runtime_ids:
-            raise PuffoV0RegistryError("runtime_id is revoked and cannot be provisioned again")
         if path.exists():
+            revoked_runtime_ids = _read_revoked_runtime_ids(path)
             registry = _read_registry(path)
         else:
-            registry = {"version": REGISTRY_VERSION, "runtimes": {}}
+            _initialize_revocation_log(path)
+            revoked_runtime_ids = frozenset()
+            registry = {
+                "revocation_log": REVOCATION_LOG_REQUIRED,
+                "version": REGISTRY_VERSION,
+                "runtimes": {},
+            }
+        if runtime_id in revoked_runtime_ids:
+            raise PuffoV0RegistryError("runtime_id is revoked and cannot be provisioned again")
         runtimes = registry["runtimes"]
         if runtime_id in runtimes:
             raise PuffoV0RegistryError("runtime_id is already provisioned")
