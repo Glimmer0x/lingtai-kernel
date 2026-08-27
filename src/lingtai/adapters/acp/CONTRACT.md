@@ -217,8 +217,19 @@ argv, environment, or MCP command from the remote caller.
 11. `acp-local-stdio.puffo-v0.v1` — `lingtai-agent acp --profile puffo-v0
     --runtime-id <id>` resolves `<id>` only through the local
     operator-managed registry. The entry must be active, structurally exact,
-    digest-valid, and point to an initialized agent directory and existing
-    canonical workspace. A profile session accepts only that workspace and
+    entry-digest-valid, and bind one initialized agent directory and canonical
+    workspace to their provision-time canonical path plus POSIX device/inode/
+    owner/group identity. Resolve rejects a symlink retarget, canonical-path
+    drift, or replacement at the same path; active runtime bindings are unique
+    for both agent directory and workspace. The composition root resolves the
+    runtime again immediately before Agent construction. This narrows ordinary
+    resolve-to-start drift; a same-OS principal that rewrites the filesystem
+    after that check remains within the explicit host trust boundary below.
+    `entry_digest` protects the exact registry entry only; it is not a digest
+    of `init.json`, effective tool/action policy, executable/argv/environment,
+    or addon/plugin policy. Those full restricted-profile guarantees remain
+    outside this registry/session-policy foundation. A profile session accepts
+    only that workspace and
     `mcpServers: []`; it never starts a client-supplied process. The composed
     Agent forcibly disables `avatar`, `daemon`, and `mcp`, including after an
     in-process refresh. Permission remains one-shot and fail-closed under rule

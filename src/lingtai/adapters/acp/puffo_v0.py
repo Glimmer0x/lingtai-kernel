@@ -14,7 +14,7 @@ from typing import Any, Iterator
 
 
 PROFILE_NAME = "puffo-v0"
-REGISTRY_VERSION = 2
+REGISTRY_VERSION = 3
 REVOCATION_LOG_REQUIRED = "required"
 FORCED_DISABLED_CAPABILITIES = frozenset({"avatar", "daemon", "mcp"})
 _RUNTIME_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
@@ -25,13 +25,25 @@ class PuffoV0RegistryError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class DirectoryBinding:
+    """The stable local filesystem identity of one bound directory."""
+
+    device: int
+    inode: int
+    owner: int
+    group: int
+
+
+@dataclass(frozen=True, slots=True)
 class PuffoV0Runtime:
     """One pre-provisioned local identity selected by an opaque runtime id."""
 
     runtime_id: str
     agent_dir: Path
     workspace: Path
-    config_digest: str
+    entry_digest: str
+    agent_dir_binding: DirectoryBinding
+    workspace_binding: DirectoryBinding
 
 
 def default_registry_path() -> Path:
@@ -56,15 +68,62 @@ def _canonical_directory(path: Path, *, field: str) -> Path:
     return resolved
 
 
-def _canonical_entry(runtime_id: str, agent_dir: Path, workspace: Path) -> dict[str, Any]:
+def _directory_binding(path: Path, *, field: str) -> DirectoryBinding:
+    """Read the no-symlink directory identity used by the local binding."""
+
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise PuffoV0RegistryError(f"{field} must be an existing directory") from exc
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise PuffoV0RegistryError(f"{field} must be an existing non-symlink directory")
+    return DirectoryBinding(
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        owner=metadata.st_uid,
+        group=metadata.st_gid,
+    )
+
+
+def _binding_payload(binding: DirectoryBinding) -> dict[str, int]:
+    return {
+        "device": binding.device,
+        "group": binding.group,
+        "inode": binding.inode,
+        "owner": binding.owner,
+    }
+
+
+def _parse_binding(value: object) -> DirectoryBinding:
+    if not isinstance(value, dict) or set(value) != {"device", "group", "inode", "owner"}:
+        raise PuffoV0RegistryError("runtime registry entry has an invalid directory binding")
+    if any(not isinstance(item, int) or isinstance(item, bool) or item < 0 for item in value.values()):
+        raise PuffoV0RegistryError("runtime registry entry has an invalid directory binding")
+    return DirectoryBinding(
+        device=value["device"],
+        inode=value["inode"],
+        owner=value["owner"],
+        group=value["group"],
+    )
+
+
+def _canonical_entry(
+    runtime_id: str,
+    agent_dir: Path,
+    workspace: Path,
+    agent_dir_binding: DirectoryBinding,
+    workspace_binding: DirectoryBinding,
+) -> dict[str, Any]:
     return {
         "agent_dir": str(agent_dir),
+        "agent_dir_binding": _binding_payload(agent_dir_binding),
         "disabled_capabilities": sorted(FORCED_DISABLED_CAPABILITIES),
         "mcp_servers": [],
         "profile": PROFILE_NAME,
         "runtime_id": runtime_id,
         "status": "active",
         "workspace": str(workspace),
+        "workspace_binding": _binding_payload(workspace_binding),
     }
 
 
@@ -272,6 +331,46 @@ def _write_registry(path: Path, data: dict[str, Any]) -> None:
         raise PuffoV0RegistryError("puffo-v0 runtime registry could not be written") from exc
 
 
+def _bound_directory(
+    path_value: object,
+    binding_value: object,
+    *,
+    field: str,
+) -> tuple[Path, DirectoryBinding]:
+    """Resolve one stored path and require its present identity to match."""
+
+    if not isinstance(path_value, str):
+        raise PuffoV0RegistryError("runtime registry entry has invalid paths")
+    expected = _parse_binding(binding_value)
+    stored = Path(path_value)
+    resolved = _canonical_directory(stored, field=field)
+    if str(resolved) != path_value:
+        raise PuffoV0RegistryError(f"{field} binding no longer matches its canonical path")
+    observed = _directory_binding(resolved, field=field)
+    if observed != expected:
+        raise PuffoV0RegistryError(f"{field} binding no longer matches its provisioned identity")
+    return resolved, expected
+
+
+def _active_binding_conflicts(
+    runtimes: dict[str, Any],
+    *,
+    agent_dir: Path,
+    workspace: Path,
+) -> None:
+    """Require the Phase A active binding to remain one-to-one."""
+
+    for existing_runtime_id, entry in runtimes.items():
+        if not isinstance(existing_runtime_id, str) or not isinstance(entry, dict):
+            raise PuffoV0RegistryError("runtime registry entry has an invalid shape")
+        if entry.get("status") != "active":
+            continue
+        if entry.get("agent_dir") == str(agent_dir):
+            raise PuffoV0RegistryError("agent_dir is already bound to an active runtime")
+        if entry.get("workspace") == str(workspace):
+            raise PuffoV0RegistryError("workspace is already bound to an active runtime")
+
+
 def provision_runtime(
     runtime_id: str,
     agent_dir: Path,
@@ -288,6 +387,8 @@ def provision_runtime(
     runtime_id = _valid_runtime_id(runtime_id)
     agent_dir = _canonical_directory(agent_dir, field="agent_dir")
     workspace = _canonical_directory(workspace, field="workspace")
+    agent_dir_binding = _directory_binding(agent_dir, field="agent_dir")
+    workspace_binding = _directory_binding(workspace, field="workspace")
     if not (agent_dir / "init.json").is_file():
         raise PuffoV0RegistryError("agent_dir must contain init.json")
     path = registry_path or default_registry_path()
@@ -308,11 +409,25 @@ def provision_runtime(
         runtimes = registry["runtimes"]
         if runtime_id in runtimes:
             raise PuffoV0RegistryError("runtime_id is already provisioned")
-        entry = _canonical_entry(runtime_id, agent_dir, workspace)
-        entry["config_digest"] = _digest(entry)
+        _active_binding_conflicts(runtimes, agent_dir=agent_dir, workspace=workspace)
+        entry = _canonical_entry(
+            runtime_id,
+            agent_dir,
+            workspace,
+            agent_dir_binding,
+            workspace_binding,
+        )
+        entry["entry_digest"] = _digest(entry)
         runtimes[runtime_id] = entry
         _write_registry(path, registry)
-    return PuffoV0Runtime(runtime_id, agent_dir, workspace, entry["config_digest"])
+    return PuffoV0Runtime(
+        runtime_id,
+        agent_dir,
+        workspace,
+        entry["entry_digest"],
+        agent_dir_binding,
+        workspace_binding,
+    )
 
 
 def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> None:
@@ -328,8 +443,8 @@ def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> Non
         if runtime_id not in _read_revoked_runtime_ids(path):
             _append_revocation_tombstone(path, runtime_id)
         entry["status"] = "revoked"
-        canonical = {key: value for key, value in entry.items() if key != "config_digest"}
-        entry["config_digest"] = _digest(canonical)
+        canonical = {key: value for key, value in entry.items() if key != "entry_digest"}
+        entry["entry_digest"] = _digest(canonical)
         _write_registry(path, registry)
 
 
@@ -348,32 +463,42 @@ def resolve_runtime(
     if not isinstance(entry, dict):
         raise PuffoV0RegistryError("runtime_id is not provisioned")
     expected_keys = {
-        "agent_dir", "config_digest", "disabled_capabilities", "mcp_servers",
-        "profile", "runtime_id", "status", "workspace",
+        "agent_dir", "agent_dir_binding", "disabled_capabilities", "entry_digest",
+        "mcp_servers", "profile", "runtime_id", "status", "workspace", "workspace_binding",
     }
     if set(entry) != expected_keys:
         raise PuffoV0RegistryError("runtime registry entry has an invalid shape")
-    canonical = {key: value for key, value in entry.items() if key != "config_digest"}
+    canonical = {key: value for key, value in entry.items() if key != "entry_digest"}
     if (
         entry.get("profile") != PROFILE_NAME
         or entry.get("runtime_id") != runtime_id
         or entry.get("status") != "active"
         or entry.get("disabled_capabilities") != sorted(FORCED_DISABLED_CAPABILITIES)
         or entry.get("mcp_servers") != []
-        or not isinstance(entry.get("config_digest"), str)
-        or entry["config_digest"] != _digest(canonical)
+        or not isinstance(entry.get("entry_digest"), str)
+        or entry["entry_digest"] != _digest(canonical)
     ):
         raise PuffoV0RegistryError("runtime registry entry is inactive or does not match puffo-v0")
-    if not isinstance(entry.get("agent_dir"), str) or not isinstance(entry.get("workspace"), str):
-        raise PuffoV0RegistryError("runtime registry entry has invalid paths")
-    agent_dir = _canonical_directory(Path(entry["agent_dir"]), field="agent_dir")
-    workspace = _canonical_directory(Path(entry["workspace"]), field="workspace")
+    agent_dir, agent_dir_binding = _bound_directory(
+        entry.get("agent_dir"), entry.get("agent_dir_binding"), field="agent_dir"
+    )
+    workspace, workspace_binding = _bound_directory(
+        entry.get("workspace"), entry.get("workspace_binding"), field="workspace"
+    )
     if not (agent_dir / "init.json").is_file():
         raise PuffoV0RegistryError("registered agent identity is no longer initialized")
-    return PuffoV0Runtime(runtime_id, agent_dir, workspace, entry["config_digest"])
+    return PuffoV0Runtime(
+        runtime_id,
+        agent_dir,
+        workspace,
+        entry["entry_digest"],
+        agent_dir_binding,
+        workspace_binding,
+    )
 
 
 __all__ = [
+    "DirectoryBinding",
     "FORCED_DISABLED_CAPABILITIES",
     "PROFILE_NAME",
     "PuffoV0RegistryError",

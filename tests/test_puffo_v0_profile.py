@@ -107,10 +107,77 @@ def test_registry_rejects_tampering_and_revoked_runtime(tmp_path):
     with pytest.raises(PuffoV0RegistryError, match="does not match"):
         resolve_runtime("opaque-id", registry_path=registry)
 
-    provision_runtime("active-id", agent_dir, workspace, registry_path=registry)
+    other_agent_dir = tmp_path / "other-identity"
+    other_agent_dir.mkdir()
+    (other_agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    other_workspace = tmp_path / "other-workspace"
+    other_workspace.mkdir()
+    provision_runtime("active-id", other_agent_dir, other_workspace, registry_path=registry)
     revoke_runtime("active-id", registry_path=registry)
     with pytest.raises(PuffoV0RegistryError, match="inactive"):
         resolve_runtime("active-id", registry_path=registry)
+
+
+def test_runtime_binding_rejects_symlink_retargeting_of_identity_and_workspace(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+    replacement_agent = tmp_path / "replacement-agent"
+    replacement_agent.mkdir()
+    (replacement_agent / "init.json").write_text("{}", encoding="utf-8")
+    replacement_workspace = tmp_path / "replacement-workspace"
+    replacement_workspace.mkdir()
+    agent_dir.rename(tmp_path / "original-agent")
+    workspace.rename(tmp_path / "original-workspace")
+    agent_dir.symlink_to(replacement_agent, target_is_directory=True)
+    workspace.symlink_to(replacement_workspace, target_is_directory=True)
+
+    with pytest.raises(PuffoV0RegistryError, match="binding no longer matches"):
+        resolve_runtime("runtime-a", registry_path=registry)
+
+
+def test_runtime_binding_rejects_replaced_directory_at_the_same_canonical_path(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+    agent_dir.rename(tmp_path / "original-agent")
+    workspace.rename(tmp_path / "original-workspace")
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace.mkdir()
+
+    with pytest.raises(PuffoV0RegistryError, match="binding no longer matches"):
+        resolve_runtime("runtime-a", registry_path=registry)
+
+
+def test_active_runtime_bindings_require_dedicated_identity_and_workspace(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    other_agent_dir = tmp_path / "other-identity"
+    other_agent_dir.mkdir()
+    (other_agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    other_workspace = tmp_path / "other-workspace"
+    other_workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+    with pytest.raises(PuffoV0RegistryError, match="agent_dir is already bound"):
+        provision_runtime("runtime-b", agent_dir, other_workspace, registry_path=registry)
+    with pytest.raises(PuffoV0RegistryError, match="workspace is already bound"):
+        provision_runtime("runtime-c", other_agent_dir, workspace, registry_path=registry)
 
 
 def test_registry_mutations_are_linearized_so_revoke_cannot_be_resurrected(
@@ -124,6 +191,11 @@ def test_registry_mutations_are_linearized_so_revoke_cannot_be_resurrected(
     (agent_dir / "init.json").write_text("{}", encoding="utf-8")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    agent_dir_b = tmp_path / "identity-b"
+    agent_dir_b.mkdir()
+    (agent_dir_b / "init.json").write_text("{}", encoding="utf-8")
+    workspace_b = tmp_path / "workspace-b"
+    workspace_b.mkdir()
     registry = tmp_path / "registry.json"
     provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
 
@@ -146,7 +218,7 @@ def test_registry_mutations_are_linearized_so_revoke_cannot_be_resurrected(
 
     def provision() -> None:
         try:
-            provision_runtime("runtime-b", agent_dir, workspace, registry_path=registry)
+            provision_runtime("runtime-b", agent_dir_b, workspace_b, registry_path=registry)
         except BaseException as exc:  # pragma: no cover - surfaced below
             failures.append(exc)
 
@@ -226,6 +298,11 @@ def test_registry_mutation_lock_blocks_a_second_process(tmp_path):
     (agent_dir / "init.json").write_text("{}", encoding="utf-8")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    agent_dir_b = tmp_path / "identity-b"
+    agent_dir_b.mkdir()
+    (agent_dir_b / "init.json").write_text("{}", encoding="utf-8")
+    workspace_b = tmp_path / "workspace-b"
+    workspace_b.mkdir()
     registry = tmp_path / "registry.json"
     provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
 
@@ -233,7 +310,7 @@ def test_registry_mutation_lock_blocks_a_second_process(tmp_path):
     provisioned = context.Event()
 
     def provision_in_child() -> None:
-        provision_runtime("runtime-b", agent_dir, workspace, registry_path=registry)
+        provision_runtime("runtime-b", agent_dir_b, workspace_b, registry_path=registry)
         provisioned.set()
 
     with puffo_v0._registry_mutation_lock(registry):
@@ -319,13 +396,14 @@ def test_profile_session_rejects_remote_workspace_and_mcp_inputs(tmp_path):
 
 def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp_path):
     import lingtai.cli_acp as cli_acp
-    from lingtai.adapters.acp.puffo_v0 import PuffoV0Runtime
+    from lingtai.adapters.acp.puffo_v0 import DirectoryBinding, PuffoV0Runtime
 
     agent_dir = tmp_path / "identity"
     agent_dir.mkdir()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    runtime = PuffoV0Runtime("runtime-1", agent_dir, workspace, "digest")
+    binding = DirectoryBinding(device=1, inode=2, owner=3, group=4)
+    runtime = PuffoV0Runtime("runtime-1", agent_dir, workspace, "digest", binding, binding)
     observed = {}
     monkeypatch.setattr(cli_acp, "resolve_runtime", lambda _id: runtime, raising=False)
     # The handler imports from the profile module after parser validation.
@@ -337,6 +415,7 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     assert observed["directory"] == agent_dir
     assert observed["fixed_execution_workspace"].root == workspace
     assert observed["forced_disable"] == FORCED_DISABLED_CAPABILITIES
+    assert observed["puffo_runtime"] == runtime
 
 
 def test_profile_cli_rejects_agent_dir_instead_of_ignoring_it(capsys):

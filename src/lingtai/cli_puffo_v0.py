@@ -46,7 +46,7 @@ def handle_puffo_v0_command(args: argparse.Namespace) -> None:
                 "runtime_id": runtime.runtime_id,
                 "agent_dir": str(runtime.agent_dir),
                 "workspace": str(runtime.workspace),
-                "config_digest": runtime.config_digest,
+                "entry_digest": runtime.entry_digest,
             }
         elif args.puffo_v0_command == "revoke":
             revoke_runtime(args.runtime_id)

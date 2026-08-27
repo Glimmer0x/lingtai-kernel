@@ -59,10 +59,13 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 - `__init__.py` — small public package export for the protocol version and server.
 - `puffo_v0.py` — local operator registry for the constrained `puffo-v0`
   profile. It resolves an opaque runtime id to one canonical persistent identity
-  and workspace, verifies a configuration digest, serializes provision/revoke
-  read-modify-write operations with a POSIX lock, records terminal revocations
-  in an append-only tombstone log, and refuses missing, malformed, tampered, or
-  revoked entries before Agent construction. Its Phase A
+  and workspace, verifies an entry digest plus provision-time filesystem
+  identity, serializes provision/revoke read-modify-write operations with a
+  POSIX lock, records terminal revocations in an append-only tombstone log, and
+  refuses missing, malformed, tampered, retargeted, or revoked entries before
+  Agent construction. Its `entry_digest` authenticates registry data rather
+  than claiming to authenticate the effective manifest, tool/action, or full
+  launch policy. Its Phase A
   owner-only-filesystem implementation deliberately rejects Windows until an
   equivalent ACL-backed adapter exists.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
@@ -96,7 +99,10 @@ Inbound: a local ACP client launches `lingtai-agent acp --agent-dir <dir>` and
 exchanges one JSON-RPC object per stdio line. The constrained Puffo profile instead
 launches `lingtai-agent acp --profile puffo-v0 --runtime-id <opaque-id>`; its
 registry resolves the full spawn identity locally and server policy fixes the
-workspace and denies session MCP. Outbound: the Adapter calls only the
+workspace and denies session MCP. The composition root re-resolves a profile
+runtime immediately before Agent composition so a normal resolve-to-start drift
+fails closed; host-principal filesystem replacement after that check remains
+outside this profile's trust boundary. Outbound: the Adapter calls only the
 protocol-neutral `BaseAgent.submit_turn`/`TurnHandle` boundary with an optional
 turn-scoped tool observer. The CLI root
 reuses `cli.load_init`, `cli.build_agent`, venv resolution, logging, lifecycle,

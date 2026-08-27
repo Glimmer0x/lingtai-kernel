@@ -65,6 +65,7 @@ def run_acp(
     output_stream: TextIO | None = None,
     fixed_execution_workspace=None,
     forced_disable: frozenset[str] | None = None,
+    puffo_runtime=None,
 ) -> None:
     """Compose one Agent and the local ACP stdio driving adapter.
 
@@ -105,6 +106,15 @@ def run_acp(
         from lingtai.kernel.logging import setup_logging
         from lingtai.venv_resolve import resolve_venv
 
+        if puffo_runtime is not None:
+            from lingtai.adapters.acp.puffo_v0 import resolve_runtime
+            from lingtai.kernel.execution_workspace import ExecutionWorkspace
+
+            verified_runtime = resolve_runtime(puffo_runtime.runtime_id)
+            if verified_runtime != puffo_runtime:
+                raise RuntimeError("puffo-v0 runtime binding changed before ACP startup")
+            agent_dir = verified_runtime.agent_dir
+            fixed_execution_workspace = ExecutionWorkspace(verified_runtime.workspace)
         _check_duplicate_process(agent_dir)
         _clean_signal_files(agent_dir)
         setup_logging(
@@ -197,6 +207,7 @@ def handle_acp_command(args) -> None:
         runtime.agent_dir,
         fixed_execution_workspace=ExecutionWorkspace(runtime.workspace),
         forced_disable=FORCED_DISABLED_CAPABILITIES,
+        puffo_runtime=runtime,
     )
 
 

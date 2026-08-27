@@ -101,9 +101,10 @@ the evidence trail in the task report.
 ### Steps
 
 1. Run `python -m pytest -q -x tests/test_puffo_v0_profile.py`.
-2. Inspect the registry cases: only an active, digest-valid opaque id resolves;
-   tampered and revoked entries, including a missing required revocation log,
-   fail before composition.
+2. Inspect the registry cases: only an active, entry-digest-valid opaque id
+   with its original directory identity resolves; tampered, retargeted, or
+   revoked entries, including a missing required revocation log, fail before
+   composition. An active identity and workspace cannot be bound twice.
 3. Inspect the profile session cases: another workspace and every non-empty
    `mcpServers` input fail; `avatar`, `daemon`, and `mcp` are absent from the
    composed Agent floor.
@@ -122,3 +123,5 @@ Pass when the focused tests prove every profile startup field comes from the
 local registry and constrained session policy. Fail on a remote-controlled
 workspace/MCP input, enabled derived/background capability, accepted revoked id,
 or any claim that this controlled entrypoint isolates a same-OS principal.
+This behavior is a registry/session-policy foundation: its entry digest does
+not by itself prove a complete effective tool/action or launch-security policy.

@@ -98,9 +98,23 @@ lingtai-agent acp --profile puffo-v0 --runtime-id puffo-agent-7
 
 The ACP command accepts no profile `agent_dir` path. The runtime id is resolved
 through the local operator registry (`~/.lingtai/puffo-v0/runtime-registry.json`)
-to the entire canonical spawn configuration. The profile rejects an unknown,
+to its bound persistent identity and workspace. The profile rejects an unknown,
 tampered, or revoked id before constructing the Agent. Revoke a future launch
 with `lingtai-agent puffo-v0 revoke --runtime-id puffo-agent-7`.
+
+Provision stores each directory's canonical path and POSIX device/inode/owner/
+group identity. An active agent directory or workspace may be bound to only one
+runtime. At launch the profile rejects symlink retargeting, a changed canonical
+path, or a replacement directory at the same path, then rechecks the binding
+immediately before Agent construction. This detects normal configuration drift;
+it is not host isolation against a same-OS principal that changes the filesystem
+after that final check.
+
+`entry_digest` protects the exact registry record, not the complete effective
+security configuration. In particular, this foundation does not yet freeze or
+hash `init.json`, presets, executable/argv/environment policy, addon/plugin
+policy, or a positive tool/action allowlist. Those constraints need a later,
+typed restricted-runtime policy rather than an implication from this registry.
 
 The Phase A registry is POSIX-only: it serializes provision/revoke updates,
 records terminal revocations in an append-only local tombstone log, and creates
