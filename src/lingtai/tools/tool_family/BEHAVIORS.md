@@ -1,12 +1,17 @@
 ---
 name: tool-family-behavior-tests
-behavior_version: 1
+behavior_version: 2
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/__init__.py
+  - src/lingtai/tools/tool_family/settings.py
   - src/lingtai/tools/tool_family/manual.py
+  - src/lingtai/kernel/tool_plugin/settings.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/psyche/CONTRACT.md
@@ -15,6 +20,7 @@ related_files:
   - tests/test_file_tool_family.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_family_manual_contract.py
+  - tests/test_tool_settings_contract.py
   - tests/test_psyche_family.py
   - tests/test_mcp_identity_discovery.py
   - tests/test_email_abs_reply_route.py
@@ -24,8 +30,8 @@ maintenance: |
   for the generic ChildTool/ToolFamily infrastructure and the migrating
   families (file, avatar, psyche, mcp, email). When a guarded contract changes
   in a way that affects agent-observable behavior (envelope errors, receipts,
-  manual result shape, identity projection, reply routing), update the matching
-  LABT here in the same change. Each LABT is self-contained: an agent executes
+  settings SHOW inventory, manual result shape, identity projection, reply
+  routing), update the matching LABT here in the same change. Each LABT is self-contained: an agent executes
   it verbatim with only the tools it names, never by opening another file.
 ---
 # ToolFamily Behavior Tests
@@ -617,3 +623,51 @@ raw value/path/exception string, or if any wording implies
 `session_journal_path` must be relative. Forbidden side effect: any rejected
 molt call (with or without a diagnostic) must shed no context and write no
 new snapshot/summary/session state.
+
+## Behavior T011 — settings SHOW is fresh, redaction-safe, bounded, and never mutates
+
+- **id**: T011
+- **title**: settings SHOW is fresh, redaction-safe, bounded, and never mutates
+- **guards**: `tool-family` §
+  [Opt-in settings controller](CONTRACT.md#opt-in-settings-controller) and §
+  [Contract rules](CONTRACT.md#contract-rules)
+- **runner**: any LingTai agent with `shell` and `file` access to a clean
+  checkout of the `lingtai-kernel` repository
+- **prerequisites**: a clean checkout; a working `.venv/`
+- **estimate**: ≈ 1 minute
+
+### Steps
+
+1. Run the focused SHOW controller proof:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" \
+     .venv/bin/python -m pytest -q -p no:cacheprovider \
+     tests/test_tool_settings_contract.py
+   ```
+
+2. Confirm the cases exercise fresh resolve-only owner reads, public and
+   redacted rows, unavailable and malformed owner results, forbidden non-empty
+   input, and an inventory whose complete canonical encoding exceeds 65,536
+   UTF-8 bytes.
+
+### Expected evidence
+
+- [ ] Every inventory row contains its required `manual_ref`; redacted rows
+      retain safe metadata while current/default values are `<redacted>`.
+- [ ] Invalid input performs no owner call, and neither configurable nor fixed
+      rows cause any owner state change.
+- [ ] An owner exception, wrong state type, wrong value kind, or undeclared
+      source yields bounded `OWNER_RESOLVE_FAILED` output with no owner prose or
+      fabricated effective value.
+- [ ] An oversized complete response yields only
+      `SETTINGS_RESPONSE_TOO_LARGE` with `max_bytes: 65536` and no `settings`
+      rows or truncated values.
+
+### Pass / Fail
+
+Pass when every box above is observed. Fail if the action mutates state, accepts
+anything except `{}`, hides the manual route during redaction, leaks owner
+details, truncates an inventory, or returns a partial oversized response.
+Record the exact command output in the task report. This task performs no
+writes.

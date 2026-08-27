@@ -1,6 +1,6 @@
 ---
 name: declared-host-tool-plugin
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -98,7 +98,9 @@ maintenance: |
 # Declared Host Tool Plugin Contract
 
 ## Purpose
-Guarded by: [TP001](BEHAVIORS.md#behavior-tp001), [TP002](BEHAVIORS.md#behavior-tp002)
+Guarded by: [TP001](BEHAVIORS.md#behavior-tp001),
+[TP002](BEHAVIORS.md#behavior-tp002), and
+[TP003](BEHAVIORS.md#behavior-tp003).
 
 This component is the kernel's boundary for **one declared official**
 model-facing tool plugin. Every official tool family in this distribution
@@ -170,8 +172,9 @@ Coding agents and LingTai agents MUST observe the following.
 - **Do not self-register.** Binding composes and validates. Activation and
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
-- **Settings are declaration-local opt-in.** Never infer, scan, or globally
-  activate them. Follow the [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
+- **Settings are declaration-local SHOW opt-in.** Never infer, scan, or
+  globally activate them, and never use the reserved action to mutate state.
+  Follow the [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
   when a later owner PR opts in.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
@@ -228,8 +231,10 @@ capability.
 
 `SettingSpec` owns static metadata once; `SettingState` adds only runtime facts.
 One bounded normalizer accepts the six closed kinds and rejects mappings or
-recursion. `SettingMutationReceipt` preserves tri-state commit and application
-truth without owner prose.
+recursion. The public owner-authoring surface is consistent:
+`SettingSpec`, `SettingState`, `ToolSettingsContract`, and the resolve-only
+`SettingOwner` are all exported together. No mutation receipt or generic
+operation/application state machine exists.
 
 | Port | Operation | Promise |
 |---|---|---|
@@ -401,11 +406,14 @@ This component never selects.
    `binder`; and a duplicate-free `requires` drawn only from
    `GRANTABLE_HOST_PORTS`. A violation raises `ToolPluginDeclarationError` at
    import.
-2. **The reserved `manual` action is appended, never declared.**
-   `public_actions` is `actions + ("manual",)` and `public_input_schemas()`
-   adds the declaration's own `manual_input_schema`. The family still owns the
-   manual child's handler and its packaged or installed source; this component
-   only guarantees the reserved slot exists exactly once and last. The
+2. **The reserved `manual` action is appended, never declared.** Without a
+   settings opt-in, `public_actions` is `actions + ("manual",)`. With an
+   explicit settings contract it is `actions + ("settings", "manual")`.
+   `public_input_schemas()` composes declared schemas in declaration order,
+   then the optional settings schema, then the declaration's own
+   `manual_input_schema`. The family still owns the manual child's handler and
+   its packaged or installed source; this component only guarantees the
+   reserved slot exists exactly once and last. The
    reserved-action rule itself remains normative in
    [`src/lingtai/tools/CONTRACT.md`](../../tools/CONTRACT.md).
 3. **`OFFICIAL_TOOL_PLUGIN_NAMES` is the reserved official namespace.** It is a
@@ -470,16 +478,26 @@ This component never selects.
    strict `input` schemas, the closed LTP root, result shapes, error
    vocabulary, authorization gates, or side effects. It is an internal
    least-privilege recut, not a new public capability.
-10. **Explicit identity-bound opt-in.** `None` preserves the old surface. An
-    explicit contract inserts `settings` before `manual`; `bind()` verifies the
-    opaque identity on the actual bound controller, before mount. The kernel
-    never resolves, persists, discovers, or globally activates settings.
+10. **Explicit identity-bound SHOW opt-in.** `None` preserves the old action
+    inventory, schema, and runtime behavior. An explicit contract inserts
+    `settings` immediately before `manual`; `bind()` verifies the opaque
+    identity on the actual bound controller before mount. `settings` accepts
+    only `input={}`. Each spec declares concise safe metadata and a required
+    bounded non-empty `manual_ref` to the exact owner manual section; its
+    `configurable` boolean means only that a canonical external owner route
+    exists. `SettingOwner` resolves current state only. This generic kernel
+    layer never reads or writes env/config, mutates a setting, performs an
+    apply/refresh/rebuild/relaunch, persists, discovers, or globally activates
+    settings. A later owner PR MUST prove each referenced section exists and
+    documents meaning, accepted values, precedence, canonical external change
+    path, and apply timing. Guarded by TP003.
 
 ## Contract tests
 
-`tests/test_tool_settings_contract.py` proves the synthetic contract, binding
-identity, and production opt-out; existing family suites prove their real
-schemas and dispatch remain unchanged.
+`tests/test_tool_settings_contract.py` proves the synthetic SHOW contract,
+binding identity, consistent public authoring exports, strict-empty input, and
+production opt-out; TP003 traces those normative rules to executable behavior.
+Existing family suites prove their real schemas and dispatch remain unchanged.
 
 `tests/test_tool_plugin_declaration.py` is the shared primitive/slice suite;
 `tests/test_deep_refresh.py` owns init reconstruction, including the opt-in Web

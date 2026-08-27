@@ -89,9 +89,11 @@ that generic dispatch route.
   correlation was adopted after a live non-strict Codex Responses probe on
   2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
   the current route (see `CONTRACT.md` "Contract rules").
-- `settings.py` — the identity-bearing controller: strict input, bounded kind
-  validation, positive-allowlist projection, tri-state owner receipts, and
-  fresh inventory resolution (`settings.py:1-260`).
+- `settings.py` — the identity-bearing SHOW controller: exact-empty input,
+  fresh resolve-only owner reads, bounded kind/source validation, safe-metadata
+  projection with value redaction, and one 65,536-byte canonical-JSON bound
+  that refuses the whole inventory instead of truncating it
+  (`settings.py:1-161`, guarded by T011).
 
 ### Diagnostics sidecar
 
@@ -300,7 +302,7 @@ boundaries.
 No mutable state lives at package root. `ToolFamily` instances are immutable
 after construction (a frozen child registry); `build_schema()` recomputes the
 model-facing schema on every call rather than caching one at construction.
-Any per-Agent state (engine specs, settings diagnostics, service caches)
+Any per-Agent state (engine specs, setting-owner state, service caches)
 belongs to the consuming family, as `WebManager` demonstrates.
 
 ## Notes
@@ -314,5 +316,6 @@ real intrinsic with a different composition shape. Building a family on
 `handle()`/schema composition instead, exactly as `web` did before adopting
 this package.
 
-This is opt-in machinery only. The [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
-routes later owner PRs; no production family is activated here.
+This is SHOW-only opt-in machinery. The [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
+routes later owner PRs to the canonical external change procedure; no
+production family is activated here.

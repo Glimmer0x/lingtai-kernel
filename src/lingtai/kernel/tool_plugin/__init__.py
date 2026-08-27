@@ -35,6 +35,9 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .settings import (
     SETTINGS_ACTION,
+    SettingOwner,
+    SettingSpec,
+    SettingState,
     ToolSettingsContract,
     _bound_settings_matches,
     settings_input_schema,
@@ -43,6 +46,9 @@ from .settings import (
 __all__ = [
     "MANUAL_ACTION",
     "SETTINGS_ACTION",
+    "SettingOwner",
+    "SettingSpec",
+    "SettingState",
     "ToolSettingsContract",
     "GRANTABLE_HOST_PORTS",
     "OFFICIAL_TOOL_PLUGIN_NAMES",
@@ -1090,7 +1096,7 @@ class ToolPluginDeclaration:
         return (*self.actions, SETTINGS_ACTION, MANUAL_ACTION)
 
     def public_input_schemas(self) -> dict[str, Mapping[str, Any]]:
-        """Return public input schemas in public action order."""
+        """Return declared schemas plus the generically composed reserved schemas."""
         schemas: dict[str, Mapping[str, Any]] = dict(self.input_schemas)
         if self.settings is not None:
             schemas[SETTINGS_ACTION] = settings_input_schema()
@@ -1101,13 +1107,12 @@ class ToolPluginDeclaration:
         """Compose this family against a granted host facade.
 
         Pure composition: it must not mount, start, spawn, or connect anything.
-        The bound plugin's name is checked against the declaration so a family
-        cannot bind itself onto a different model-facing name than the one the
-        kernel reserved, and its advertised action inventory is checked against
-        :attr:`public_actions` so a family cannot ship a public surface it did
-        not declare. Both checks run on every boot, in the registrar's own
-        path — declared-versus-shipped agreement is enforced here, not merely
-        asserted once in a test.
+        Three declaration gates run on every boot: the bound plugin's name must
+        match the reserved name, the bound settings controller must carry this
+        declaration's exact opt-in identity (or be absent when opted out), and
+        the advertised action inventory must equal :attr:`public_actions`.
+        Declared-versus-shipped agreement is enforced here in the registrar's
+        own path, not merely asserted once in a test.
         """
         if not isinstance(host, ToolPluginHost):
             raise HostPortError(

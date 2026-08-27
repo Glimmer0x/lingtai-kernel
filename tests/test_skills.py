@@ -1136,6 +1136,66 @@ def test_resident_prompts_route_to_system_manual_nested_references():
     assert "reference/procedures-manual/SKILL.md" in procedures
 
 
+def test_system_manual_catalog_and_router_recur_for_every_direct_reference():
+    root = Path(__file__).resolve().parents[1]
+    manual_path = (
+        root / "src" / "lingtai" / "intrinsic_skills" / "system-manual" / "SKILL.md"
+    )
+    body = manual_path.read_text(encoding="utf-8")
+    catalog_match = re.search(
+        r"## Nested reference catalog.*?```yaml\n(?P<catalog>.*?)\n```",
+        body,
+        re.DOTALL,
+    )
+    assert catalog_match is not None
+
+    import yaml
+
+    catalog = yaml.safe_load(catalog_match.group("catalog"))
+    assert isinstance(catalog, list)
+    names = [entry["name"] for entry in catalog]
+    locations = [entry["location"] for entry in catalog]
+    assert len(names) == len(set(names))
+    assert len(locations) == len(set(locations))
+
+    expected_locations = sorted(
+        path.relative_to(manual_path.parent).as_posix()
+        for path in (manual_path.parent / "reference").glob("*/SKILL.md")
+    )
+    assert sorted(locations) == expected_locations
+
+    router = body.split("## Router table", 1)[1].split("\n## ", 1)[0]
+    for location in locations:
+        assert f"`{location}`" in router, f"catalog entry is unroutable: {location}"
+
+
+def test_tool_plugin_settings_reference_routes_show_and_external_change_truth():
+    root = Path(__file__).resolve().parents[1]
+    manual = (
+        root
+        / "src"
+        / "lingtai"
+        / "intrinsic_skills"
+        / "system-manual"
+        / "reference"
+        / "tool-plugin-settings"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "`settings` is pure SHOW and progressive disclosure",
+        "`settings(input={})`",
+        "`manual_ref`",
+        "`configurable=true`",
+        "canonical external owner route exists",
+        "canonical Shell/File/config/",
+        "must test that each declared reference resolves to a real section",
+        "65,536 UTF-8 bytes",
+        "`SETTINGS_RESPONSE_TOO_LARGE`",
+        "first production owner must repeat the\nlive provider probe",
+    ):
+        assert required in manual
+
+
 def test_skills_manual_documents_external_skill_intake_default():
     manual = (
         Path(__file__).resolve().parents[1]
