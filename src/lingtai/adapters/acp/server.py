@@ -244,7 +244,15 @@ class AcpStdioServer:
     _OUTBOUND_QUEUE_BATCHES = 64
     _PERMISSION_TIMEOUT_SECONDS = 60.0
 
-    def __init__(self, agent, input_stream: TextIO, output_stream: TextIO):
+    def __init__(
+        self,
+        agent,
+        input_stream: TextIO,
+        output_stream: TextIO,
+        *,
+        fixed_execution_workspace: ExecutionWorkspace | None = None,
+        allow_session_mcp: bool = True,
+    ):
         self._agent = agent
         self._input = input_stream
         self._output = output_stream
@@ -253,6 +261,8 @@ class AcpStdioServer:
         self._session_id: str | None = None
         self._session_pending = False
         self._execution_workspace: ExecutionWorkspace | None = None
+        self._fixed_execution_workspace = fixed_execution_workspace
+        self._allow_session_mcp = allow_session_mcp
         self._session_mcp_lease = None
         self._active: _ActivePrompt | None = None
         self._closing = False
@@ -541,7 +551,21 @@ class AcpStdioServer:
             raise _RpcError(INVALID_PARAMS, "cwd must exist") from exc
         if not resolved_cwd.is_dir():
             raise _RpcError(INVALID_PARAMS, "cwd must be a directory")
-        configs = self._stdio_mcp_configs(mcp_servers)
+        if self._fixed_execution_workspace is not None:
+            if resolved_cwd != self._fixed_execution_workspace.root:
+                raise _RpcError(
+                    INVALID_PARAMS,
+                    "cwd must match the profile's fixed execution workspace",
+                )
+        if not self._allow_session_mcp:
+            if mcp_servers != []:
+                raise _RpcError(
+                    INVALID_PARAMS,
+                    "mcpServers must be an empty array for this profile",
+                )
+            configs: tuple[StdioMCPServerConfig, ...] = ()
+        else:
+            configs = self._stdio_mcp_configs(mcp_servers)
         additional_directories = params.get("additionalDirectories")
         if additional_directories not in (None, []):
             raise _RpcError(
@@ -567,7 +591,7 @@ class AcpStdioServer:
             except Exception as exc:
                 raise _RpcError(INTERNAL_ERROR, "session MCP startup failed") from exc
 
-            workspace = ExecutionWorkspace(resolved_cwd)
+            workspace = self._fixed_execution_workspace or ExecutionWorkspace(resolved_cwd)
             with self._state_lock:
                 if self._closing:
                     raise _RpcError(UNSUPPORTED, "adapter is closing")

@@ -123,7 +123,12 @@ def build_llm_service(data: dict, working_dir: Path) -> LLMService:
     )
 
 
-def build_agent(data: dict, working_dir: Path) -> Agent:
+def build_agent(
+    data: dict,
+    working_dir: Path,
+    *,
+    _forced_disable: frozenset[str] | None = None,
+) -> Agent:
     """Construct Agent from validated init data.
 
     Creates a minimal Agent (LLMService + working_dir + mail_service),
@@ -170,6 +175,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
             ensure_ascii=False,
         ),
         streaming=m.get("streaming", False),
+        _forced_disable=_forced_disable,
         _from_init_boot=True,
     )
 
@@ -548,6 +554,8 @@ def main() -> None:
     add_daemon_parser(sub)
     from lingtai.cli_acp import add_acp_parser
     add_acp_parser(sub)
+    from lingtai.cli_puffo_v0 import add_puffo_v0_parser
+    add_puffo_v0_parser(sub)
     from lingtai.cli_project import add_project_parser
     add_project_parser(sub)
 
@@ -621,6 +629,10 @@ def main() -> None:
         from lingtai.cli_acp import handle_acp_command
 
         handle_acp_command(args)
+    elif args.command == "puffo-v0":
+        from lingtai.cli_puffo_v0 import handle_puffo_v0_command
+
+        handle_puffo_v0_command(args)
     elif args.command == "project":
         from lingtai.cli_project import handle_project_command
 

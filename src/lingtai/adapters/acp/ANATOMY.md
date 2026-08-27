@@ -5,8 +5,10 @@ related_files:
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
+  - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
+  - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli.py
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
@@ -19,6 +21,7 @@ related_files:
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_acp_stdio.py
+  - tests/test_puffo_v0_profile.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
@@ -54,6 +57,10 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   transport and active prompt without making stdout teardown authority. Implements
   behavior [ACP001](BEHAVIORS.md#behavior-acp001).
 - `__init__.py` — small public package export for the protocol version and server.
+- `puffo_v0.py` — local operator registry for the constrained `puffo-v0`
+  profile. It resolves an opaque runtime id to one canonical persistent identity
+  and workspace, verifies a configuration digest, and refuses missing, malformed,
+  tampered, or revoked entries before Agent construction.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
   quarantines Python application stdout to stderr before Agent construction,
   composes the existing Agent, consumes the typed bounded stop proof, and hard-
@@ -61,6 +68,9 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   Shared poisoned-worker exit logging is lease-aware: retained ownership may log,
   while a successful `STOPPED` release skips every later workdir append and still
   reaches the unconditional process exit.
+- `../../cli_puffo_v0.py` — local-only control plane that provisions an existing
+  persistent identity or revokes it for future `puffo-v0` launches; it is not an
+  ACP data-plane surface.
 - `../../kernel/process_match.py` — exact duplicate-host grammar for module,
   console, legacy, and quoted Windows `.exe` ACP launch forms.
 - `../../kernel/turns.py`, `../../kernel/execution_workspace.py`, `../../kernel/turn_events.py`, `../../kernel/turn_permissions.py`, and `../../kernel/tool_executor.py` — inward Core boundary consumed by the Adapter:
@@ -70,7 +80,7 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   They contain no ACP vocabulary.
 - `../../services/session_mcp.py` — atomic outer stdio overlay: start/list all,
   collision preflight, one publication, explicit lease, and rollback/close.
-- `tests/test_acp_stdio.py` / `tests/test_correlated_turns.py` /
+- `tests/test_acp_stdio.py` / `tests/test_puffo_v0_profile.py` / `tests/test_correlated_turns.py` /
   `tests/test_turn_events.py` / `tests/test_turn_permissions.py` / `tests/test_tool_executor.py` /
   `tests/test_process_match.py` — wire, Core settlement, and duplicate-host
   conformance evidence. `tests/test_tools_package_data.py` pins wheel/sdist
@@ -79,7 +89,10 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 ## Connections
 
 Inbound: a local ACP client launches `lingtai-agent acp --agent-dir <dir>` and
-exchanges one JSON-RPC object per stdio line. Outbound: the Adapter calls only the
+exchanges one JSON-RPC object per stdio line. The constrained Puffo profile instead
+launches `lingtai-agent acp --profile puffo-v0 --runtime-id <opaque-id>`; its
+registry resolves the full spawn identity locally and server policy fixes the
+workspace and denies session MCP. Outbound: the Adapter calls only the
 protocol-neutral `BaseAgent.submit_turn`/`TurnHandle` boundary with an optional
 turn-scoped tool observer. The CLI root
 reuses `cli.load_init`, `cli.build_agent`, venv resolution, logging, lifecycle,
@@ -101,8 +114,10 @@ one lock-owned pending-permission registry,
 closing/aborted generation, a bounded 64-batch FIFO, one disposable
 daemon writer, and short-lived waiter thread records. Active/busy ownership lasts
 through physical terminal-batch completion, close invalidation, or fatal abort.
-ACP session/correlation identifiers are not persisted. Durable agent state remains
-owned by the existing Agent/workdir lifecycle. Closing requests active cancellation
+ACP session/correlation identifiers are not persisted. `puffo-v0` additionally
+reads an operator-managed local registry at spawn time; it neither creates a
+durable ACP session nor changes the Agent's own durable identity state. Durable
+agent state remains owned by the existing Agent/workdir lifecycle. Closing requests active cancellation
 and suppresses prompt frames that have not crossed the writer start check; typed
 Agent stop retains services/heartbeat/lease until execution quiescence is proven.
 
@@ -114,3 +129,7 @@ plus baseline Text and ResourceLink prompts are accepted; remote MCP and
 capability-gated rich content fail explicitly. Capability objects stay empty so omitted optional
 features are never advertised. Follow the manual and Contract before widening
 scope.
+
+`puffo-v0` is a second gate on its controlled entrypoint, not host isolation:
+the same OS identity can still alter the registry or bypass it by launching the
+generic `--agent-dir` ACP command. That is an explicit host trust boundary.

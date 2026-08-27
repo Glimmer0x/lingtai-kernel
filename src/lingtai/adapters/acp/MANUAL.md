@@ -3,8 +3,10 @@ related_files:
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/BEHAVIORS.md
+  - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
+  - src/lingtai/cli_puffo_v0.py
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
@@ -13,6 +15,7 @@ related_files:
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_acp_stdio.py
+  - tests/test_puffo_v0_profile.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
@@ -74,6 +77,71 @@ stdin/stdout. Do not run the command interactively and type prose into stdin:
 each input line must be one complete JSON-RPC object. The agent directory keeps
 its ordinary workdir lease, so another live LingTai process cannot safely share
 it.
+
+### Constrained Puffo profile
+
+For Puffo Phase A, an operator first provisions an already-initialized,
+persistent LingTai identity and its canonical execution workspace locally:
+
+```bash
+lingtai-agent puffo-v0 provision \
+  --runtime-id puffo-agent-7 \
+  --agent-dir /operator/managed/agent \
+  --workspace /operator/managed/workspace
+```
+
+The controlled Puffo driver then launches only:
+
+```bash
+lingtai-agent acp --profile puffo-v0 --runtime-id puffo-agent-7
+```
+
+The ACP command accepts no profile `agent_dir` path. The runtime id is resolved
+through the local operator registry (`~/.lingtai/puffo-v0/runtime-registry.json`)
+to the entire canonical spawn configuration. The profile rejects an unknown,
+tampered, or revoked id before constructing the Agent. Revoke a future launch
+with `lingtai-agent puffo-v0 revoke --runtime-id puffo-agent-7`.
+
+In this profile, `session/new.cwd` must be exactly the provisioned workspace and
+`mcpServers` must be `[]`. The profile disables the `avatar`, `daemon`, and
+`mcp` capabilities even if the agent manifest asks for them, including after an
+in-process refresh. It therefore does not start child avatars, independent
+background work, manifest MCP, or client-supplied MCP processes.
+
+Permission requests remain intentionally small and fail closed: the client can
+receive only the existing tool id/title/status projection and can allow once or
+reject once. A Puffo UI must bind any approval to that concrete request and
+audit it; it cannot use approval to alter the executable, argv, environment,
+agent identity, workspace, or MCP configuration. This profile does not make a
+tool's already-started side effect safe to replay after an interrupted turn.
+
+`puffo-v0` is a second gate for this controlled entrypoint, not complete host
+isolation. A principal with the same OS authority can edit the local registry or
+invoke the generic `lingtai-agent acp --agent-dir ...` command directly; that is
+the host trust boundary, not a guarantee provided by this profile.
+
+### Puffo driver integration boundary
+
+The Puffo ACP driver owns the first gate. Before it starts this process, its
+single `open()` seam must derive a `ValidatedLaunchPlan` from the authorized
+Puffo route, local binding, and operator-managed configuration. That plan covers
+the executable, complete argv, environment, workspace, and the fixed empty MCP
+session plan; `_spawn` must accept only that validated type. The only
+identity-bound command the seam may emit is:
+
+```bash
+lingtai-agent acp --profile puffo-v0 --runtime-id <operator-bound-id>
+```
+
+Lingtai is deliberately not a substitute for that driver proof: it has no way
+to attest to another process's executable, argv, or environment. Its second
+gate accepts only the opaque id and re-resolves the canonical local identity and
+workspace. A message sender cannot submit either a LingTai identity id or a
+filesystem path.
+
+The Puffo OpenCode driver is explicitly outside this trust path. It must not
+launch a `puffo-v0` bound identity or be presented as an alternative identity
+binding entrypoint; only the ACP driver participates in this profile.
 
 ## Wire sequence
 

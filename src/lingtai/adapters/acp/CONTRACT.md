@@ -1,14 +1,16 @@
 ---
 name: acp-local-stdio
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
+  - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
+  - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli.py
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
@@ -21,6 +23,7 @@ related_files:
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - pyproject.toml
   - tests/test_acp_stdio.py
+  - tests/test_puffo_v0_profile.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
@@ -54,7 +57,8 @@ multi-session persistence are not advertised.
 
 ## Behavior
 
-Guarded by: [ACP001](BEHAVIORS.md#behavior-acp001).
+Guarded by: [ACP001](BEHAVIORS.md#behavior-acp001) and
+[ACP002](BEHAVIORS.md#behavior-acp002).
 
 A successful process negotiates ACP protocol version `1`, creates exactly one
 opaque session, accepts baseline Text and ResourceLink prompt blocks, emits the
@@ -90,6 +94,12 @@ a typed bounded stop on EOF or interrupt. A timed-out/non-quiescent stop retains
 services, heartbeat, and lease until the process owner hard-exits; no later Python
 state write can occur after OS release. It adds no dependency and uses standard
 library JSON/threading streams directly.
+
+`puffo_v0` and `cli_puffo_v0` provide a narrower composition profile. An
+operator locally provisions an existing persistent identity and canonical
+execution workspace under an opaque runtime id. The profile data plane receives
+only that id; it never accepts an agent directory, workspace path, executable,
+argv, environment, or MCP command from the remote caller.
 
 ## Contract rules
 
@@ -204,6 +214,27 @@ library JSON/threading streams directly.
    Arguments, commands, paths, environment, results, content, locations, raw
    input/output, internal errors, and private paths never enter permission wire.
    The existing risky-action gate remains first and may deny without a request.
+11. `acp-local-stdio.puffo-v0.v1` — `lingtai-agent acp --profile puffo-v0
+    --runtime-id <id>` resolves `<id>` only through the local
+    operator-managed registry. The entry must be active, structurally exact,
+    digest-valid, and point to an initialized agent directory and existing
+    canonical workspace. A profile session accepts only that workspace and
+    `mcpServers: []`; it never starts a client-supplied process. The composed
+    Agent forcibly disables `avatar`, `daemon`, and `mcp`, including after an
+    in-process refresh. Permission remains one-shot and fail-closed under rule
+    10: only the existing minimal metadata projection reaches the ACP client;
+    a permission answer cannot change startup configuration. `puffo-v0` creates
+    neither a persistent ACP session nor a background worker, and it does not
+    make ordinary tool side effects safe to retry. A revoked registry entry
+    denies only future profile spawns. This is a controlled-entrypoint guard,
+    not host isolation: an OS principal able to edit the registry or launch the
+    generic `--agent-dir` command remains outside this profile's threat model.
+    The required Puffo integration seam is outside this repository: before ACP
+    spawn, Puffo's trusted ACP driver must derive its `ValidatedLaunchPlan`
+    (executable, complete argv, environment, workspace, and empty MCP session
+    plan) from operator-managed binding/configuration, then emit only this
+    profile command and opaque id. `puffo-v0` identity binding is valid only
+    through that ACP entrypoint; Puffo's OpenCode driver is explicitly excluded.
 
 ## Contract tests
 
@@ -215,6 +246,9 @@ session/busy/unsupported errors, strict JSON line framing, invalid UTF-8, EOF,
 blocked coordinator/prompt output, FIFO/generation/queue-full/write-failure paths,
 Agent-stop-with-open-stdin, Windows duplicate-before-cleanup, typed quiescence,
 and CLI Python-stdout quarantine/hard-exit ownership.
+`tests/test_puffo_v0_profile.py` pins opaque-id provisioning/resolution,
+tamper/revocation rejection, forced capability removal, fixed-workspace and
+empty-session-MCP rejection, and profile CLI composition.
 `tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_turn_permissions.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP
 wire tests pin workspace rooting/escape/isolation, stdio validation, atomic
 publication/rollback, collisions, and close/EOF ownership.
