@@ -2247,12 +2247,23 @@ class Agent(BaseAgent):
             or new_context_window != getattr(self.service, "_context_window", None)
             or new_provider_defaults_bucket != cur_provider_defaults_bucket
         ):
-            self.service = LLMService(
+            rebuilt_service = LLMService(
                 provider=new_provider, model=new_model,
                 api_key=api_key, base_url=new_base_url,
                 context_window=new_context_window,
                 provider_defaults=new_provider_defaults,
             )
+            # A constrained composition wraps every provider route at Core's
+            # service boundary.  Refresh may rebuild the concrete adapter, but
+            # must never replace that wrapper with a raw LLMService.
+            if self._provider_call_admission_port is None:
+                self.service = rebuilt_service
+            else:
+                from .kernel.provider_admission import ProviderAdmittedLLMService
+
+                self.service = ProviderAdmittedLLMService(
+                    rebuilt_service, self._provider_call_admission_port
+                )
             self._session._llm_service = self.service
 
         # Reload admin from init.json (avatars have admin: {}, not inherited from parent)

@@ -354,7 +354,9 @@ Clause IDs are stable; each rule composes the linked normative source.
    `ProviderCallAdmissionPort` turns the service boundary into the single
    structural provider-call gate. Core binds a `RootProviderAdmission` only
    after the final correlated-turn origin check, and service/session proxies
-   call the Port before each provider request. A Port returns exactly one of
+   call the Port before each provider request. A live refresh that rebuilds
+   the concrete provider adapter MUST reapply the same admitted-service
+   wrapper before publishing it to the session. A Port returns exactly one of
    `GRANTED`, `DENIED`, or `INDETERMINATE`; only `GRANTED` may reach the
    provider. No bound parent, a malformed Port response, a Port exception, an
    explicit denial, or indeterminate authority MUST prevent the underlying

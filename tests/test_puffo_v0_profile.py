@@ -26,6 +26,7 @@ from lingtai.adapters.acp.server import AcpStdioServer, INVALID_PARAMS
 from lingtai.agent import Agent
 from lingtai.kernel.execution_workspace import ExecutionWorkspace
 from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.provider_admission import ProviderAdmittedLLMService
 from lingtai.kernel.turns import TurnAdmissionError, TurnOrigin, submit_turn
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 from tests.test_deep_refresh import _make_init
@@ -487,6 +488,38 @@ def test_full_tool_profile_refresh_does_not_erase_operator_managed_capabilities(
         agent._setup_from_init()
         registered = {name for name, _ in agent._capabilities}
         assert {"avatar", "daemon", "mcp"} <= registered
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_profile_refresh_preserves_the_provider_admission_service_boundary(tmp_path):
+    """Refresh cannot replace a profile's admitted service with raw LLM I/O."""
+    (tmp_path / "init.json").write_text(
+        json.dumps(_make_init(capabilities={"avatar": {}, "daemon": {}, "mcp": {}})),
+        encoding="utf-8",
+    )
+    service = MagicMock()
+    service.provider = "different-provider"  # Force the refresh rebuild path.
+    service.model = "different-model"
+    service._base_url = None
+    service._context_window = None
+    service._provider_defaults = {}
+    agent = Agent(
+        service,
+        agent_name="profile-refresh-admission",
+        working_dir=tmp_path,
+        config=AgentConfig(),
+        _turn_origin_policy=RUNTIME_POLICY,
+        provider_call_admission_port=RUNTIME_POLICY,
+        _from_init_boot=True,
+    )
+    agent._from_init_boot = False
+    try:
+        agent._setup_from_init()
+
+        assert isinstance(agent.service, ProviderAdmittedLLMService)
+        assert agent._session._llm_service is agent.service
+        assert agent.service._port is RUNTIME_POLICY
     finally:
         agent.stop(timeout=1.0)
 
