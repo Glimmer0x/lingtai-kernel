@@ -1127,8 +1127,19 @@ def test_cli_composition_quarantines_application_stdout_and_stops_agent(
     assert fake_agent.started and fake_agent.stopped
 
 
-def test_cli_forced_mcp_disable_reaches_the_session_server(tmp_path, monkeypatch):
-    """Generic ACP must retain the historical forced-disable MCP boundary."""
+@pytest.mark.parametrize(
+    ("forced_disable", "expected_allow_session_mcp"),
+    [
+        (None, True),
+        (frozenset(), True),
+        (frozenset({"avatar"}), True),
+        (frozenset({"mcp"}), False),
+    ],
+)
+def test_cli_forced_disable_preserves_generic_session_mcp_semantics(
+    tmp_path, monkeypatch, forced_disable, expected_allow_session_mcp
+):
+    """Generic ACP disables session MCP only when its forced policy names MCP."""
 
     import lingtai.adapters.acp as acp_package
     import lingtai.cli as cli
@@ -1148,8 +1159,17 @@ def test_cli_forced_mcp_disable_reaches_the_session_server(tmp_path, monkeypatch
     observed = {}
 
     class FakeServer:
-        def __init__(self, _agent, _input, _output, **kwargs):
-            observed.update(kwargs)
+        def __init__(
+            self,
+            _agent,
+            _input,
+            _output,
+            *,
+            fixed_execution_workspace=None,
+            allow_session_mcp=True,
+        ):
+            observed["fixed_execution_workspace"] = fixed_execution_workspace
+            observed["allow_session_mcp"] = allow_session_mcp
 
         def serve(self):
             return None
@@ -1170,10 +1190,10 @@ def test_cli_forced_mcp_disable_reaches_the_session_server(tmp_path, monkeypatch
         tmp_path,
         input_stream=io.StringIO(),
         output_stream=io.StringIO(),
-        forced_disable=frozenset({"mcp"}),
+        forced_disable=forced_disable,
     )
 
-    assert observed["allow_session_mcp"] is False
+    assert observed["allow_session_mcp"] is expected_allow_session_mcp
 
 
 def test_cli_poison_force_exit_skips_log_after_successful_stop_releases_lease(
