@@ -146,9 +146,13 @@ provider-call Port is crossed immediately before each such request, so a
 missing or denied parent cannot fall through to the provider service. The
 currently available daemon and avatar tools still use their historical
 independent execution routes; they are not covered by this root-only Core
-slice. Before treating `puffo-v0` as a complete all-turn profile, the driver
-must provide host-mediated derived admission for each daemon/avatar provider
-call. Future child turns must carry verified ancestry from an admitted prompt.
+slice. Their provider calls currently fail closed with
+`derived_admission_port_unconnected`; this is not a permissive placeholder.
+Before treating `puffo-v0` as a complete all-turn profile, the driver must
+provide host-mediated derived admission for each daemon/avatar provider call.
+Future child turns must carry verified ancestry from an admitted prompt, and
+the driver must decide at every actual provider call against then-current
+authority rather than reusing a turn-start grant.
 This is an initiation boundary, not content provenance: non-ACP systems can
 still write state which a later authenticated prompt may cause the model to
 read. Existing minimal ACP permission projection does not alter launch inputs,

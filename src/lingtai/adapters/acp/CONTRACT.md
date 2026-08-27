@@ -239,9 +239,11 @@ argv, environment, or MCP command from the remote caller.
     direct authenticated ACP root prompts at the actual root provider request,
     while inbox, task-card, alarm, mail/MCP wake, and other independent root
     events are denied before provider dispatch. Daemon and avatar still use
-    their historical independent execution routes; they require the separate
-    driver-mediated derived-admission transport before this profile can claim
-    all provider/model turns are covered. This controls who may start a root
+    their historical independent execution routes; their current derived
+    admission result is explicit `derived_admission_port_unconnected` and is
+    rejected before provider I/O. They require the separate driver-mediated
+    derived-admission transport before this profile can claim all
+    provider/model turns are covered. This controls who may start a root
     turn, not what state a later admitted turn may read: non-ACP sources may
     still write state. The profile adds no `external_send` approval
     boundary and does not promise workspace-only writes, process containment,
@@ -288,9 +290,10 @@ tamper/revocation rejection, full-tool composition, fixed-workspace and
 empty-session-MCP rejection, authenticated-adapter admission, and profile CLI
 composition. `tests/test_correlated_turns.py` independently proves an
 untrusted inbox event cannot reach provider dispatch under this profile policy.
-`tests/test_provider_admission.py` independently proves a missing or denied
-provider admission cannot reach the underlying provider service and that the
-typed call class is not inferred from request text.
+`tests/test_provider_admission.py` independently proves a missing, denied, or
+indeterminate provider admission cannot reach the underlying provider service;
+that each provider request needs a new decision rather than reusing a previous
+grant; and that the typed call class is not inferred from request text.
 `tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_turn_permissions.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP
 wire tests pin workspace rooting/escape/isolation, stdio validation, atomic
 publication/rollback, collisions, and close/EOF ownership.

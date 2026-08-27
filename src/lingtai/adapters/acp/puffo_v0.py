@@ -15,6 +15,7 @@ from typing import Any, Iterator
 from lingtai.kernel.turns import TurnAdmissionDecision, TurnOrigin
 from lingtai.kernel.provider_admission import (
     ProviderAdmissionParent,
+    ProviderAdmissionState,
     ProviderCallClass,
     ProviderCallDecision,
     RootProviderAdmission,
@@ -68,11 +69,15 @@ class PuffoV0RuntimePolicy:
             and parent.policy_version == self.policy_version
         )
         return ProviderCallDecision(
-            allowed=allowed,
+            state=(
+                ProviderAdmissionState.GRANTED
+                if allowed
+                else ProviderAdmissionState.INDETERMINATE
+            ),
             reason_code=(
                 "allowed"
                 if allowed
-                else "host_mediated_derived_admission_required"
+                else "derived_admission_port_unconnected"
             ),
         )
 

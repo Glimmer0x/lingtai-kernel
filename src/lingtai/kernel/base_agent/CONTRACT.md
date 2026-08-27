@@ -354,15 +354,22 @@ Clause IDs are stable; each rule composes the linked normative source.
    `ProviderCallAdmissionPort` turns the service boundary into the single
    structural provider-call gate. Core binds a `RootProviderAdmission` only
    after the final correlated-turn origin check, and service/session proxies
-   call the Port before each provider request. No bound parent, a malformed
-   Port response, a Port exception, or an explicit denial MUST prevent the
-   underlying provider request. The parent is a Core-private in-memory object;
+   call the Port before each provider request. A Port returns exactly one of
+   `GRANTED`, `DENIED`, or `INDETERMINATE`; only `GRANTED` may reach the
+   provider. No bound parent, a malformed Port response, a Port exception, an
+   explicit denial, or indeterminate authority MUST prevent the underlying
+   provider request. The parent is a Core-private in-memory object;
    correlation ids, paths, registry digests, prompt content, and tool output
-   are not credentials. A derived daemon/avatar call must use a typed derived
-   parent and cross the Port again for each actual provider call; it cannot
-   reuse a root grant. This rule prevents accidental or structurally separate
-   non-admitted paths. It does not claim that a full-tool Agent sharing the
-   same OS trust domain as Core is sandboxed from its own host process.
+   are not credentials. A derived daemon/avatar call uses a typed parent with
+   an internal non-serializable handle and crosses the Port again for each
+   actual provider call; it cannot reuse a root grant. Until the driving host
+   connects derived admission, the profile returns explicit
+   `derived_admission_port_unconnected` indeterminacy and rejects before
+   provider I/O. The future host Port MUST decide against authority current at
+   that call, not a turn-start snapshot or an implicit cache. This rule
+   prevents accidental or structurally separate non-admitted paths. It does
+   not claim that a full-tool Agent sharing the same OS trust domain as Core is
+   sandboxed from its own host process.
 
 ## Contract tests
 

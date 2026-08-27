@@ -9,7 +9,7 @@ cross this one boundary.
 from __future__ import annotations
 
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
 
@@ -20,6 +20,21 @@ class ProviderCallClass(str, Enum):
     ROOT = "root"
     DAEMON = "daemon"
     AVATAR_CHILD = "avatar_child"
+
+
+class ProviderAdmissionState(str, Enum):
+    """The driver-visible result of deciding one provider-call admission.
+
+    ``INDETERMINATE`` is deliberately distinct from a policy denial: it means
+    the driving authority was unavailable, malformed, or otherwise unable to
+    establish the current call's authority.  Core fails closed for both states,
+    but keeping the distinction makes an unconnected integration visible rather
+    than silently equivalent to an ordinary rejection.
+    """
+
+    GRANTED = "granted"
+    DENIED = "denied"
+    INDETERMINATE = "indeterminate"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,16 +51,58 @@ class RootProviderAdmission:
 
 
 @dataclass(frozen=True, slots=True)
+class _DerivedAdmissionHandle:
+    """Core-private, non-serializable identity for a derived execution.
+
+    This is deliberately an object identity, not a path, runtime id,
+    correlation id, or digest.  The future driver bridge may retain this
+    handle in an in-memory mapping, but it must never serialize it into the
+    Agent-visible process state.
+    """
+
+    marker: object = field(default_factory=object, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class DerivedProviderAdmission:
     """Core-private parent for a daemon/avatar provider call.
 
-    ``execution_ref`` is intentionally opaque.  It must not contain a path,
-    agent directory, workspace, argv, environment, or a reusable grant.
+    ``_handle`` is a Core-private in-memory identity.  It contains no path,
+    agent directory, workspace, argv, environment, correlation id, digest, or
+    reusable grant.
     """
 
     root: RootProviderAdmission
     call_class: ProviderCallClass
-    execution_ref: str
+    _handle: _DerivedAdmissionHandle = field(
+        default_factory=_DerivedAdmissionHandle, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.root, RootProviderAdmission):
+            raise TypeError("derived admission requires a root admission")
+        if self.call_class not in (
+            ProviderCallClass.DAEMON,
+            ProviderCallClass.AVATAR_CHILD,
+        ):
+            raise ValueError("derived admission requires daemon or avatar_child class")
+        if not isinstance(self._handle, _DerivedAdmissionHandle):
+            raise TypeError("derived admission handle must stay Core-private")
+
+
+def begin_derived_provider_admission(
+    root: RootProviderAdmission,
+    call_class: ProviderCallClass,
+) -> DerivedProviderAdmission:
+    """Issue a Core-private derived parent for one host-mediated execution.
+
+    The caller deliberately supplies no route, workspace, agent directory, or
+    string token.  The driver bridge may associate the returned object's hidden
+    handle with its own in-memory transport state, but authority is re-decided
+    when the actual provider call reaches :func:`require_provider_admission`.
+    """
+
+    return DerivedProviderAdmission(root=root, call_class=call_class)
 
 
 ProviderAdmissionParent = RootProviderAdmission | DerivedProviderAdmission
@@ -55,16 +112,24 @@ ProviderAdmissionParent = RootProviderAdmission | DerivedProviderAdmission
 class ProviderCallDecision:
     """A safe result of attempting one provider-call admission."""
 
-    allowed: bool
+    state: ProviderAdmissionState
     reason_code: str
+
+    @property
+    def allowed(self) -> bool:
+        """Compatibility projection; only an explicit grant is allowed."""
+
+        return self.state is ProviderAdmissionState.GRANTED
 
 
 class ProviderCallAdmissionPort(Protocol):
     """Driver-facing Core port, invoked once per actual provider call.
 
-    Returning ``allowed=True`` is the adapter's linearization point for that
-    one call.  Implementations must not cache a long-lived permit; Core calls
-    this method again for the next ``send`` or ``generate``.
+    Returning ``GRANTED`` is the adapter's linearization point for that one
+    call.  Implementations must decide against current authority, not a
+    turn-start snapshot or an implicit cache; Core calls this method again for
+    the next ``send`` or ``generate``.  Unavailable or malformed authority is
+    ``INDETERMINATE`` and fails closed before provider I/O.
     """
 
     def authorize_provider_call(
@@ -77,8 +142,13 @@ class ProviderCallAdmissionPort(Protocol):
 class ProviderAdmissionError(PermissionError):
     """Raised before a provider request when admission is absent or denied."""
 
-    def __init__(self, reason_code: str):
+    def __init__(
+        self,
+        reason_code: str,
+        state: ProviderAdmissionState = ProviderAdmissionState.DENIED,
+    ):
         self.reason_code = reason_code
+        self.state = state
         super().__init__(f"provider call was not admitted: {reason_code}")
 
 
@@ -145,13 +215,16 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
     try:
         decision = port.authorize_provider_call(parent, call_class)
     except Exception:
-        decision = ProviderCallDecision(False, "provider_admission_port_error")
+        decision = ProviderCallDecision(
+            ProviderAdmissionState.INDETERMINATE,
+            "provider_admission_port_error",
+        )
     if (
         not isinstance(decision, ProviderCallDecision)
-        or not isinstance(decision.allowed, bool)
+        or not isinstance(decision.state, ProviderAdmissionState)
         or not isinstance(decision.reason_code, str)
         or not decision.reason_code
-        or decision.allowed is not True
+        or decision.state is not ProviderAdmissionState.GRANTED
     ):
         reason = (
             decision.reason_code
@@ -160,7 +233,13 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
             and decision.reason_code
             else "provider_call_not_admitted"
         )
-        raise ProviderAdmissionError(reason)
+        state = (
+            decision.state
+            if isinstance(decision, ProviderCallDecision)
+            and isinstance(decision.state, ProviderAdmissionState)
+            else ProviderAdmissionState.INDETERMINATE
+        )
+        raise ProviderAdmissionError(reason, state)
 
 
 class ProviderAdmittedChatSession:
@@ -242,10 +321,12 @@ __all__ = [
     "ProviderAdmittedLLMService",
     "ProviderAdmissionError",
     "ProviderAdmissionParent",
+    "ProviderAdmissionState",
     "ProviderCallAdmissionPort",
     "ProviderCallClass",
     "ProviderCallDecision",
     "RootProviderAdmission",
+    "begin_derived_provider_admission",
     "bind_provider_admission",
     "clear_provider_admission",
     "clear_current_provider_admission",
