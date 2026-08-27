@@ -31,7 +31,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from lingtai.tools.tool_family import RESERVED_MANUAL_NAME, ChildTool, ToolFamily
+from lingtai.kernel.tool_plugin.settings import (
+    SettingOwner,
+    ToolSettingsContract,
+    settings_input_schema,
+)
+from lingtai.tools.tool_family import (
+    RESERVED_MANUAL_NAME,
+    RESERVED_SETTINGS_NAME,
+    ChildTool,
+    ToolFamily,
+)
 
 from . import _skill
 
@@ -91,6 +101,7 @@ class CuratedMcpPlugin:
     summary: str
     homepage: str
     skill_name: str
+    settings: ToolSettingsContract | None = None
 
     # Loaded from the package's bundled SKILL.md at construction. Excluded from
     # init/repr/eq: they are derived material, not part of the descriptor's
@@ -112,6 +123,10 @@ class CuratedMcpPlugin:
             raise CuratedMcpPluginError(
                 f"CuratedMcpPlugin package {self.package!r} must be the "
                 f"{self.name!r} module so its declared launcher is its own module"
+            )
+        if self.settings is not None and not isinstance(self.settings, ToolSettingsContract):
+            raise CuratedMcpPluginError(
+                f"CuratedMcpPlugin {self.name!r} has invalid settings"
             )
         frontmatter, body, path = _skill.load_skill(self.package)
         if frontmatter.get("name") != self.skill_name:
@@ -170,37 +185,44 @@ class CuratedMcpPlugin:
     # -- family composition -------------------------------------------------
 
     def actions(self, declared: Sequence[str]) -> tuple[str, ...]:
-        """Declared actions plus the reserved ``manual``, in that order."""
+        """Declared actions, optional ``settings``, then reserved ``manual``."""
         self._check_declared_names(declared)
-        return tuple(declared) + (MANUAL_ACTION,)
+        settings = (RESERVED_SETTINGS_NAME,) if self.settings is not None else ()
+        return (*declared, *settings, MANUAL_ACTION)
 
     def action_input_schemas(
         self, declared: Mapping[str, Mapping[str, Any]]
     ) -> dict[str, dict[str, Any]]:
-        """Declared ``input`` schemas plus the reserved ``manual`` schema."""
+        """Declared schemas, optional ``settings``, then reserved ``manual``."""
         self._check_declared_names(declared.keys())
         schemas: dict[str, dict[str, Any]] = {
             action: dict(schema) for action, schema in declared.items()
         }
+        if self.settings is not None:
+            schemas[RESERVED_SETTINGS_NAME] = settings_input_schema()
         schemas[MANUAL_ACTION] = strict_empty_input_schema()
         return schemas
 
-    def build_family(self, declared: Sequence[ChildTool]) -> ToolFamily:
-        """Compose this plugin's one public family, manual always appended."""
+    def build_family(self, declared: Sequence[ChildTool], *,
+                     settings_owner: SettingOwner | None = None) -> ToolFamily:
+        """Compose one family with opted-in settings immediately before manual."""
         self._check_declared_names([child.name for child in declared])
-        return ToolFamily(self.name, [*declared, self.manual_child()])
+        return ToolFamily(
+            self.name, [*declared, self.manual_child()],
+            settings_contract=self.settings, settings_owner=settings_owner,
+        )
 
     def _check_declared_names(self, declared: "Sequence[str] | Any") -> None:
         names = list(declared)
-        if not names:
+        if not names and self.settings is None:
             raise CuratedMcpPluginError(
-                f"CuratedMcpPlugin {self.name!r} must declare at least one action"
+                f"CuratedMcpPlugin {self.name!r} must declare an action unless settings is enabled"
             )
-        if MANUAL_ACTION in names:
+        reserved = [name for name in (RESERVED_SETTINGS_NAME, MANUAL_ACTION) if name in names]
+        if reserved:
             raise CuratedMcpPluginError(
                 f"CuratedMcpPlugin {self.name!r} must not declare the reserved "
-                f"{MANUAL_ACTION!r} action; it is appended from the packaged "
-                f"{_skill.SKILL_FILENAME}"
+                f"{reserved[0]!r} action; reserved actions are composed generically"
             )
         if len(set(names)) != len(names):
             raise CuratedMcpPluginError(

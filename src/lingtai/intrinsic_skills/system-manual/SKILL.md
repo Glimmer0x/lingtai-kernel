@@ -96,6 +96,12 @@ The router table is the routing authority; this list is the inventory.
     Router to the repo-root `ENVIRONMENT_VARIABLES.md` registry, which owns
     every LingTai environment variable's purpose, default, accepted values,
     scope, read point, reload behavior, and invalid-value handling.
+- name: tool-plugin-settings
+  location: reference/tool-plugin-settings/SKILL.md
+  description: |
+    Developer reference for opting exactly one ToolPlugin or curated descriptor
+    into the bounded generic settings contract, implementing the owner seam,
+    tri-state receipts, redaction, and focused conformance tests.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
@@ -136,6 +142,7 @@ The router table is the routing authority; this list is the inventory.
 | About to call `system(action="refresh")`; preset swap/revert pre-flight; "will this refresh break something?"; refresh returned but MCP/tools/LLM look wrong; refresh failed | `reference/refresh-precheck/SKILL.md` |
 | Kernel update lifecycle; runtime/source discovery; `kernel_version` and `source_drift`; heartbeat nudge dispatch; `.notification/nudge.json`; durable state; sync/wake/dismiss mechanics; packaged vs editable/source installs; refresh vs TUI-managed update; verification/troubleshooting | `reference/runtime-update-checks/SKILL.md` |
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
+| Implement one ToolPlugin/curated settings owner; bounded declarations; opt-in `settings`; tri-state mutation receipts; redaction; owner conformance | `reference/tool-plugin-settings/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
 | LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |

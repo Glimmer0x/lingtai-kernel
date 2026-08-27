@@ -6,6 +6,8 @@ related_files:
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/BEHAVIORS.md
   - src/lingtai/kernel/tool_plugin/__init__.py
+  - src/lingtai/kernel/tool_plugin/settings.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/base_agent/tools.py
   - src/lingtai/kernel/base_agent/__init__.py
@@ -57,6 +59,7 @@ related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_settings_contract.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
@@ -167,6 +170,9 @@ Coding agents and LingTai agents MUST observe the following.
 - **Do not self-register.** Binding composes and validates. Activation and
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
+- **Settings are declaration-local opt-in.** Never infer, scan, or globally
+  activate them. Follow the [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
+  when a later owner PR opts in.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
   `daemon`, `email`, `file`, `plugin`, `notification`, `shell`, `soul`,
@@ -217,6 +223,13 @@ Ports are capability-native and narrow (root `CONTRACT.md`
 `### Capability-native interfaces`). There is deliberately no single host
 interface: each port carries the smallest vocabulary that expresses one
 capability.
+
+### Optional settings declaration Port
+
+`SettingSpec` owns static metadata once; `SettingState` adds only runtime facts.
+One bounded normalizer accepts the six closed kinds and rejects mappings or
+recursion. `SettingMutationReceipt` preserves tri-state commit and application
+truth without owner prose.
 
 | Port | Operation | Promise |
 |---|---|---|
@@ -457,8 +470,16 @@ This component never selects.
    strict `input` schemas, the closed LTP root, result shapes, error
    vocabulary, authorization gates, or side effects. It is an internal
    least-privilege recut, not a new public capability.
+10. **Explicit identity-bound opt-in.** `None` preserves the old surface. An
+    explicit contract inserts `settings` before `manual`; `bind()` verifies the
+    opaque identity on the actual bound controller, before mount. The kernel
+    never resolves, persists, discovers, or globally activates settings.
 
 ## Contract tests
+
+`tests/test_tool_settings_contract.py` proves the synthetic contract, binding
+identity, and production opt-out; existing family suites prove their real
+schemas and dispatch remain unchanged.
 
 `tests/test_tool_plugin_declaration.py` is the shared primitive/slice suite;
 `tests/test_deep_refresh.py` owns init reconstruction, including the opt-in Web

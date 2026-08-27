@@ -6,6 +6,8 @@ related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/BEHAVIORS.md
   - src/lingtai/tools/tool_family/__init__.py
+  - src/lingtai/tools/tool_family/settings.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/psyche/CONTRACT.md
@@ -32,6 +34,7 @@ related_files:
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
   - tests/test_tool_family_generic.py
+  - tests/test_tool_settings_contract.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
   - tests/test_tool_family_system_migration.py
@@ -125,6 +128,10 @@ entirely and dispatch by hand — `web` uses it internally but still owns its
 own outer `handle()` to stamp family-specific diagnostics onto envelope
 failures, which this package has no knowledge of.
 
+An explicit contract injects one isolated `settings` child before `manual`, or
+last without it; `None` preserves the old registry. Zero ordinary children are
+supported only when the contract supplies this reserved child.
+
 `build_manual_child` builds the reserved `manual` `ChildTool`: strict empty
 input — the module-level `MANUAL_INPUT_SCHEMA` literal, exported so a family
 that also composes a schema-only `ToolFamily` advertises the identical object
@@ -146,6 +153,14 @@ strictly after that call returns, in the family's own Host/presentation
 layer — never inside this builder, its handler, or a wrapping `ChildTool`.
 
 ## Port
+
+### Opt-in settings controller
+
+Input is exactly inventory, set, or reset. The controller validates kind,
+mutability, state, changed keys, timing, and receipt; post-owner uncertainty is
+`unknown`, while committed outcomes stay committed. Redaction is a positive
+allowlist. The [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
+teaches opt-in and conformance.
 
 The provider-neutral boundary is `ChildTool.input_schema` (each child's own
 canonical JSON Schema for `input`) and `ChildTool.handler`
@@ -441,10 +456,16 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006)
 - A `ToolFamily`'s child registry MUST be validated at construction: duplicate
   child names and more than one child named the reserved `manual` MUST raise
   `ToolFamilyError`, not register silently or resolve by precedence.
+- A child named reserved `settings` MUST be rejected. Only an explicit
+  `ToolSettingsContract` may inject it; absence MUST preserve the legacy
+  registry and `oneOf` schema, while opt-in MUST insert it before `manual` (or
+  last without manual) with an isolated universal schema/controller.
 - `build_schema()` MUST declare the aggregate `input` property as direct
   `type: object`, then embed each child's own object `input_schema` verbatim
-  (no copy-and-reshape) under a `oneOf` branch pairing it with that child's
-  `title`. It MUST declare a root `reasoning` string property and include
+  (no copy-and-reshape) under a branch pairing it with that child's `title`.
+  The branch keyword is `oneOf` for opted-out families and `anyOf` for an
+  opted-in settings family, avoiding duplicate strict-empty branch invalidity.
+  It MUST declare a root `reasoning` string property and include
   `reasoning` in the root `required` list — `reasoning` is Host
   InvocationContext/audit metadata, not left to Agent schema composition's
   property-only re-injection, which never touches `required`.
@@ -453,7 +474,7 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006)
   child registry: `if.properties.action.const` MUST equal that child's own
   registry name, `if.required` MUST be `["action"]`, and
   `then.properties.input` MUST be that exact child's own canonical
-  `input_schema` (the same deep-copied schema the `oneOf` branch embeds, not
+  `input_schema` (the same deep-copied schema the disclosure branch embeds, not
   a separately-maintained copy). This correlates `action` with `input` at
   the schema level without adding a fifth public root field or duplicating
   `action` inside `input`.
@@ -523,6 +544,10 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006)
   exception string, or JSON blob MUST NEVER appear in a diagnostic.
 
 ## Contract tests
+
+`tests/test_tool_settings_contract.py` proves the synthetic contract and
+production opt-out. Existing production suites remain the schema/dispatch
+non-regression evidence.
 
 `tests/test_tool_family_generic.py` proves the infrastructure is generic using
 a fake `widget` family unrelated to `web`: deterministic registration order,

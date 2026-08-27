@@ -5,8 +5,7 @@ one model-facing tool. The model sees one aggregate schema composed from
 each child's own canonical ``input_schema``: a root ``allOf`` of one
 ``if``/``then`` condition per registered child correlates the sibling
 ``action`` const with that exact child's ``input`` shape (schema-level
-correlation, not just dispatch-time), plus a root ``input.oneOf`` retained
-for model discoverability of every action's shape in one place. Both
+correlation, not just dispatch-time), plus root ``input`` disclosure. Both
 surfaces are generated purely from the child registry — no name/schema
 mapping table — and both derive from the same deep-copied canonical child
 schemas. Root-level correlation via ``allOf``/``if``/``then`` was adopted
@@ -49,6 +48,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
+from lingtai.kernel.tool_plugin.settings import SETTINGS_ACTION, SettingOwner, ToolSettingsContract
+
 __all__ = [
     "ChildTool",
     "DiagnosticDescriptor",
@@ -62,6 +63,7 @@ __all__ = [
 # silently — see ``tools/CONTRACT.md`` "Every LingTai-owned family MUST offer
 # a `manual` action" and the ManualTool stable contract.
 RESERVED_MANUAL_NAME = "manual"
+RESERVED_SETTINGS_NAME = SETTINGS_ACTION
 
 # Envelope root fields admitted alongside ``action``/``input``.
 _ROOT_FIELDS = {"action", "input", "reasoning", "_reasoning", "summarize"}
@@ -169,8 +171,8 @@ class ChildTool:
 class ToolFamily:
     """One model-facing aggregate tool composed from a fixed child registry.
 
-    Construction validates the registry (deterministic order, unique names —
-    which also covers a repeated reserved ``manual`` child). :meth:`build_schema`
+    Construction validates the registry (deterministic order, unique names and
+    reserved-name collisions). :meth:`build_schema`
     recomputes the composed model-facing schema on every call rather than
     caching one at construction. :meth:`handle` is the family/Host dispatch
     boilerplate: it validates ``action``, strips and validates ``summarize``,
@@ -180,10 +182,17 @@ class ToolFamily:
     ``handle()`` by hand and skip this class entirely.
     """
 
-    def __init__(self, name: str, children: Sequence[ChildTool]) -> None:
+    def __init__(
+        self,
+        name: str,
+        children: Sequence[ChildTool],
+        *,
+        settings_contract: ToolSettingsContract | None = None,
+        settings_owner: SettingOwner | None = None,
+    ) -> None:
         if not name or not isinstance(name, str):
             raise ToolFamilyError("ToolFamily name must be a non-empty string")
-        if not children:
+        if not children and settings_contract is None:
             raise ToolFamilyError(f"ToolFamily {name!r} must register at least one child")
         seen: dict[str, ChildTool] = {}
         for child in children:
@@ -191,22 +200,53 @@ class ToolFamily:
                 raise ToolFamilyError(f"ToolFamily {name!r} child must be a ChildTool")
             if not child.name or not isinstance(child.name, str):
                 raise ToolFamilyError(f"ToolFamily {name!r} child name must be a non-empty string")
+            if child.name == RESERVED_SETTINGS_NAME:
+                raise ToolFamilyError(
+                    f"ToolFamily {name!r} must not register reserved child "
+                    f"{RESERVED_SETTINGS_NAME!r}; explicit settings opt-in injects it"
+                )
             if child.name in seen:
                 raise ToolFamilyError(
                     f"ToolFamily {name!r} has a duplicate child name {child.name!r}"
                 )
             seen[child.name] = child
+        if settings_contract is None and settings_owner is not None:
+            raise ToolFamilyError(
+                f"ToolFamily {name!r} cannot bind a settings owner without a contract"
+            )
+        ordered_children = list(children)
+        if settings_contract is not None:
+            from .settings import build_settings_child
+
+            try:
+                settings_child = build_settings_child(settings_contract, settings_owner)
+            except ValueError as exc:
+                raise ToolFamilyError(f"ToolFamily {name!r} has invalid settings: {exc}") from exc
+            manual_index = next(
+                (
+                    index
+                    for index, child in enumerate(ordered_children)
+                    if child.name == RESERVED_MANUAL_NAME
+                ),
+                len(ordered_children),
+            )
+            ordered_children.insert(manual_index, settings_child)
         self.name = name
-        self._children: dict[str, ChildTool] = seen
+        self._children = {child.name: child for child in ordered_children}
         # Preserve caller-declared order for deterministic schema branches.
-        self._order: list[str] = [child.name for child in children]
+        self._order: tuple[str, ...] = tuple(child.name for child in ordered_children)
+        self._settings_enabled = settings_contract is not None
 
     @property
     def child_names(self) -> tuple[str, ...]:
-        return tuple(self._order)
+        return self._order
 
     def has_manual(self) -> bool:
         return RESERVED_MANUAL_NAME in self._children
+
+    def _tool_settings_handler(self) -> Callable[[Mapping[str, Any]], dict[str, Any]] | None:
+        child = self._children.get(RESERVED_SETTINGS_NAME)
+        return None if child is None else child.handler
 
     def build_schema(self) -> dict[str, Any]:
         """Compose the model-facing schema.
@@ -226,9 +266,8 @@ class ToolFamily:
            made — a live non-strict Codex Responses probe on 2026-07-27
            showed this root construct is accepted, not rejected, by the
            current backend route.
-        2. **``input.oneOf`` disclosure:** the same per-action branches,
-           retained under ``input`` for model discoverability of every
-           action's exact shape in one place (as before).
+        2. **Typed ``input`` disclosure:** the same per-action branches retained
+           for discoverability (``oneOf`` normally, ``anyOf`` with settings).
 
         The root carries ``action``, ``input``, required ``reasoning``, and
         optional ``summarize`` — exactly the four LTP v2 envelope fields
@@ -253,7 +292,7 @@ class ToolFamily:
         all_of_conditions = []
         for child_name in self._order:
             child = self._children[child_name]
-            # Deep-copy once per child so the ``oneOf`` branch and the
+            # Deep-copy once per child so the disclosure branch and the
             # ``allOf`` condition's ``then.input`` never share a mutable
             # container with each other, the child's own canonical
             # ``input_schema``, or a previous ``build_schema()`` call.
@@ -274,6 +313,7 @@ class ToolFamily:
                     },
                 }
             )
+        input_branches_keyword = "anyOf" if self._settings_enabled else "oneOf"
         return {
             "type": "object",
             "properties": {
@@ -288,7 +328,7 @@ class ToolFamily:
                         "Strict action-specific input; the selected action is "
                         "validated again at dispatch."
                     ),
-                    "oneOf": input_branches,
+                    input_branches_keyword: input_branches,
                 },
                 "reasoning": {
                     "type": "string",

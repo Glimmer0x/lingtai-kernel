@@ -3,6 +3,8 @@ related_files:
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/BEHAVIORS.md
   - src/lingtai/kernel/tool_plugin/__init__.py
+  - src/lingtai/kernel/tool_plugin/settings.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
@@ -63,6 +65,7 @@ related_files:
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_settings_contract.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
@@ -156,6 +159,9 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - `register_official_tool_plugins`, the fail-fast registrar whose two-phase
     body — check every name, then bind/activate/mount — is the ordering promise
     (guarded by TP002).
+- `settings.py` — immutable `SettingSpec`, `SettingState`, tri-state receipt,
+  bounded value normalizer, opt-in contract identity, and strict reserved input
+  schema; it performs no resolution or mutation (`settings.py:1-321`).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
   outside the kernel package. It supplies callback-only adapters for File's
   concrete operations/facts, Plugin's detached read-only catalog projection,
@@ -431,7 +437,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 `import lingtai.tools.vision`, or `import lingtai.tools.web_search` →
 `import lingtai.tools.email`, or `import lingtai.tools.notification` →
 `ToolPluginDeclaration.__post_init__` validates
-its declared shape, with no Agent in existence.
+its declared shape, with no Agent in existence. `settings=None` is absent; an
+explicit contract inserts the identity-bound child before `manual`.
 
 Direct `Agent.__init__` composes constructor-time official boot normally. The
 wrapper-only `cli.build_agent` passes private `_from_init_boot=True` to make an

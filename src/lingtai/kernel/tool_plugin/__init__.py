@@ -33,8 +33,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from .settings import (
+    SETTINGS_ACTION,
+    ToolSettingsContract,
+    _bound_settings_matches,
+    settings_input_schema,
+)
+
 __all__ = [
     "MANUAL_ACTION",
+    "SETTINGS_ACTION",
+    "ToolSettingsContract",
     "GRANTABLE_HOST_PORTS",
     "OFFICIAL_TOOL_PLUGIN_NAMES",
     "ToolPluginError",
@@ -996,13 +1005,13 @@ class ToolPluginDeclaration:
     construction so a packaging defect fails loudly at import instead of
     shipping silently.
 
-    ``actions`` are the family's *operational* actions. The reserved
-    :data:`MANUAL_ACTION` is never among them; it is appended by
-    :attr:`public_actions` and its schema by :attr:`public_input_schemas`,
+    ``actions`` are operational. Reserved ``settings`` and ``manual`` are
+    composed generically; settings appears immediately before manual only for
+    an explicit :class:`ToolSettingsContract`. Their schemas come from
+    :attr:`public_input_schemas`,
     mirroring ``lingtai.mcp_servers._plugin.CuratedMcpPlugin.actions``. The
     family still owns the manual child's handler and its packaged/installed
-    source — the kernel only guarantees the reserved slot exists exactly once
-    and last.
+    source.
 
     ``binder`` is how this family composes itself against a granted host. It is
     called only through :meth:`bind`, which builds nothing itself.
@@ -1017,6 +1026,7 @@ class ToolPluginDeclaration:
     binder: Callable[[ToolPluginHost], BoundToolPlugin]
     requires: tuple[str, ...] = ()
     glossary_package: str | None = None
+    settings: ToolSettingsContract | None = None
 
     def __post_init__(self) -> None:
         for attribute in ("name", "manual", "description"):
@@ -1025,16 +1035,21 @@ class ToolPluginDeclaration:
                 raise ToolPluginDeclarationError(
                     f"ToolPluginDeclaration {attribute!r} must be a non-empty string"
                 )
-        if not isinstance(self.actions, tuple) or not self.actions:
+        if not isinstance(self.actions, tuple) or (
+            not self.actions and self.settings is None
+        ):
             raise ToolPluginDeclarationError(
-                f"ToolPluginDeclaration {self.name!r} must declare at least one "
-                "action, as a tuple"
+                f"ToolPluginDeclaration {self.name!r} must declare actions as a "
+                "tuple and may be empty only with settings opt-in"
             )
-        if MANUAL_ACTION in self.actions:
+        reserved = [
+            action for action in (SETTINGS_ACTION, MANUAL_ACTION) if action in self.actions
+        ]
+        if reserved:
             raise ToolPluginDeclarationError(
                 f"ToolPluginDeclaration {self.name!r} must not declare the "
-                f"reserved {MANUAL_ACTION!r} action; it is appended from the "
-                "family's own manual"
+                f"reserved {reserved[0]!r} action; reserved actions are added "
+                "by the generic declaration contract"
             )
         if len(set(self.actions)) != len(self.actions):
             raise ToolPluginDeclarationError(
@@ -1062,15 +1077,23 @@ class ToolPluginDeclaration:
             raise ToolPluginDeclarationError(
                 f"ToolPluginDeclaration {self.name!r} binder must be callable"
             )
+        if self.settings is not None and not isinstance(self.settings, ToolSettingsContract):
+            raise ToolPluginDeclarationError(
+                f"ToolPluginDeclaration {self.name!r} has invalid settings"
+            )
 
     @property
     def public_actions(self) -> tuple[str, ...]:
-        """Declared actions plus the reserved ``manual``, in that order."""
-        return (*self.actions, MANUAL_ACTION)
+        """Public actions, adding opted-in ``settings`` immediately before manual."""
+        if self.settings is None:
+            return (*self.actions, MANUAL_ACTION)
+        return (*self.actions, SETTINGS_ACTION, MANUAL_ACTION)
 
     def public_input_schemas(self) -> dict[str, Mapping[str, Any]]:
-        """Declared ``input`` schemas plus the reserved ``manual`` schema."""
+        """Return public input schemas in public action order."""
         schemas: dict[str, Mapping[str, Any]] = dict(self.input_schemas)
+        if self.settings is not None:
+            schemas[SETTINGS_ACTION] = settings_input_schema()
         schemas[MANUAL_ACTION] = self.manual_input_schema
         return schemas
 
@@ -1106,6 +1129,11 @@ class ToolPluginDeclaration:
             raise ToolPluginDeclarationError(
                 f"ToolPluginDeclaration {self.name!r} bound itself as "
                 f"{bound.name!r}"
+            )
+        if not _bound_settings_matches(bound.handler, self.settings):
+            raise ToolPluginDeclarationError(
+                f"ToolPluginDeclaration {self.name!r} bound settings from a "
+                "different declaration contract"
             )
         advertised = _advertised_actions(bound.schema)
         if advertised is None:
