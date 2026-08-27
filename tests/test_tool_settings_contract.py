@@ -119,22 +119,26 @@ def test_complete_response_bound_stops_without_partial_rows():
         "SETTINGS_RESPONSE_TOO_LARGE", 65_536)
 
 
-def test_public_export_and_all_production_families_opt_out():
+def test_public_export_and_only_this_owner_opts_in():
     assert public_family.SettingRow is settings_module.SettingRow is SettingRow
     assert public_family.SettingsProvider is settings_module.SettingsProvider
     assert not hasattr(importlib.import_module("lingtai.kernel.tool_plugin"),
                        "ToolSettingsContract")
-    curated = [
-        getattr(importlib.import_module(f"lingtai.mcp_servers.{name}.plugin"), f"{name.upper()}_PLUGIN")
+    curated = {
+        name: getattr(importlib.import_module(f"lingtai.mcp_servers.{name}.plugin"), f"{name.upper()}_PLUGIN")
         for name in ("telegram", "imap", "feishu", "wechat", "whatsapp", "cloud_mail")
-    ]
-    assert all(plugin.settings is False for plugin in curated)
+    }
+    expected_curated = set()
+    assert {name for name, plugin in curated.items() if plugin.settings} == expected_curated
     modules = {"shell": "bash._tool_family", "web": "web_search"}
-    declarations = [
-        importlib.import_module(f"lingtai.tools.{modules.get(name, name)}").DECLARATION
+    declarations = {
+        name: importlib.import_module(f"lingtai.tools.{modules.get(name, name)}").DECLARATION
         for name in OFFICIAL_TOOL_PLUGIN_NAMES
-    ]
-    assert all(item.settings is False and "settings" not in item.public_actions
-               for item in declarations)
-    assert "settings" not in importlib.import_module(
+    }
+    expected_official = {'system'}
+    assert {name for name, item in declarations.items() if item.settings} == expected_official
+    for name, item in declarations.items():
+        assert ("settings" in item.public_actions) is (name in expected_official)
+    psyche_actions = importlib.import_module(
         "lingtai.tools.psyche").get_schema()["properties"]["action"]["enum"]
+    assert ("settings" in psyche_actions) is False

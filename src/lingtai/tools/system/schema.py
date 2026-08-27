@@ -45,10 +45,10 @@ from typing import Any
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from .plugin import SYSTEM_DECLARED_ACTIONS
 
-# The canonical action order. This is the single source for the schema's
-# ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
-# child registration order in ``__init__.py`` — one list, not three. The order
-# is the pre-migration enum order, unchanged.
+# Canonical compatibility order for the eleven operational actions plus
+# ``manual``. The ToolPlugin declaration owns operational child registration;
+# ToolFamily's reserved settings-provider opt-in mechanically inserts
+# ``settings`` immediately before ``manual`` in the final model-facing family.
 ACTION_ORDER = (*SYSTEM_DECLARED_ACTIONS, "manual")
 
 # --- Shared field descriptions, carried over verbatim from the flat schema ---
@@ -232,6 +232,8 @@ ACTION_ENUM_DESCRIPTION = (
     "input={'content': '<nickname>'}, mutable; pass an empty string to clear "
     "it. Neither name action renames your address or working directory; that "
     "is an operator migration, see system-manual.\n\n"
+    "settings: read the effective System-owned settings with strict input={}. "
+    "See system-manual for meaning and the authorized change procedure.\n\n"
     "Context hygiene is NOT here: to compact or rebuild your context use "
     "context(action='summarize') and context(action='rebuild').\n\n"
     "manual: call system(action='manual', input={}) to return the installed "
@@ -244,7 +246,7 @@ def get_description(lang: str = "en") -> str:
         "Runtime inspection, lifecycle control, synchronization, and "
         "inter-agent management.\n\n"
         "Self-actions (no permissions needed): sleep, refresh, presets, "
-        "name_set, name_nickname, manual.\n"
+        "name_set, name_nickname, settings, manual.\n"
         "Karma actions (require admin.karma=True): lull, interrupt, suspend, "
         "cpr, clear.\n"
         "Nirvana (require admin.karma=True AND admin.nirvana=True): nirvana — "
@@ -253,16 +255,16 @@ def get_description(lang: str = "en") -> str:
         "argument object for the selected action. The karma verbs take "
         "input={'address': '<agent working dir>', 'reason': ...}; refresh "
         "takes input={'reason': ..., 'preset': ..., 'revert_preset': ...}; "
-        "the two name actions take input={'content': ...}; presets and manual "
-        "take input={}.\n\n"
+        "the two name actions take input={'content': ...}; presets, settings, "
+        "and manual take input={}.\n\n"
         "Notification verbs (check/dismiss) are NOT here — they live on the "
         "standalone notification tool. Context hygiene is NOT here either — "
         "use context(action='summarize'|'rebuild'|'molt'). Call "
         "system(action='manual', input={}) to return the installed "
         "system-manual skill.\n\n"
-        "Result sizes: presets can be bulky, so root "
-        "summarize=true may help there when you do not need the exact entries; "
-        "every other action returns a short receipt you should read exactly, so "
-        "leave summarize false. Call manual with summarize=false so the exact "
-        "procedure is not summarized away."
+        "Result sizes: presets and the complete settings inventory can be "
+        "bulky, so root summarize=true may help when you do not need exact "
+        "entries; every other action returns a short receipt you should read "
+        "exactly, so leave summarize false. Call manual with summarize=false "
+        "so the exact procedure is not summarized away."
     )

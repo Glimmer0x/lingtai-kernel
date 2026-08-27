@@ -4,8 +4,8 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.17.0
-last_changed_at: "2026-08-27T00:00:00Z"
+version: 1.19.0
+last_changed_at: "2026-08-28T00:00:00Z"
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, settings, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
@@ -23,6 +23,7 @@ related_files:
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/openai/adapter.py
 - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
 - tests/test_skills.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
@@ -102,6 +103,12 @@ The router table is the routing authority; this list is the inventory.
   location: reference/tool-plugin-settings/SKILL.md
   description: |
     Developer reference for one ToolFamily's optional SHOW-only settings provider.
+- name: settings-inventory
+  location: reference/settings-inventory/SKILL.md
+  description: |
+    Exact System catch-all SHOW inventory: root/manifest/LLM/environment
+    sources, precedence, defaults, validation, redaction, application timing,
+    authorized external procedures, and explicit non-settings.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
@@ -143,6 +150,7 @@ The router table is the routing authority; this list is the inventory.
 | Kernel update lifecycle; runtime/source discovery; `kernel_version` and `source_drift`; heartbeat nudge dispatch; `.notification/nudge.json`; durable state; sync/wake/dismiss mechanics; packaged vs editable/source installs; refresh vs TUI-managed update; verification/troubleshooting | `reference/runtime-update-checks/SKILL.md` |
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
 | Add or inspect a ToolFamily SHOW-only settings provider | `reference/tool-plugin-settings/SKILL.md` |
+| Inspect System settings; kernel catch-all ownership; effective init/preset/LLM/env values; setting defaults, precedence, redaction, invalid behavior, timing, exclusions, or authorized external change procedures | `reference/settings-inventory/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
 | LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |
@@ -182,14 +190,47 @@ in the substrate manual; pass `null` unless that exceptional route applies.
 `presets` can return a large allowed-only catalog, so use the root
 `summarize=true` only when exact entries are unnecessary. Refresh, sleep, lull,
 suspend, cpr, interrupt, clear, nirvana, both name actions, and errors return
-short receipts; leave `summarize=false` and read them exactly. The `manual`
-action itself must always use `summarize=false`, otherwise the operating
-procedure you requested may be summarized away before you can follow it.
+short receipts; leave `summarize=false` and read them exactly. The `settings`
+action is read-only SHOW and accepts only `input={}`. Its normal success has no
+`status` wrapper and each row has exactly `key`, `current`, `default`,
+`configurable`, and `comment`. The `manual` action itself must always use `summarize=false`,
+otherwise the operating procedure you requested may be summarized away before
+you can follow it.
+
+The ordered inventory covers System's kernel-level catch-all: effective
+root/manifest inputs, every effective `manifest.llm` axis (there is no LLM
+ToolPlugin), and kernel/LLM environment settings with no other concrete
+ToolPlugin owner. Read
+`reference/settings-inventory/SKILL.md` for every key's source, precedence,
+accepted values, invalid behavior, redaction, application timing, authorized
+external procedure, and explicit non-setting classification. SHOW never
+mutates any of those sources, and any unavailable current source fails the
+whole inventory without partial rows.
 
 ### Cache-miss budget
 
-System owns `<agent-workdir>/settings/system.json`; there is no per-action
-settings file. The closed v1 document carries this one setting:
+The cache-budget row is exactly:
+
+```json
+{"key":"cache_miss_budget","current":2000000,"default":2000000,"configurable":true,"comment":"system-manual#cache-miss-budget"}
+```
+
+`current` is resolved from a valid live `LINGTAI_CACHE_MISS_BUDGET`, then
+`<agent-workdir>/settings/system.json`, then the fixed `2,000,000` default.
+`configurable: true` means an authorized owner procedure exists outside SHOW;
+`system(action="settings", input={})` itself never writes, resets, or removes
+anything. This advisory budget is public, not sensitive, and is not redacted.
+
+The environment value is a positive base-10 integer string. The owner-file
+value is a positive JSON integer (a boolean is not an integer here). Invalid
+environment input falls through. A missing owner file selects the default; a
+present unreadable, malformed, duplicate-key, wrong-version, or otherwise
+invalid owner document makes SHOW return the fixed whole-inventory unavailable
+failure unless a valid environment value bypasses it. The runtime consumer
+retains its established safe-default fallback.
+
+System owns the exact owner document for this one setting; there is no
+per-action settings file. Its complete shape is:
 
 ```json
 {"schema_version": 1, "cache_miss_budget": 2000000}
@@ -202,6 +243,23 @@ budget, or the v2 `cache_miss_budget` field below), then the fixed `2,000,000`
 default. Invalid env falls through; missing, unreadable, malformed, or invalid
 JSON uses the default. A valid env bypasses the file. The reader never creates
 or rewrites it.
+
+budget must be positive, and no other or duplicate keys are accepted.
+
+An authorized owner changes the value outside SHOW through one of the existing
+configuration procedures:
+
+1. Set `LINGTAI_CACHE_MISS_BUDGET` in the process launcher or the agent's
+   configured `env_file`; an `env_file` edit requires refresh before the
+   running agent sees it.
+2. When no valid environment value should override it, use the existing File or
+   Shell capability to create the `settings/` directory and replace
+   `settings/system.json` with the exact closed document above. Remove that
+   owner file through the same authorized capability to return to the default.
+3. Call `system(action="settings", input={})` again and verify `current` before
+   relying on the change. If the environment source still wins, change or
+   remove it at its launcher/`env_file` owner instead of editing the lower
+   precedence file repeatedly.
 
 Direct process-env and unshadowed file changes apply on the next metadata
 snapshot; an `env_file` edit still needs refresh. Threshold changes and refreshes

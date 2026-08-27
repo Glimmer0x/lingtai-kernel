@@ -827,7 +827,8 @@ static declaration binds an agent-hosted ToolFamily through only `workdir` and
 stateful policy and Store mutation (see `src/lingtai/tools/notification/CONTRACT.md`).
 
 `system` (`refresh | sleep | lull | interrupt | suspend | cpr | clear |
-nirvana | presets | name_set | name_nickname | manual`) is the eleventh, and
+nirvana | presets | name_set | name_nickname | settings | manual`) is the
+eleventh, and
 the third
 migrated *intrinsic*: its final model-facing root is likewise exactly `action`,
 `input`, `reasoning`, and `summarize`, and each action's arguments live only in
@@ -849,8 +850,9 @@ behind a weaker family posture" rule `avatar` established, applied to
 rejection rather than gating. Second, `sleep.force` was live and read by the
 handler before this migration but never advertised in the flat schema; a strict
 child `input` must declare every key its handler accepts, so declaring it
-surfaces existing behavior rather than adding a capability. `system` owns no
-settings file at either level and its manual says so.
+surfaces existing behavior rather than adding a capability. The family-level
+owner document `settings/system.json` opts System into reserved read-only SHOW;
+it declares no per-action settings and authorizes no set/reset or mutation path.
 
 `daemon` (`emanate | list | ask | check | reclaim | manual`) is the twelfth
 family migrated to this contract, and the one with the largest retained engine.

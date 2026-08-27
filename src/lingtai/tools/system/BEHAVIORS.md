@@ -1,12 +1,14 @@
 ---
 name: system-behavior-tests
-behavior_version: 2
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/schema.py
+  - src/lingtai/tools/system/settings.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_karma.py
   - tests/test_system_declared_plugin.py
@@ -16,20 +18,22 @@ related_files:
   - tests/_notification_store_helpers.py
   - tests/_agent_presence_helpers.py
 maintenance: |
-  Written by the karma-lifecycle audit (2026-08). Keep in sync with
+  Written by the karma-lifecycle audit (2026-08); version 3 adds the
+  agent-observable read-only System settings catch-all. Keep in sync with
   CONTRACT.md clauses this file guards and ANATOMY.md entries for karma.py /
   name.py / preset.py; when CONTRACT.md or ANATOMY.md changes in a way that
   affects agent-observable lifecycle behavior, update the matching LABT here
   in the same change.
 ---
-# System Behavior Tests — karma lifecycle control
+# System Behavior Tests — lifecycle control and settings discovery
 
-LABT v1. These are self-contained agent-executable behavioral tests for the
-`system` tool's karma-gated lifecycle verbs. They prove the *observable*
-promises of `src/lingtai/tools/system/CONTRACT.md`: authorization gates, signal
-files, state transitions, and self-action rejection. Low-level mechanics stay
-in pytest; each LABT below is self-contained and executable verbatim by an
-agent with a `system` tool.
+LABT v2. These are self-contained agent-executable behavioral tests for the
+`system` tool's karma-gated lifecycle verbs and read-only settings discovery.
+They prove the *observable* promises of `src/lingtai/tools/system/CONTRACT.md`:
+authorization gates, signal files, state transitions, self-action rejection,
+and a complete non-mutating five-field catch-all. Low-level mechanics stay in
+pytest; each LABT below is self-contained and executable verbatim by an agent
+with a `system` tool.
 
 ## Behavior B001 — interrupt requires admin.karma
 
@@ -241,3 +245,33 @@ if any observed exit is reported as `resuscitated`.
 
 ### Pass / Fail
 Pass only when mounted and direct routes agree on refusal, force escape, receipt, and state transition. A route that reimplements or weakens the pending-attention guard fails.
+
+## Behavior B009 — settings SHOW is complete, redacted, and read-only
+
+- **id**: B009
+- **title**: System settings discovery exposes current owner truth without mutation
+- **guards**: `system-contract` § [System settings catch-all](CONTRACT.md#system-settings-catch-all)
+- **supersedes**: `tests/test_system_declared_plugin.py::test_system_settings_inventory_has_exact_public_contract`, `tests/test_system_declared_plugin.py::test_system_settings_redacts_sensitive_effective_values`
+- **runner**: an agent with a valid disposable `init.json`
+- **prerequisites**: no production credentials; any redaction probe uses disposable sentinel strings
+- **estimate**: 1 min
+
+### Steps
+1. Call `system(action="settings", input={})` and inspect every returned row.
+2. Confirm every row has exactly `key`, `current`, `default`, `configurable`, and `comment`; confirm keys are unique and follow the contract order.
+3. Put disposable sentinel values in a sensitive prompt, credential, header,
+   auth, or System-owned path input (including the Codex TUI directory) using
+   its documented owner procedure, then call SHOW again.
+4. Try adding a field such as `{"set": "language"}` to the settings input.
+
+### Expected evidence
+- [ ] The complete catalogue is returned with unique ordered keys and no partial success.
+- [ ] Nullable LLM `current` and `default` fields follow the selected registered
+      factory route; ignored generic axes are null rather than global defaults.
+- [ ] Sensitive current/default values are redacted and no sentinel appears in the response.
+- [ ] The non-empty input is rejected and neither SHOW call writes or resets an owner source.
+- [ ] Each `comment` resolves to a manual section covering source, accepted values, precedence, invalid behavior, redaction, timing, and authorized changes.
+
+### Pass / Fail
+Pass only when all evidence holds. Fail on an omitted/duplicate row, partial
+inventory, secret disclosure, mutation, or an unresolved manual pointer.

@@ -11,7 +11,9 @@ The action surface changed once since the migration: the public ``summarize``
 action LEFT for ``context`` (which split it into the explicit
 ``summarize``/``rebuild`` pair — evidence in
 ``tests/test_tool_family_context_migration.py``), and the two name actions
-ARRIVED from the dissolved ``psyche``. Both moves are pinned below.
+ARRIVED from the dissolved ``psyche``. System later opted into the generic
+reserved ``settings`` action immediately before ``manual`` without changing
+the operational order. Those changes are pinned below.
 
 Every lifecycle test here drives a disposable stub or a temporary directory —
 no live agent is slept, suspended, cleared, or destroyed.
@@ -41,6 +43,7 @@ _LEGACY_ACTIONS = (
     "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
     "nirvana", "presets", "name_set", "name_nickname", "manual",
 )
+_PUBLIC_ACTIONS = (*_LEGACY_ACTIONS[:-1], "settings", "manual")
 
 # The pre-migration flat sibling fields that remain, and the action each
 # belonged to. Under LTP v2 each lives in exactly that action's own strict
@@ -72,12 +75,14 @@ def _schema() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_public_tool_name_and_action_inventory_are_unchanged() -> None:
-    """The migration changes the argument *shape*, not the action surface."""
+def test_public_tool_name_and_action_inventory_adds_only_reserved_settings() -> None:
+    """Operational order stays fixed; settings is inserted before manual."""
     schema = _schema()
-    assert schema["properties"]["action"]["enum"] == list(_LEGACY_ACTIONS)
+    assert schema["properties"]["action"]["enum"] == list(_PUBLIC_ACTIONS)
+    assert system_tool.DECLARATION.public_actions == _PUBLIC_ACTIONS
     assert ACTION_ORDER == _LEGACY_ACTIONS
-    # One source for enum order, oneOf/allOf branch order, and child order.
+    # Operational/manual schemas remain one source; declaration opt-in owns the
+    # mechanically inserted settings branch.
     assert tuple(INPUT_SCHEMAS) == _LEGACY_ACTIONS
 
 
@@ -93,10 +98,11 @@ def test_root_envelope_is_exactly_the_four_ltp_v2_fields() -> None:
 
 def test_every_action_has_one_strict_closed_input_branch() -> None:
     schema = _schema()
-    branches = schema["properties"]["input"]["oneOf"]
-    assert len(branches) == len(_LEGACY_ACTIONS)
-    for action in _LEGACY_ACTIONS:
-        child = INPUT_SCHEMAS[action]
+    branches = schema["properties"]["input"]["anyOf"]
+    public_schemas = system_tool.DECLARATION.public_input_schemas()
+    assert len(branches) == len(_PUBLIC_ACTIONS)
+    for action in _PUBLIC_ACTIONS:
+        child = public_schemas[action]
         assert child["type"] == "object"
         assert child["additionalProperties"] is False, action
         # ``reasoning``/``summarize`` are root-only envelope controls and must
@@ -108,21 +114,22 @@ def test_every_action_has_one_strict_closed_input_branch() -> None:
 def test_root_allof_correlates_each_action_with_its_own_input() -> None:
     schema = _schema()
     conditions = schema["allOf"]
-    assert len(conditions) == len(_LEGACY_ACTIONS)
-    for action, condition in zip(_LEGACY_ACTIONS, conditions):
+    public_schemas = system_tool.DECLARATION.public_input_schemas()
+    assert len(conditions) == len(_PUBLIC_ACTIONS)
+    for action, condition in zip(_PUBLIC_ACTIONS, conditions):
         assert condition["if"]["properties"]["action"]["const"] == action
         assert condition["if"]["required"] == ["action"]
-        assert condition["then"]["properties"]["input"] == INPUT_SCHEMAS[action]
+        assert condition["then"]["properties"]["input"] == public_schemas[action]
 
 
 def test_children_consume_no_model_tool_slots() -> None:
-    """Eleven actions, one model-facing tool — the whole point of a family."""
+    """Thirteen actions, one model-facing tool — the whole point of a family."""
     from lingtai.tools.registry import INTRINSICS
 
     assert "system" in INTRINSICS
     # The intrinsic registry maps one name to one module; the children are not
     # separately registered tools.
-    assert not any(action in INTRINSICS for action in _LEGACY_ACTIONS if action != "system")
+    assert not any(action in INTRINSICS for action in _PUBLIC_ACTIONS if action != "system")
 
 
 # ---------------------------------------------------------------------------
@@ -342,15 +349,16 @@ def test_family_schema_survives_both_provider_wires() -> None:
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+    for wire in (chat, responses):
         assert wire["type"] == "object"
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
-        assert wire["properties"]["action"]["enum"] == list(_LEGACY_ACTIONS)
-        branches = wire["properties"]["input"][combinator]
+        assert wire["properties"]["action"]["enum"] == list(_PUBLIC_ACTIONS)
+        branches = wire["properties"]["input"]["anyOf"]
         assert [branch["title"] for branch in branches] == [
-            f"{action} input" for action in _LEGACY_ACTIONS
+            "settings inventory input" if action == "settings" else f"{action} input"
+            for action in _PUBLIC_ACTIONS
         ]
         for branch in branches:
             assert branch["additionalProperties"] is False
@@ -370,13 +378,14 @@ def test_root_allof_correlation_survives_both_provider_wires() -> None:
 
     for wire in (chat, responses):
         conditions = wire["allOf"]
-        assert len(conditions) == len(_LEGACY_ACTIONS)
-        for action, condition in zip(_LEGACY_ACTIONS, conditions):
+        public_schemas = system_tool.DECLARATION.public_input_schemas()
+        assert len(conditions) == len(_PUBLIC_ACTIONS)
+        for action, condition in zip(_PUBLIC_ACTIONS, conditions):
             assert condition["if"]["properties"]["action"]["const"] == action
             assert condition["if"]["required"] == ["action"]
             constrained = condition["then"]["properties"]["input"]
             assert set(constrained["properties"]) == set(
-                INPUT_SCHEMAS[action]["properties"]
+                public_schemas[action]["properties"]
             ), action
 
 
@@ -427,12 +436,12 @@ def test_privileged_verbs_refuse_self_target(tmp_path: Path, action: str) -> Non
 
 
 def test_self_actions_need_no_karma(tmp_path: Path) -> None:
-    """``sleep``/``refresh``/``presets``/name actions/``manual`` are self actions."""
+    """Ordinary lifecycle, naming, settings, and manual are self actions."""
     from lingtai.tools.system.karma import _KARMA_ACTIONS, _NIRVANA_ACTIONS
 
     gated = _KARMA_ACTIONS | _NIRVANA_ACTIONS
     self_actions = {
-        "sleep", "refresh", "presets", "name_set", "name_nickname", "manual",
+        "sleep", "refresh", "presets", "name_set", "name_nickname", "settings", "manual",
     }
     assert self_actions.isdisjoint(gated)
     assert gated == {"lull", "interrupt", "suspend", "cpr", "clear", "nirvana"}
@@ -501,12 +510,12 @@ def test_manual_child_is_registered_unwrapped(tmp_path: Path) -> None:
 
 
 def test_manual_is_reserved_and_family_owned() -> None:
-    from lingtai.tools.tool_family import RESERVED_MANUAL_NAME, ToolFamily
+    from lingtai.tools.tool_family import RESERVED_MANUAL_NAME
 
     assert RESERVED_MANUAL_NAME == "manual"
-    family = ToolFamily("system", system_tool._build_children(None))
+    family = system_tool._build_family(None)
     assert family.has_manual()
-    assert family.child_names == _LEGACY_ACTIONS
+    assert family.child_names == _PUBLIC_ACTIONS
 
 
 def test_duplicate_child_registration_fails_loud() -> None:
