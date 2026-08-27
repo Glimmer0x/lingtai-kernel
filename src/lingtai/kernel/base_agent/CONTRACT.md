@@ -369,7 +369,10 @@ Clause IDs are stable; each rule composes the linked normative source.
    `derived_admission_port_unconnected` indeterminacy and rejects before
    provider I/O. Historical daemon/avatar routes do not yet bind that parent,
    so they remain outside this gate until the separate driver-mediated adapter
-   is wired. The future host Port MUST decide against authority current at that
+   is wired. The raw `LLMService` construction inventory is pinned by
+   `tests/test_provider_admission.py`; adding a constructor requires an
+   explicit classification rather than silently creating another route. The
+   future host Port MUST decide against authority current at that
    call, not a turn-start snapshot or an implicit cache. This rule prevents
    accidental or structurally separate non-admitted paths. It does not claim
    that a full-tool Agent sharing the same OS trust domain as Core is sandboxed

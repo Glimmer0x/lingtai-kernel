@@ -1,6 +1,9 @@
 """Structural provider-call admission tests for the Puffo ACP profile."""
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
@@ -68,6 +71,36 @@ class _RecordingAdmissionPort:
 class _MalformedAdmissionPort:
     def authorize_provider_call(self, _parent, _call_class):
         return ProviderCallDecision(state="granted", reason_code="malformed")
+
+
+def test_raw_provider_service_construction_inventory_is_explicit():
+    """A new raw service constructor must be classified before it can land.
+
+    Root composition and refresh create an LLMService before BaseAgent wraps it
+    at the provider boundary.  The historical daemon constructor is deliberately
+    listed as an uncovered derived route until the driver-mediated adapter is
+    wired.  This is not an assertion that every listed path is admitted; it is
+    an inventory tripwire: a newly introduced constructor fails review until it
+    is classified and its profile semantics are made explicit.
+    """
+    root = Path(__file__).resolve().parents[1]
+    counts: dict[str, int] = {}
+    for source in (root / "src" / "lingtai").rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        count = sum(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "LLMService"
+            for node in ast.walk(tree)
+        )
+        if count:
+            counts[str(source.relative_to(root))] = count
+
+    assert counts == {
+        "src/lingtai/cli.py": 1,
+        "src/lingtai/agent.py": 1,
+        "src/lingtai/tools/daemon/__init__.py": 1,
+    }
 
 
 def test_every_session_send_and_generate_crosses_the_same_admission_port():
