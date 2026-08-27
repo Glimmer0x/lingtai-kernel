@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lingtai.kernel import message as message_module
 from lingtai.kernel.base_agent import turn
 from lingtai.kernel.execution_workspace import (
     ExecutionWorkspace,
@@ -36,6 +37,18 @@ from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
 from lingtai.kernel.turn_events import current_turn_tool_observer
 from lingtai.kernel.turn_permissions import current_turn_permission_broker
 from lingtai.kernel.provider_admission import current_provider_admission
+
+
+def test_canonical_message_type_inventory_is_complete():
+    """Adding a ``MSG_*`` inbox kind must update the closed admission surface."""
+
+    declared_message_types = {
+        value
+        for name, value in vars(message_module).items()
+        if name.startswith("MSG_") and isinstance(value, str)
+    }
+
+    assert message_module.MESSAGE_TYPES == frozenset(declared_message_types)
 
 
 class _Interface:
