@@ -1127,6 +1127,55 @@ def test_cli_composition_quarantines_application_stdout_and_stops_agent(
     assert fake_agent.started and fake_agent.stopped
 
 
+def test_cli_forced_mcp_disable_reaches_the_session_server(tmp_path, monkeypatch):
+    """Generic ACP must retain the historical forced-disable MCP boundary."""
+
+    import lingtai.adapters.acp as acp_package
+    import lingtai.cli as cli
+    import lingtai.cli_acp as cli_acp
+    import lingtai.kernel.logging as kernel_logging
+    import lingtai.venv_resolve as venv_resolve
+
+    class FakeAgent:
+        _llm_worker_interface_poisoned = False
+
+        def start(self):
+            return None
+
+        def stop(self, timeout=0):
+            return StopResult(StopStatus.STOPPED, False, False)
+
+    observed = {}
+
+    class FakeServer:
+        def __init__(self, _agent, _input, _output, **kwargs):
+            observed.update(kwargs)
+
+        def serve(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
+    monkeypatch.setattr(cli, "load_init", lambda _path: {})
+    monkeypatch.setattr(cli, "build_agent", lambda _data, _path, **_kw: FakeAgent())
+    monkeypatch.setattr(cli, "_force_exit_if_worker_poisoned", lambda _agent: None)
+    monkeypatch.setattr(kernel_logging, "setup_logging", lambda **_kw: None)
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: tmp_path / "venv")
+    monkeypatch.setattr(acp_package, "AcpStdioServer", FakeServer)
+
+    cli_acp.run_acp(
+        tmp_path,
+        input_stream=io.StringIO(),
+        output_stream=io.StringIO(),
+        forced_disable=frozenset({"mcp"}),
+    )
+
+    assert observed["allow_session_mcp"] is False
+
+
 def test_cli_poison_force_exit_skips_log_after_successful_stop_releases_lease(
     tmp_path, monkeypatch
 ):

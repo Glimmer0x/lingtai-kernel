@@ -148,7 +148,11 @@ def run_acp(
         agent = build_agent(data, agent_dir, **build_options)
         agent._venv_path = str(venv_dir)
         agent.start()
-        if fixed_execution_workspace is None and turn_origin_policy is None:
+        if (
+            fixed_execution_workspace is None
+            and turn_origin_policy is None
+            and forced_disable is None
+        ):
             server = AcpStdioServer(agent, wire_in, wire_out)
         else:
             server = AcpStdioServer(
@@ -156,7 +160,10 @@ def run_acp(
                 wire_in,
                 wire_out,
                 fixed_execution_workspace=fixed_execution_workspace,
-                allow_session_mcp=fixed_execution_workspace is None,
+                allow_session_mcp=(
+                    fixed_execution_workspace is None
+                    and not (forced_disable and "mcp" in forced_disable)
+                ),
             )
         try:
             server.serve()
