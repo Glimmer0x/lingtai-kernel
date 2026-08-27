@@ -12,11 +12,20 @@ def add_acp_parser(subparsers) -> None:
         "acp",
         help="Serve one existing LingTai agent over local ACP v1 stdio",
     )
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
         "--agent-dir",
         type=Path,
-        required=True,
         help="Existing agent working directory containing init.json",
+    )
+    source.add_argument(
+        "--runtime-id",
+        help="Opaque operator-provisioned Puffo runtime id (requires --profile puffo-v0)",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("puffo-v0",),
+        help="Constrained locally provisioned ACP launch profile",
     )
 
 
@@ -54,6 +63,9 @@ def run_acp(
     *,
     input_stream: TextIO | None = None,
     output_stream: TextIO | None = None,
+    fixed_execution_workspace=None,
+    forced_disable: frozenset[str] | None = None,
+    puffo_runtime=None,
 ) -> None:
     """Compose one Agent and the local ACP stdio driving adapter.
 
@@ -94,6 +106,15 @@ def run_acp(
         from lingtai.kernel.logging import setup_logging
         from lingtai.venv_resolve import resolve_venv
 
+        if puffo_runtime is not None:
+            from lingtai.adapters.acp.puffo_v0 import resolve_runtime
+            from lingtai.kernel.execution_workspace import ExecutionWorkspace
+
+            verified_runtime = resolve_runtime(puffo_runtime.runtime_id)
+            if verified_runtime != puffo_runtime:
+                raise RuntimeError("puffo-v0 runtime binding changed before ACP startup")
+            agent_dir = verified_runtime.agent_dir
+            fixed_execution_workspace = ExecutionWorkspace(verified_runtime.workspace)
         _check_duplicate_process(agent_dir)
         _clean_signal_files(agent_dir)
         setup_logging(
@@ -106,10 +127,22 @@ def run_acp(
         os.environ["LINGTAI_RUNTIME_VENV"] = str(venv_dir)
         data["venv_path"] = str(venv_dir)
 
-        agent = build_agent(data, agent_dir)
+        if forced_disable:
+            agent = build_agent(data, agent_dir, _forced_disable=forced_disable)
+        else:
+            agent = build_agent(data, agent_dir)
         agent._venv_path = str(venv_dir)
         agent.start()
-        server = AcpStdioServer(agent, wire_in, wire_out)
+        if fixed_execution_workspace is None and not forced_disable:
+            server = AcpStdioServer(agent, wire_in, wire_out)
+        else:
+            server = AcpStdioServer(
+                agent,
+                wire_in,
+                wire_out,
+                fixed_execution_workspace=fixed_execution_workspace,
+                allow_session_mcp=not bool(forced_disable and "mcp" in forced_disable),
+            )
         try:
             server.serve()
         except (BrokenPipeError, OSError, UnicodeError, KeyboardInterrupt):
@@ -138,11 +171,44 @@ def run_acp(
 
 
 def handle_acp_command(args) -> None:
-    agent_dir = args.agent_dir.resolve()
-    if not agent_dir.is_dir():
-        print(f"error: {agent_dir} is not a directory", file=sys.stderr)
+    if args.profile is None:
+        if args.runtime_id is not None:
+            print("error: --runtime-id requires --profile puffo-v0", file=sys.stderr)
+            raise SystemExit(1)
+        agent_dir = args.agent_dir.resolve()
+        if not agent_dir.is_dir():
+            print(f"error: {agent_dir} is not a directory", file=sys.stderr)
+            raise SystemExit(1)
+        run_acp(agent_dir)
+        return
+
+    if args.profile == "puffo-v0" and args.agent_dir is not None:
+        print(
+            "error: puffo-v0 does not accept --agent-dir; use --runtime-id",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
-    run_acp(agent_dir)
+    if args.profile != "puffo-v0" or args.runtime_id is None:
+        print("error: puffo-v0 requires --runtime-id", file=sys.stderr)
+        raise SystemExit(1)
+    from lingtai.adapters.acp.puffo_v0 import (
+        FORCED_DISABLED_CAPABILITIES,
+        PuffoV0RegistryError,
+        resolve_runtime,
+    )
+    from lingtai.kernel.execution_workspace import ExecutionWorkspace
+
+    try:
+        runtime = resolve_runtime(args.runtime_id)
+    except PuffoV0RegistryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    run_acp(
+        runtime.agent_dir,
+        fixed_execution_workspace=ExecutionWorkspace(runtime.workspace),
+        forced_disable=FORCED_DISABLED_CAPABILITIES,
+        puffo_runtime=runtime,
+    )
 
 
 __all__ = ["add_acp_parser", "handle_acp_command", "run_acp"]

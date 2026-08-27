@@ -214,12 +214,14 @@ class Agent(BaseAgent):
         plugins: list[str] | None = None,
         combo_name: str | None = None,
         disable: list[str] | None = None,
+        _forced_disable: frozenset[str] | None = None,
         _from_init_boot: bool = False,
         **kwargs: Any,
     ):
         # Private CLI composition sentinel. It is set before BaseAgent invokes
         # the overridable mandatory-official boot hook below.
         self._from_init_boot = _from_init_boot
+        self._forced_disable = frozenset(_forced_disable or ())
 
         # Default karma authority for the primary agent (本我)
         kwargs.setdefault("admin", {"karma": True})
@@ -401,7 +403,10 @@ class Agent(BaseAgent):
         # unless explicitly disabled via `disable=[...]` or `"name": null` in
         # the capabilities dict. init.json kwargs override default kwargs.
         from lingtai.tools.registry import apply_core_defaults
-        capabilities = apply_core_defaults(capabilities, disable=disable)
+        capabilities = apply_core_defaults(
+            capabilities,
+            disable=[*(disable or []), *self._forced_disable],
+        )
 
         # Track for avatar replay
         self._capabilities: list[tuple[str, dict]] = []
@@ -1018,6 +1023,10 @@ class Agent(BaseAgent):
         helper consults this dict on ``system(action="refresh")`` to detect
         and re-spawn MCPs whose subprocess died (issue #34).
         """
+        if "mcp" in self._forced_disable:
+            self._mcp_init_specs = {}
+            return
+
         import json
         import sys
 
@@ -2309,7 +2318,7 @@ class Agent(BaseAgent):
             if v is None:
                 normalized[n] = None  # type: ignore[assignment]
 
-        disable_list = m.get("disable") or []
+        disable_list = [*(m.get("disable") or []), *self._forced_disable]
         capabilities = apply_core_defaults(normalized, disable=disable_list)
 
         # Register declared Agent Plugins BEFORE capability setup, next to addon

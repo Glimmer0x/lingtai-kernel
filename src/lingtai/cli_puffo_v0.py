@@ -1,0 +1,65 @@
+"""Local operator control plane for the constrained Puffo ACP profile."""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from lingtai.adapters.acp.puffo_v0 import (
+    PuffoV0RegistryError,
+    provision_runtime,
+    revoke_runtime,
+)
+
+
+def add_puffo_v0_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    parser = subparsers.add_parser(
+        "puffo-v0",
+        help="Provision or revoke locally managed Puffo ACP runtimes",
+    )
+    commands = parser.add_subparsers(dest="puffo_v0_command", required=True)
+    provision = commands.add_parser(
+        "provision",
+        help="Bind one existing persistent agent identity to an opaque runtime id",
+    )
+    provision.add_argument("--runtime-id", required=True)
+    provision.add_argument("--agent-dir", type=Path, required=True)
+    provision.add_argument("--workspace", type=Path, required=True)
+    provision.add_argument("--json", action="store_true", dest="as_json")
+    revoke = commands.add_parser(
+        "revoke",
+        help="Prevent future puffo-v0 ACP spawns for one runtime id",
+    )
+    revoke.add_argument("--runtime-id", required=True)
+    revoke.add_argument("--json", action="store_true", dest="as_json")
+
+
+def handle_puffo_v0_command(args: argparse.Namespace) -> None:
+    try:
+        if args.puffo_v0_command == "provision":
+            runtime = provision_runtime(args.runtime_id, args.agent_dir, args.workspace)
+            payload = {
+                "status": "provisioned",
+                "runtime_id": runtime.runtime_id,
+                "agent_dir": str(runtime.agent_dir),
+                "workspace": str(runtime.workspace),
+                "entry_digest": runtime.entry_digest,
+            }
+        elif args.puffo_v0_command == "revoke":
+            revoke_runtime(args.runtime_id)
+            payload = {"status": "revoked", "runtime_id": args.runtime_id}
+        else:
+            raise SystemExit(2)
+    except PuffoV0RegistryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"puffo-v0 runtime {payload['runtime_id']} {payload['status']}.")
+
+
+__all__ = ["add_puffo_v0_parser", "handle_puffo_v0_command"]

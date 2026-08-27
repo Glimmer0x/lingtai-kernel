@@ -1,6 +1,6 @@
 ---
 name: acp-local-stdio-behavior-tests
-behavior_version: 1
+behavior_version: 2
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -88,3 +88,40 @@ implicit second session, ignored non-empty session MCP input, leaked internal
 failure/tool payload, out-of-order or post-terminal lifecycle updates, or any
 claimed remote/v2/persistent-permission/workspace capability; record
 the evidence trail in the task report.
+
+## Behavior ACP002 — puffo-v0 accepts only an operator-provisioned local runtime
+
+- **id**: ACP002
+- **title**: puffo-v0 accepts only an operator-provisioned local runtime
+- **guards**: `acp-local-stdio` § Contract rules 11 — see [CONTRACT.md](CONTRACT.md#contract-rules)
+- **runner**: any LingTai coding agent with shell access to this repository
+- **prerequisites**: a project Python with test dependencies
+- **estimate**: ≈ 1 minute
+
+### Steps
+
+1. Run `python -m pytest -q -x tests/test_puffo_v0_profile.py`.
+2. Inspect the registry cases: only an active, entry-digest-valid opaque id
+   with its original directory identity resolves; tampered, retargeted, or
+   revoked entries, including a missing required revocation log, fail before
+   composition. An active identity and workspace cannot be bound twice.
+3. Inspect the profile session cases: another workspace and every non-empty
+   `mcpServers` input fail; `avatar`, `daemon`, and `mcp` are absent from the
+   composed Agent floor.
+
+### Expected evidence
+
+- [ ] A remote ACP payload cannot provide a filesystem path or an MCP process
+  launch through the profile.
+- [ ] The profile denies unavailable identities and retains fail-closed,
+  metadata-only permission handling.
+- [ ] The host-boundary non-guarantee remains documented.
+
+### Pass / Fail
+
+Pass when the focused tests prove every profile startup field comes from the
+local registry and constrained session policy. Fail on a remote-controlled
+workspace/MCP input, enabled derived/background capability, accepted revoked id,
+or any claim that this controlled entrypoint isolates a same-OS principal.
+This behavior is a registry/session-policy foundation: its entry digest does
+not by itself prove a complete effective tool/action or launch-security policy.
