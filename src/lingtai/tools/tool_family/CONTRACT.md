@@ -1,6 +1,6 @@
 ---
 name: tool-family
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
@@ -155,6 +155,10 @@ layer — never inside this builder, its handler, or a wrapping `ChildTool`.
 The optional `SettingsProvider` callable returns fresh `SettingRow` display
 facts for the injected read-only action; the [owner manual](../../intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md)
 teaches the seam, and [T011](BEHAVIORS.md#behavior-t011) guards it.
+Every successful row contains exactly `key`, `current`, `default`,
+`configurable`, and `comment`; `comment` is the exact owner-manual section
+pointer where all other setting detail and change procedure live. A provider
+raises rather than returning a row when current truth is unavailable.
 
 The provider-neutral boundary is `ChildTool.input_schema` (each child's own
 canonical JSON Schema for `input`) and `ChildTool.handler`
@@ -452,12 +456,15 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006) and
   child names and more than one child named the reserved `manual` MUST raise
   `ToolFamilyError`, not register silently or resolve by precedence.
 - A reserved `settings` child MUST be injected only for an explicit provider,
-  immediately before `manual`, and accept exactly `{}`; it MUST expose only
-  key, effective/source or bounded unavailability, default presence/value,
-  configurability, optional canonical config key/timing, exact `manual_ref`,
-  and sensitivity, redact sensitive values, return one fixed failure for any
-  provider or row defect, stop incrementally at 65,536 complete-response bytes
-  with one fixed no-row failure, and offer no mutation operation.
+  immediately before `manual`, and accept exactly `{}`. Normal success MUST be
+  only `{"settings": [...]}`; every row MUST expose exactly `key`, `current`,
+  `default`, `configurable`, and `comment`, with JSON `null` as the default when
+  none is meaningful. A private sensitivity flag MAY redact `current` and
+  `default` to `<redacted>` but MUST NOT be projected. Provider exceptions,
+  unavailable current truth, malformed rows, and unserializable values MUST
+  return one fixed bounded failure with no partial rows. Consumption MUST stop
+  incrementally at the 65,536-byte complete-response bound with one fixed
+  no-row failure, and the action MUST offer no mutation operation.
 - `build_schema()` MUST declare the aggregate `input` property as direct
   `type: object`, then embed each child's own object `input_schema` verbatim
   (no copy-and-reshape) under a branch pairing it with that child's `title`.

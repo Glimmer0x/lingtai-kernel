@@ -90,8 +90,8 @@ that generic dispatch route.
   2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
   the current route (see `CONTRACT.md` "Contract rules").
 - `settings.py` — owns the public `SettingRow`/`SettingsProvider` seam and the
-  injected SHOW child with redaction and incremental response bounding
-  (`settings.py:1-167`, guarded by T011).
+  injected five-field SHOW projection with private redaction and incremental
+  response bounding (`settings.py:1-137`, guarded by T011).
 
 ### Diagnostics sidecar
 

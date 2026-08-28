@@ -11,7 +11,6 @@ __all__ = ["SettingRow", "SettingsProvider"]
 MAX_SETTINGS_RESPONSE_BYTES = 65_536
 REDACTED_VALUE = "<redacted>"
 _MAX_TEXT_CHARACTERS = 1_024
-_MISSING = object()
 _SETTINGS_ACTION = "settings"
 _SETTINGS_SCHEMA = {
     "type": "object",
@@ -37,15 +36,11 @@ class SettingRow:
     """One provider-owned row projected by the SHOW-only settings action."""
 
     key: str
+    current: Any = field(repr=False)
+    default: Any = field(repr=False)
     configurable: bool
-    manual_ref: str
-    effective: Any = field(default=_MISSING, repr=False)
-    source: str | None = None
-    unavailable: str | None = None
-    default: Any = field(default=_MISSING, repr=False)
-    config_key: str | None = None
-    application_timing: str | None = None
-    sensitive: bool = False
+    comment: str
+    _sensitive: bool = field(default=False, repr=False)
 
 
 class SettingsProvider(Protocol):
@@ -54,9 +49,7 @@ class SettingsProvider(Protocol):
     def __call__(self) -> Iterable[SettingRow]: ...
 
 
-def _text(value: Any, *, optional: bool = False) -> str | None:
-    if optional and value is None:
-        return None
+def _text(value: Any) -> str:
     if (
         not isinstance(value, str)
         or not value
@@ -71,41 +64,18 @@ def _project(row: SettingRow) -> dict[str, Any]:
     if type(row) is not SettingRow:
         raise ValueError("provider returned a malformed settings row")
     key = _text(row.key)
-    manual_ref = _text(row.manual_ref)
-    config_key = _text(row.config_key, optional=True)
-    if type(row.configurable) is not bool or type(row.sensitive) is not bool:
+    comment = _text(row.comment)
+    if type(row.configurable) is not bool or type(row._sensitive) is not bool:
         raise ValueError("settings row flags must be boolean")
-    timing = _text(row.application_timing, optional=True)
-    if (timing is None) == row.configurable:
-        raise ValueError("configurable settings require application timing")
-
-    has_effective = row.effective is not _MISSING
-    unavailable = _text(row.unavailable, optional=True)
-    if has_effective == (unavailable is not None):
-        raise ValueError("settings row must be effective or unavailable")
-    source = _text(row.source, optional=True)
-    if has_effective != (source is not None):
-        raise ValueError("effective settings require a source")
-
-    projected: dict[str, Any] = {
+    current = REDACTED_VALUE if row._sensitive else row.current
+    default = REDACTED_VALUE if row._sensitive else row.default
+    return {
         "key": key,
+        "current": current,
+        "default": default,
         "configurable": row.configurable,
-        "manual_ref": manual_ref,
-        "sensitive": row.sensitive,
-        "has_default": row.default is not _MISSING,
+        "comment": comment,
     }
-    if config_key is not None:
-        projected["config_key"] = config_key
-    if timing is not None:
-        projected["application_timing"] = timing
-    if has_effective:
-        projected["effective"] = REDACTED_VALUE if row.sensitive else row.effective
-        projected["source"] = source
-    else:
-        projected["unavailable"] = unavailable
-    if row.default is not _MISSING:
-        projected["default"] = REDACTED_VALUE if row.sensitive else row.default
-    return projected
 
 
 def _json_size(value: Mapping[str, Any], limit: int) -> int | None:
@@ -125,7 +95,7 @@ def _json_size(value: Mapping[str, Any], limit: int) -> int | None:
 
 def _inventory(provider: SettingsProvider) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
-    size = len(b'{"settings":[') + len(b'],"status":"ok"}')
+    size = len(b'{"settings":[') + len(b']}')
     try:
         supplied = provider()
         for item in supplied:
@@ -141,7 +111,7 @@ def _inventory(provider: SettingsProvider) -> dict[str, Any]:
             size += separator_size + row_size
     except Exception:
         return dict(_PROVIDER_FAILURE)
-    return {"status": "ok", "settings": rows}
+    return {"settings": rows}
 
 
 def build_settings_child(provider: SettingsProvider) -> Any:

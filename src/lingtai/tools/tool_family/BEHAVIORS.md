@@ -1,6 +1,6 @@
 ---
 name: tool-family-behavior-tests
-behavior_version: 2
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -644,10 +644,12 @@ new snapshot/summary/session state.
 
 ### Expected evidence
 
-- [ ] Opt-in/order, exact input, projection/redaction/manual route, fixed
-      provider failures, incremental bounding, exports, and production opt-out pass.
+- [ ] Opt-in/order, exact input, exact five-field success, private redaction,
+      manual `comment` route, fixed whole-action failures, incremental bounding,
+      exports, and production opt-out pass.
 
 ### Pass / Fail
 
-Pass when the suite passes; fail on leakage, partial rows, mutation operations,
-or unbounded provider consumption. This task performs no writes.
+Pass when the suite passes; fail on any extra success field, leakage, partial
+rows, mutation operation, or unbounded provider consumption. This task performs
+no writes.
