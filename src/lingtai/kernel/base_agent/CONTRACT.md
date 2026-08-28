@@ -398,8 +398,50 @@ Clause IDs are stable; each rule composes the linked normative source.
    derived-launch inventory uses `(file, enclosing qualified function,
    constructor)` keys, so unrelated line movement does not turn that specific
    tripwire into mechanical maintenance.
-   This adapter integration
-   is not delivered by this Core type boundary alone. A host that
+   This adapter integration is not delivered by this Core type boundary alone.
+   The following are **constrained host-adapter requirements**, not current
+   Core-seam delivery claims:
+
+   1. `provision_ref` is a Driver-registry opaque lookup handle bound to the
+      requested `launch_id` and `parent_launch_id`; it is non-transferable and
+      is never an artifact bearer. Only the Driver resolves it. A child,
+      parent, manifest, capsule, or other artifact cannot provide or override
+      identity, workdir, or agent-dir.
+   2. The Driver holds and actually uses the workdir and agent-dir directory
+      handles for execution (`fd` inheritance, `SCM_RIGHTS`, or a platform
+      equivalent). A `dev+ino` value is only an additional check on that
+      handle, never permission to resolve a path and reopen it later. A backend
+      that cannot establish this non-replaceable binding is unsupported and
+      fails closed.
+   3. On a same-OS-user host without sandbox isolation, this mechanism protects
+      against accidental confusion: wrong ref, ref reuse, cross-child use, and
+      lineage mismatch. It does not claim to resist a malicious child that can
+      directly modify the Driver registry.
+   4. `admit_provider_call` accepts only `launch_id`, a single-use `call_id`,
+      and an exact capability (`provider` plus `daemon` or `avatar`). The
+      Driver derives principal, root-session, depth, binding revision, and
+      lineage from current registry state keyed by `launch_id`. A compatibility
+      interface that carries any of those derived facts MUST compare each one
+      against that state and deny a mismatch with a distinct attack-signal
+      reason code.
+   5. The real provider/capability requested by transport must exactly match
+      the grant. Consumption is Driver-side only: keyed by `admission_id`, an
+      atomic `unused -> consumed_before_io` CAS must succeed before provider
+      I/O. A local transport mark is not consumption; an unsuccessful CAS
+      prevents provider I/O.
+   6. A timeout or crash after that CAS and before a known provider result is
+      `consumed_outcome_unknown`: the grant remains consumed and is never
+      restored or reused. A retry uses a new `call_id` and obtains a new grant.
+   7. Production E2E must assert the authorization seam's exact `reason_code`
+      and an audit record linkable by `audit_id` or `admission_id`; merely
+      observing a rejection is insufficient evidence that the seam ran.
+   8. In one run, one recording transport must observe a non-empty provider
+      call list for a legal root-to-one-hop path and `provider_calls == []` for
+      each refused nested daemon/avatar path. This proves the recorder is live
+      and rules out an empty assertion caused by a disconnected recorder.
+
+   Dynamic revoke freshness and propagation remain explicitly undelivered;
+   these requirements reserve no claim that they are already implemented. A host that
    binds a derived parent before its transport is connected receives explicit
    `derived_admission_port_unconnected` indeterminacy and rejects before
    provider I/O. Historical daemon/avatar routes do not yet bind that parent,
