@@ -10,6 +10,21 @@ from typing import Mapping, Protocol
 # a child that forges it can only make its own nested derived launch fail closed.
 DERIVED_AVATAR_EXECUTION_ENV = "LINGTAI_DERIVED_AVATAR_EXECUTION"
 
+# This durable marker makes derived status an attribute of the avatar working
+# directory, not of one particular launcher invocation.  Its mere presence is
+# restrictive: malformed content or an unexpected replacement must never make
+# a previously-derived child fall back to legacy admission behavior.
+DERIVED_AVATAR_STATE_RELATIVE_PATH = Path("system") / "derived_child.json"
+DERIVED_AVATAR_STATE = {
+    "schema_version": 1,
+    "requires_derived_launch_admission": True,
+}
+
+
+def derived_avatar_state_path(working_dir: Path) -> Path:
+    """Return the durable, restrictive state location for one avatar child."""
+    return working_dir / DERIVED_AVATAR_STATE_RELATIVE_PATH
+
 
 @dataclass(frozen=True)
 class AvatarLaunchRequest:

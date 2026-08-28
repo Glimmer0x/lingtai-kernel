@@ -900,7 +900,7 @@ def test_run_wires_file_logging(monkeypatch, tmp_path):
 
 
 def test_run_marks_derived_avatar_child_as_requiring_authority(monkeypatch, tmp_path):
-    """The real ``lingtai run`` boot consumes only a restrictive child marker."""
+    """The legacy env marker remains a restrictive redundant boot signal."""
     from lingtai import cli
 
     class _Flag:
@@ -944,6 +944,109 @@ def test_run_marks_derived_avatar_child_as_requiring_authority(monkeypatch, tmp_
     assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
 
 
+def test_run_marks_persisted_avatar_child_as_requiring_authority(monkeypatch, tmp_path):
+    """A direct later ``lingtai run <child-dir>`` reads durable child state."""
+    from lingtai import cli
+    from lingtai.tools.avatar._launcher import (
+        DERIVED_AVATAR_STATE,
+        derived_avatar_state_path,
+    )
+
+    class _Flag:
+        def set(self):
+            pass
+
+    class _Shutdown:
+        def wait(self):
+            return None
+
+    class _FakeAgent:
+        def __init__(self):
+            self._asleep = _Flag()
+            self._shutdown = _Shutdown()
+            self._state = None
+            self._venv_path = None
+
+        def start(self):
+            pass
+
+        def stop(self, timeout=10.0):
+            pass
+
+    captured = {}
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
+    monkeypatch.setattr(cli, "load_init", lambda working_dir: {})
+
+    def fake_build_agent(data, working_dir, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeAgent()
+
+    monkeypatch.setattr(cli, "build_agent", fake_build_agent)
+    import lingtai.venv_resolve as venv_resolve
+
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda data: tmp_path / "runtime-venv")
+    monkeypatch.delenv("LINGTAI_DERIVED_AVATAR_EXECUTION", raising=False)
+    state_path = derived_avatar_state_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps(DERIVED_AVATAR_STATE), encoding="utf-8")
+
+    cli.run(tmp_path)
+
+    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+
+
+def test_run_keeps_malformed_persisted_avatar_state_restrictive(monkeypatch, tmp_path):
+    """A corrupted derived marker cannot silently restore legacy admission."""
+    from lingtai import cli
+    from lingtai.tools.avatar._launcher import derived_avatar_state_path
+
+    class _Flag:
+        def set(self):
+            pass
+
+    class _Shutdown:
+        def wait(self):
+            return None
+
+    class _FakeAgent:
+        def __init__(self):
+            self._asleep = _Flag()
+            self._shutdown = _Shutdown()
+            self._state = None
+            self._venv_path = None
+
+        def start(self):
+            pass
+
+        def stop(self, timeout=10.0):
+            pass
+
+    captured = {}
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
+    monkeypatch.setattr(cli, "load_init", lambda working_dir: {})
+
+    def fake_build_agent(data, working_dir, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeAgent()
+
+    monkeypatch.setattr(cli, "build_agent", fake_build_agent)
+    import lingtai.venv_resolve as venv_resolve
+
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda data: tmp_path / "runtime-venv")
+    monkeypatch.delenv("LINGTAI_DERIVED_AVATAR_EXECUTION", raising=False)
+    state_path = derived_avatar_state_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("not-json", encoding="utf-8")
+
+    cli.run(tmp_path)
+
+    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+
+
 def test_avatar_child_cli_boot_reaches_structured_missing_authority_denial(
     monkeypatch, tmp_path,
 ):
@@ -970,7 +1073,15 @@ def test_avatar_child_cli_boot_reaches_structured_missing_authority_denial(
     monkeypatch.setattr(cli, "build_agent", capture_build_agent)
     monkeypatch.setattr(Agent, "start", lambda self: self._shutdown.set())
     monkeypatch.setattr(Agent, "stop", lambda self, timeout=10.0: None)
-    monkeypatch.setenv("LINGTAI_DERIVED_AVATAR_EXECUTION", "1")
+    from lingtai.tools.avatar._launcher import (
+        DERIVED_AVATAR_STATE,
+        derived_avatar_state_path,
+    )
+
+    monkeypatch.delenv("LINGTAI_DERIVED_AVATAR_EXECUTION", raising=False)
+    state_path = derived_avatar_state_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps(DERIVED_AVATAR_STATE), encoding="utf-8")
 
     cli.run(tmp_path)
 

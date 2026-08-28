@@ -98,6 +98,31 @@ class TestAvatarManager:
         assert "bash" not in child_caps
         assert "avatar" in child_caps
 
+    def test_spawn_persists_restrictive_derived_child_state(self, tmp_path):
+        """A later direct boot of this directory stays a derived child."""
+        from lingtai.agent import Agent
+        from lingtai.tools.avatar._launcher import (
+            DERIVED_AVATAR_STATE,
+            derived_avatar_state_path,
+        )
+
+        parent = Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=tmp_path / "test",
+            capabilities=["avatar"],
+        )
+        result = parent.get_capability("avatar").handle(
+            {"action": "spawn", "input": {"name": "child", "confirm": True}}
+        )
+
+        assert result["status"] == "ok"
+        assert json.loads(
+            derived_avatar_state_path(parent._working_dir.parent / "child").read_text(
+                encoding="utf-8"
+            )
+        ) == DERIVED_AVATAR_STATE
+
     def test_spawn_inherits_covenant(self, tmp_path):
         """Spawned agent should inherit parent's covenant."""
         from lingtai.agent import Agent
