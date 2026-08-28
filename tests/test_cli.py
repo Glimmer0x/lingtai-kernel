@@ -944,6 +944,60 @@ def test_run_marks_derived_avatar_child_as_requiring_authority(monkeypatch, tmp_
     assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
 
 
+def test_avatar_child_cli_boot_reaches_structured_missing_authority_denial(
+    monkeypatch, tmp_path,
+):
+    """The real avatar child boot composes required-without-bearer semantics."""
+    from lingtai import cli
+    from lingtai.agent import Agent
+    from lingtai.kernel.provider_admission import (
+        DerivedLaunchAdmissionError,
+        ProviderAdmissionState,
+    )
+
+    _write_init(tmp_path, {"manifest": {"capabilities": {"avatar": {}}}})
+    captured = []
+    real_build_agent = cli.build_agent
+
+    def capture_build_agent(data, working_dir, **kwargs):
+        agent = real_build_agent(data, working_dir, **kwargs)
+        captured.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
+    monkeypatch.setattr(cli, "build_agent", capture_build_agent)
+    monkeypatch.setattr(Agent, "start", lambda self: self._shutdown.set())
+    monkeypatch.setattr(Agent, "stop", lambda self, timeout=10.0: None)
+    monkeypatch.setenv("LINGTAI_DERIVED_AVATAR_EXECUTION", "1")
+
+    cli.run(tmp_path)
+
+    child = captured.pop()
+    assert child._requires_derived_launch_admission_port is True
+    manager = child.get_capability("avatar")
+    with pytest.raises(DerivedLaunchAdmissionError) as raised:
+        manager._authorize_derived_launch("nested")
+    assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+    assert raised.value.decision.reason_code == "required_derived_launch_admission_port_missing"
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "delegates" / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert records == [
+        {
+            "ts": records[0]["ts"],
+            "event": "avatar_admission_decision",
+            "name": "nested",
+            "capability": "avatar",
+            "state": "indeterminate",
+            "reason_code": "required_derived_launch_admission_port_missing",
+            "audit_id": None,
+        }
+    ]
+
+
 def test_log_doctor_does_not_create_agent_log(monkeypatch, tmp_path):
     """Inspector subcommands must stay write-free w.r.t. agent.log.
 

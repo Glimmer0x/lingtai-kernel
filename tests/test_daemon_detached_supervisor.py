@@ -1126,9 +1126,24 @@ def test_detached_daemon_child_requires_derived_authority_before_nested_launch(t
 
     assert host._agent._requires_derived_launch_admission_port is True
     with pytest.raises(DerivedLaunchAdmissionError) as raised:
-        host._runtime.authorize_derived_launch(DerivedLaunchCapability.DAEMON)
+        host._manager_type._authorize_derived_launch(host, "daemon")
     assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
     assert raised.value.decision.reason_code == "required_derived_launch_admission_port_missing"
+    records = [
+        json.loads(line)
+        for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    decisions = [record for record in records if record["event"] == "derived_launch_admission_decision"]
+    assert decisions == [
+        {
+            "event": "derived_launch_admission_decision",
+            "ts": decisions[0]["ts"],
+            "capability": DerivedLaunchCapability.DAEMON.value,
+            "state": ProviderAdmissionState.INDETERMINATE.value,
+            "reason_code": "required_derived_launch_admission_port_missing",
+            "audit_id": None,
+        }
+    ]
 
 
 
