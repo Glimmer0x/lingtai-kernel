@@ -100,6 +100,12 @@ def begin_derived_provider_admission(
     string token.  The driver bridge may associate the returned object's hidden
     handle with its own in-memory transport state, but authority is re-decided
     when the actual provider call reaches :func:`require_provider_admission`.
+
+    v0 permits exactly one derived hop. This factory accepts a root admission,
+    never an existing derived admission, so Core cannot mint a nested
+    daemon/avatar parent by accident. The Driver must enforce the same rule at
+    its launch boundary; a future recursive profile needs an explicitly new
+    contract rather than relaxing this type boundary.
     """
 
     return DerivedProviderAdmission(root=root, call_class=call_class)
