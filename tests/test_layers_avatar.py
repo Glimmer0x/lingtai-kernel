@@ -98,8 +98,9 @@ class TestAvatarManager:
         assert "bash" not in child_caps
         assert "avatar" in child_caps
 
-    def test_spawn_persists_restrictive_derived_child_state(self, tmp_path):
-        """A later direct boot of this directory stays a derived child."""
+    @pytest.mark.parametrize("avatar_type", ["shallow", "deep"])
+    def test_spawn_persists_restrictive_derived_child_state(self, tmp_path, avatar_type):
+        """Every spawn mode keeps the child directory derived after copying."""
         from lingtai.agent import Agent
         from lingtai.tools.avatar._launcher import (
             DERIVED_AVATAR_STATE,
@@ -113,7 +114,10 @@ class TestAvatarManager:
             capabilities=["avatar"],
         )
         result = parent.get_capability("avatar").handle(
-            {"action": "spawn", "input": {"name": "child", "confirm": True}}
+            {
+                "action": "spawn",
+                "input": {"name": "child", "type": avatar_type, "confirm": True},
+            }
         )
 
         assert result["status"] == "ok"
