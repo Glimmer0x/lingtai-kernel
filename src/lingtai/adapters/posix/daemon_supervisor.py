@@ -153,7 +153,13 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                     DRIVER_AUTHORITY_FD_ENV,
                     consume_posix_child_endpoint_lease,
                 )
+                from lingtai.tools.daemon.execution_host import (
+                    mark_derived_daemon_requires_authority,
+                )
 
+                # Persist before handing off the process. A later wrapper or
+                # manual restart must remain restricted even if it loses env.
+                mark_derived_daemon_requires_authority(run_dir)
                 authority_fd = consume_posix_child_endpoint_lease(authority_lease)
                 env[DRIVER_AUTHORITY_FD_ENV] = str(authority_fd)
                 # Restrictive boot requirement only, never a grant/bearer.
@@ -258,9 +264,16 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                     view = view[written:]
                 os.close(write_fd)
                 write_fd = None
+            if authority_fd is not None:
+                # The supervisor has handed the exact fd to its execution
+                # child; retain neither the descriptor nor its locator for a
+                # later accidental relay.
+                os.close(authority_fd)
+                authority_fd = None
+                os.environ.pop("LINGTAI_DRIVER_AUTHORITY_FD", None)
             return proc
         finally:
-            for fd in (read_fd, write_fd):
+            for fd in (read_fd, write_fd, authority_fd):
                 if fd is not None:
                     try:
                         os.close(fd)

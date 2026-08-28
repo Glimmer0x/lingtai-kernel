@@ -13,6 +13,7 @@ import pytest
 
 from lingtai.adapters.acp.driver_authority import (
     DriverAuthorityAdapter,
+    DriverAuthorityEndpointBindingMismatch,
     DriverAuthorityTransportError,
     UnavailableDriverAuthorityAdapter,
     authority_adapter_from_environment,
@@ -146,6 +147,40 @@ def test_derived_endpoint_cannot_mint_a_second_child_even_if_it_has_a_socket():
             require_derived_launch_admission(adapter, DerivedLaunchCapability.DAEMON)
     finally:
         clear_provider_admission(token)
+    thread.join(timeout=2)
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint_capability", "expected_call_class"),
+    [
+        ("daemon", ProviderCallClass.AVATAR_CHILD),
+        ("avatar", ProviderCallClass.DAEMON),
+    ],
+)
+def test_local_child_mode_must_match_the_driver_endpoint_capability(
+    endpoint_capability, expected_call_class,
+):
+    """Composition cannot treat a self-consistent wrong endpoint as authority."""
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "role": "derived",
+                "launch_id": "child-1",
+                "capability": endpoint_capability,
+            },
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    with pytest.raises(DriverAuthorityEndpointBindingMismatch):
+        adapter.derived_provider_parent(expected_call_class)
+    adapter.close()
     thread.join(timeout=2)
     assert errors == []
 

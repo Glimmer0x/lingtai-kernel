@@ -42,6 +42,10 @@ class DriverAuthorityTransportError(RuntimeError):
     """A bounded wire/descriptor failure translated to INDETERMINATE."""
 
 
+class DriverAuthorityEndpointBindingMismatch(DriverAuthorityTransportError):
+    """The locally expected child mode disagrees with the Driver endpoint."""
+
+
 @dataclass(frozen=True, slots=True)
 class _EndpointIdentity:
     role: str
@@ -167,7 +171,9 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
     def launch_id(self) -> str:
         return self._identity.launch_id
 
-    def derived_provider_parent(self) -> DerivedProviderAdmission:
+    def derived_provider_parent(
+        self, expected_call_class: ProviderCallClass | None = None
+    ) -> DerivedProviderAdmission:
         """Return the local Core context for this Driver-bound child endpoint.
 
         The resulting object is not a grant: each provider call still crosses
@@ -184,6 +190,10 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
             if capability is DerivedLaunchCapability.DAEMON
             else ProviderCallClass.AVATAR_CHILD
         )
+        if expected_call_class is not None and call_class is not expected_call_class:
+            raise DriverAuthorityEndpointBindingMismatch(
+                "authority endpoint capability does not match local child mode"
+            )
         root = RootProviderAdmission(
             correlation_id=f"driver-launch:{self._identity.launch_id}",
             policy_version="driver-authority.v1",
@@ -465,6 +475,41 @@ class UnavailableDriverAuthorityAdapter(ProviderCallAdmissionPort):
         )
 
 
+class EndpointBindingMismatchAuthorityAdapter(ProviderCallAdmissionPort):
+    """Fail closed after local child composition finds a wrong endpoint mode."""
+
+    __slots__ = ()
+
+    def derived_provider_parent(
+        self, call_class: ProviderCallClass
+    ) -> DerivedProviderAdmission:
+        return begin_derived_provider_admission(
+            RootProviderAdmission(
+                correlation_id="driver-endpoint-binding-mismatch",
+                policy_version="driver-authority.v1",
+            ),
+            call_class,
+        )
+
+    def authorize_provider_call(
+        self,
+        _parent: ProviderAdmissionParent,
+        _call_class: ProviderCallClass,
+    ) -> ProviderCallDecision:
+        return ProviderCallDecision(
+            ProviderAdmissionState.DENIED, "endpoint_binding_mismatch"
+        )
+
+    def authorize_derived_launch(
+        self,
+        _parent: RootProviderAdmission,
+        _capability: DerivedLaunchCapability,
+    ) -> DerivedLaunchDecision:
+        return DerivedLaunchDecision(
+            ProviderAdmissionState.DENIED, "endpoint_binding_mismatch"
+        )
+
+
 def authority_adapter_from_environment(
     *,
     missing_returns_none: bool = False,
@@ -494,9 +539,11 @@ def authority_adapter_from_environment(
 __all__ = [
     "DRIVER_AUTHORITY_FD_ENV",
     "DriverAuthorityAdapter",
+    "DriverAuthorityEndpointBindingMismatch",
     "DriverAuthorityTransportError",
     "DriverChildEndpointLease",
     "UnavailableDriverAuthorityAdapter",
+    "EndpointBindingMismatchAuthorityAdapter",
     "authority_adapter_from_environment",
     "close_child_endpoint_lease",
     "consume_posix_child_endpoint_lease",

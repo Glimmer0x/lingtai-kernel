@@ -156,6 +156,13 @@ only says a child requires authority and is never a grant. The Driver server
 must still provide verified ancestry and decide every actual provider call.
 This repository does not claim its identity/workdir binding, CAS consumption,
 or dynamic revoke is complete.
+
+Derived avatar directories and derived daemon run directories persist only the
+restrictive fact that authority is required; the immediate environment marker
+is redundant. A restarted child that loses its fd therefore fails closed at the
+provider gate. The daemon and avatar compositions also reject a Driver hello
+whose derived capability does not match their local execution mode with
+`endpoint_binding_mismatch`, before provider I/O.
 This is an initiation boundary, not content provenance: non-ACP systems can
 still write state which a later authenticated prompt may cause the model to
 read. Existing minimal ACP permission projection does not alter launch inputs,

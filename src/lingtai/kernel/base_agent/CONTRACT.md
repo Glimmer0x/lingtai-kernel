@@ -413,7 +413,22 @@ Clause IDs are stable; each rule composes the linked normative source.
    exists; an absent, closed, malformed, version-mismatched, or unavailable
    endpoint is structured `INDETERMINATE` before spawn or provider I/O and can
    never fall back to `legacy_default`. A derived endpoint cannot mint a second
-   child endpoint. This Core wiring deliberately does not claim that the
+   child endpoint. A derived avatar directory and a derived daemon run
+   directory each persist a restrictive requirement marker before their child
+   starts; env is redundant only. Losing the fd or env on a later restart
+   therefore installs an unavailable provider gate and rejects before provider
+   I/O rather than restoring generic behavior. Core's local one-shot lease guard is resource management,
+   not the security claim: the Driver must atomically enforce
+   `ISSUED -> CLAIMED` when the first v1 handshake succeeds, and must
+   deny/audit every competing or later claimant. Any wire disagreement with
+   the Driver-bound launch, capability, provider, role, or depth is the
+   distinct high-signal `DENIED / endpoint_binding_mismatch`, never an
+   ordinary business denial. The daemon/avatar compositions each compare their
+   locally expected call class with the endpoint hello capability; a cross-mode
+    endpoint becomes that same denial before provider I/O. Until the external #299 CAS work lands,
+    `authorize_provider_call` is a per-call decision only: it does not provide
+    replay protection, atomic consumption, or exactly-once provider I/O.
+    This Core wiring deliberately does not claim that the
    external Driver server, registry/identity binding, grant-CAS consumption, or
    dynamic revoke is implemented here. The following remain **constrained host-
    adapter requirements**, not claims made by this Core seam:
