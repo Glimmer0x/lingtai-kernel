@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from lingtai.kernel.provider_admission import (
     bind_provider_admission,
     clear_provider_admission,
 )
+from lingtai.kernel.llm_utils import send_with_timeout
 
 
 class _InnerSession:
@@ -138,6 +140,32 @@ def test_every_session_send_and_generate_crosses_the_same_admission_port():
         (root, ProviderCallClass.ROOT),
         (root, ProviderCallClass.ROOT),
     ]
+
+
+def test_root_admission_reaches_the_real_provider_worker_thread():
+    """The production timeout worker must retain an admitted root context."""
+
+    inner = _InnerService()
+    port = _RecordingAdmissionPort()
+    session = ProviderAdmittedLLMService(inner, port).create_session("system")
+    root = RootProviderAdmission("turn-worker", "puffo-v0.test")
+    token = bind_provider_admission(root)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as timeout_pool:
+            result = send_with_timeout(
+                session,
+                "through-worker",
+                timeout_pool,
+                retry_timeout=1.0,
+                agent_name="provider-admission-test",
+                logger=None,
+            )
+    finally:
+        clear_provider_admission(token)
+
+    assert result == "through-worker"
+    assert inner.session.calls == [("send", "through-worker")]
+    assert port.calls == [(root, ProviderCallClass.ROOT)]
 
 
 def test_derived_call_class_is_not_inferred_from_user_controlled_text():
