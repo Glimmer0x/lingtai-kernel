@@ -385,7 +385,13 @@ Clause IDs are stable; each rule composes the linked normative source.
    unguarded window, while 2b proves that the opened tool surface reaches the
    intended refusal rather than empty-passing at the old filter. The launch
    inventory is a regression tripwire, not a one-time review: a new constructor
-   must fail until classified. The Core `TypeError` is merely a structural
+   must fail until classified. Its static matcher must cover direct-name and
+   attribute calls, imported aliases, and package re-exports. It is not a
+   whole-program proof over dynamic dispatch (`getattr`, registry lookup, or
+   factory indirection) or subclasses/wrappers that override a launch entry;
+   those are explicit blind spots that require focused review and production
+   path E2E, not an inference from a green inventory. The Core `TypeError` is
+   merely a structural
    backstop and must not be the only rejection signal. This adapter integration
    is not delivered by this Core type boundary alone. A host that
    binds a derived parent before its transport is connected receives explicit
