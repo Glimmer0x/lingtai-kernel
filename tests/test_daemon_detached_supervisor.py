@@ -17,12 +17,14 @@ cannot cross a process boundary).
 from __future__ import annotations
 
 import json
+import errno
 import os
 import signal
 import socket
 import subprocess
 import textwrap
 import threading
+import struct
 
 import pytest
 import sys
@@ -263,8 +265,8 @@ def test_posix_supervisor_hands_only_one_driver_child_endpoint_to_its_child(
     assert kwargs["env"]["LINGTAI_DRIVER_AUTHORITY_FD"] == str(child_fds[0])
     assert kwargs["env"]["LINGTAI_DERIVED_DAEMON_EXECUTION"] == "1"
     assert kwargs["close_fds"] is True
-    from lingtai.tools.daemon.execution_host import derived_daemon_state_path
-    assert derived_daemon_state_path(run_dir.path).is_file()
+    from lingtai.kernel.daemon_supervisor.manifest import read_manifest
+    assert read_manifest(manifest_path_for(run_dir.path))["derived_launch_admission_required"] is True
 
 
 def test_detached_lingtai_run_survives_agent_stop_shutdown_and_reaches_done(tmp_path):
@@ -1201,9 +1203,10 @@ def test_persisted_daemon_child_without_fd_fails_before_provider_io(tmp_path, mo
         bind_provider_admission,
         clear_provider_admission,
     )
-    from lingtai.tools.daemon.execution_host import (
-        DetachedDaemonExecutionHost,
-        mark_derived_daemon_requires_authority,
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from lingtai.kernel.daemon_supervisor.manifest import (
+        mark_manifest_requires_derived_launch_admission,
+        read_manifest,
     )
     from threading import Event
 
@@ -1235,7 +1238,10 @@ def test_persisted_daemon_child_without_fd_fails_before_provider_io(tmp_path, mo
         llm={"provider": "fake", "model": "fake", "api_key": None,
              "base_url": None, "context_window": None, "provider_defaults": None},
     )
-    mark_derived_daemon_requires_authority(run_dir.path)
+    from lingtai.kernel.daemon_supervisor.manifest import write_manifest
+    write_manifest(run_dir.path, manifest)
+    mark_manifest_requires_derived_launch_admission(run_dir.path)
+    manifest = read_manifest(manifest_path_for(run_dir.path))
     host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
     inner = _InnerService()
     service = ProviderAdmittedLLMService(inner, host._agent._provider_call_admission_port)
@@ -1248,7 +1254,79 @@ def test_persisted_daemon_child_without_fd_fails_before_provider_io(tmp_path, mo
     assert inner.session.calls == []
 
 
+def test_v3_daemon_manifest_missing_or_malformed_requirement_is_restrictive(tmp_path):
+    """Only an explicit v3 false, or legacy v2, may retain generic behavior."""
+    from lingtai.kernel.daemon_supervisor.manifest import (
+        DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD,
+        manifest_requires_derived_launch_admission,
+    )
 
+    manifest = build_manifest(
+        run_id="run", backend="lingtai", parent_working_dir=str(tmp_path),
+        run_dir=str(tmp_path / "run"), task="task", tools=[], max_turns=1,
+        timeout_s=1, group_id=None,
+    )
+    assert manifest_requires_derived_launch_admission(manifest) is False
+    manifest.pop(DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD)
+    assert manifest_requires_derived_launch_admission(manifest) is True
+    manifest[DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD] = "not-a-bool"
+    assert manifest_requires_derived_launch_admission(manifest) is True
+    manifest["schema"] = "lingtai.daemon_supervisor_manifest.v2"
+    assert manifest_requires_derived_launch_admission(manifest) is False
+
+
+def test_real_daemon_second_hop_loses_root_fd_but_keeps_the_adopted_endpoint(
+    tmp_path, monkeypatch,
+):
+    """The supervisor relays its held endpoint object, never an env fd number."""
+    from lingtai.adapters.posix import daemon_supervisor as supervisor_module
+
+    run_dir = _make_run_dir(tmp_path, task="authority two-hop probe")
+    root_client, root_driver = socket.socketpair()
+    child_client, child_driver = socket.socketpair()
+    result_path = tmp_path / "two-hop-result.json"
+    server_errors: list[BaseException] = []
+
+    def driver_server():
+        try:
+            header = child_driver.recv(4)
+            assert len(header) == 4
+            size = struct.unpack("!I", header)[0]
+            assert json.loads(child_driver.recv(size).decode()) == {"version": 1, "op": "hello"}
+            response = json.dumps(
+                {"version": 1, "role": "derived", "launch_id": "child-1", "capability": "daemon"},
+                separators=(",", ":"),
+            ).encode()
+            child_driver.sendall(struct.pack("!I", len(response)) + response)
+        except BaseException as exc:
+            server_errors.append(exc)
+        finally:
+            child_driver.close()
+
+    source_root = str(Path(__file__).resolve().parents[1])
+    monkeypatch.setenv("PYTHONPATH", source_root + os.pathsep + str(Path(source_root) / "src"))
+    monkeypatch.setenv("ROOT_AUTHORITY_FD", str(root_client.fileno()))
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(child_client.fileno()))
+    supervisor_module.adopt_supervisor_authority_endpoint()
+    assert "LINGTAI_DRIVER_AUTHORITY_FD" not in os.environ
+    server = threading.Thread(target=driver_server)
+    server.start()
+    try:
+        child = PosixDaemonSupervisorAdapter._spawn_capsule_process(
+            "tests._daemon_authority_probe", sys.executable, [str(result_path)],
+            run_dir=run_dir.path,
+        )
+        assert child.wait(timeout=2) == 0
+        server.join(timeout=2)
+        assert server_errors == []
+        assert json.loads(result_path.read_text()) == {
+            "root_errno": errno.EBADF,
+            "child_role": "derived",
+        }
+    finally:
+        root_client.close()
+        root_driver.close()
+        child_driver.close()
 def test_detached_shell_async_uses_run_local_events_not_agent_notifications(tmp_path):
     """Actual detached Shell async completion is pollable without an Agent sink."""
     from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost

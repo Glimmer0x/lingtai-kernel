@@ -165,10 +165,10 @@ must still provide verified ancestry and decide every actual provider call.
 This repository does not claim its identity/workdir binding, CAS consumption,
 or dynamic revoke is complete.
 
-Derived avatar directories and derived daemon run directories persist only the
-restrictive fact that authority is required; the immediate environment marker
-is redundant. A restarted child that loses its fd therefore fails closed at the
-provider gate. The daemon and avatar compositions also reject a Driver hello
+Derived avatar directories and versioned derived-daemon supervisor manifests
+persist only the restrictive fact that authority is required; the immediate
+environment marker is redundant. A restarted child that loses its fd therefore
+fails closed at the provider gate. The daemon and avatar compositions also reject a Driver hello
 whose derived capability does not match their local execution mode with
 `endpoint_binding_mismatch`, before provider I/O.
 This is an initiation boundary, not content provenance: non-ACP systems can

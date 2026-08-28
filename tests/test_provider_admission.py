@@ -387,7 +387,7 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
         ("src/lingtai/tools/daemon/__init__.py", 6540, "Thread"),
         ("src/lingtai/tools/daemon/__init__.py", 9144, "ThreadPoolExecutor"),
         ("src/lingtai/tools/daemon/claude_interactive.py", 611, "Thread"),
-        ("src/lingtai/tools/daemon/execution_host.py", 701, "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/execution_host.py", 675, "ThreadPoolExecutor"),
         ("src/lingtai/tools/daemon/posix_process.py", 112, "Thread"),
         ("src/lingtai/tools/daemon/runtime.py", 133, "Thread"),
         ("src/lingtai/tools/daemon/runtime.py", 220, "Thread"),

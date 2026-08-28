@@ -413,9 +413,10 @@ Clause IDs are stable; each rule composes the linked normative source.
    exists; an absent, closed, malformed, version-mismatched, or unavailable
    endpoint is structured `INDETERMINATE` before spawn or provider I/O and can
    never fall back to `legacy_default`. A derived endpoint cannot mint a second
-   child endpoint. A derived avatar directory and a derived daemon run
-   directory each persist a restrictive requirement marker before their child
-   starts; env is redundant only. Losing the fd or env on a later restart
+   child endpoint. A derived avatar directory persists a restrictive marker;
+   a derived daemon persists the same restrictive requirement in its versioned
+   supervisor manifest before child start. Env is redundant only. Losing the
+   fd or env on a later restart
    therefore installs an unavailable provider gate and rejects before provider
    I/O rather than restoring generic behavior. Core's local one-shot lease guard is resource management,
    not the security claim: the Driver must atomically enforce

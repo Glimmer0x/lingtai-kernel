@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 from pathlib import Path
 
@@ -46,6 +47,43 @@ _CLI_CREDENTIAL_ENV_NAMES = {
     "deepseek": {"DEEPSEEK_API_KEY"},
     "cursor": {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CURSOR_API_KEY"},
 }
+_SUPERVISOR_AUTHORITY_ENDPOINT: socket.socket | None = None
+
+
+def adopt_supervisor_authority_endpoint() -> None:
+    """Adopt the inherited endpoint once, then erase its numeric locator.
+
+    The detached supervisor owns an endpoint object rather than repeatedly
+    re-parsing an env fd number.  This keeps an unrelated later fd reuse from
+    becoming a fake authority handoff on the second process hop.
+    """
+
+    global _SUPERVISOR_AUTHORITY_ENDPOINT
+    raw_fd = os.environ.pop("LINGTAI_DRIVER_AUTHORITY_FD", None)
+    if raw_fd is None:
+        return
+    try:
+        endpoint = socket.socket(fileno=int(raw_fd))
+        os.set_inheritable(endpoint.fileno(), False)
+    except (OSError, ValueError):
+        return
+    if _SUPERVISOR_AUTHORITY_ENDPOINT is not None:
+        _SUPERVISOR_AUTHORITY_ENDPOINT.close()
+    _SUPERVISOR_AUTHORITY_ENDPOINT = endpoint
+
+
+def _take_supervisor_authority_fd() -> int | None:
+    """Detach the exact adopted endpoint for the one execution child only."""
+
+    global _SUPERVISOR_AUTHORITY_ENDPOINT
+    endpoint = _SUPERVISOR_AUTHORITY_ENDPOINT
+    _SUPERVISOR_AUTHORITY_ENDPOINT = None
+    if endpoint is None:
+        return None
+    try:
+        return endpoint.detach()
+    except OSError:
+        return None
 
 
 def selected_credential_environment(backend: str) -> dict[str, str]:
@@ -153,13 +191,13 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                     DRIVER_AUTHORITY_FD_ENV,
                     consume_posix_child_endpoint_lease,
                 )
-                from lingtai.tools.daemon.execution_host import (
-                    mark_derived_daemon_requires_authority,
+                from lingtai.kernel.daemon_supervisor.manifest import (
+                    mark_manifest_requires_derived_launch_admission,
                 )
 
                 # Persist before handing off the process. A later wrapper or
                 # manual restart must remain restricted even if it loses env.
-                mark_derived_daemon_requires_authority(run_dir)
+                mark_manifest_requires_derived_launch_admission(run_dir)
                 authority_fd = consume_posix_child_endpoint_lease(authority_lease)
                 env[DRIVER_AUTHORITY_FD_ENV] = str(authority_fd)
                 # Restrictive boot requirement only, never a grant/bearer.
@@ -222,18 +260,11 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
         parts = [str(source_root)]
         parts.extend(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)
         env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(parts))
-        authority_fd = None
-        raw_authority_fd = env.get("LINGTAI_DRIVER_AUTHORITY_FD")
-        if raw_authority_fd is not None:
-            try:
-                authority_fd = int(raw_authority_fd)
-                os.set_inheritable(authority_fd, False)
-            except (OSError, ValueError):
-                # The execution child will receive the locator only if this
-                # supervisor owns a live endpoint. A broken descriptor must
-                # not be silently inherited as an apparent authority.
-                env.pop("LINGTAI_DRIVER_AUTHORITY_FD", None)
-                authority_fd = None
+        authority_fd = _take_supervisor_authority_fd()
+        if authority_fd is not None:
+            # The env value is just a locator for this exact object in the
+            # execution child. The supervisor no longer retains either form.
+            env["LINGTAI_DRIVER_AUTHORITY_FD"] = str(authority_fd)
         if read_fd is not None:
             env["LINGTAI_DAEMON_CAPSULE_FD"] = str(read_fd)
         stdout_path = run_dir / ("execution.stdout.log" if "execution_child" in module else "resume-owner.stdout.log")
@@ -308,5 +339,6 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
 
 __all__ = [
     "PosixDaemonSupervisorAdapter", "ENTRYPOINT_MODULE", "EXECUTION_CHILD_MODULE",
-    "RESUME_OWNER_MODULE", "selected_credential_environment",
+    "RESUME_OWNER_MODULE", "adopt_supervisor_authority_endpoint",
+    "selected_credential_environment",
 ]
