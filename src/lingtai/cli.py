@@ -327,6 +327,21 @@ def _check_duplicate_process(working_dir: Path) -> None:
         sys.exit(1)
 
 
+def _derived_avatar_requires_admission(working_dir: Path) -> bool:
+    """Whether durable avatar state restricts nested derived launches.
+
+    The state is deliberately presence-based.  The only safe way a child can
+    become less restricted is for the marker to be absent; a malformed file,
+    directory, or symlink at the marker location therefore remains restrictive.
+    It is not an authority credential and is only a defense against accidental
+    loss of the requirement in a trusted-host deployment.
+    """
+    from lingtai.tools.avatar._launcher import derived_avatar_state_path
+
+    marker = derived_avatar_state_path(working_dir)
+    return marker.exists() or marker.is_symlink()
+
+
 def run(working_dir: Path) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
     _check_duplicate_process(working_dir)
@@ -356,13 +371,16 @@ def run(working_dir: Path) -> None:
     # explicitly edit it if they want to persist this choice.
     data["venv_path"] = str(venv_dir)
 
-    # Avatar child processes carry only this restrictive marker. It conveys no
-    # parent/grant/authority: it merely makes a missing derived-launch port
-    # fail closed should the child attempt a nested daemon/avatar launch.
+    # Avatar child processes persist a restrictive state in their own working
+    # directory. The environment marker is only redundant transport for the
+    # immediate launch. Neither carries a parent, grant, or authority bearer.
     from lingtai.tools.avatar._launcher import DERIVED_AVATAR_EXECUTION_ENV
 
     build_options = {}
-    if os.environ.get(DERIVED_AVATAR_EXECUTION_ENV) == "1":
+    if (
+        _derived_avatar_requires_admission(working_dir)
+        or os.environ.get(DERIVED_AVATAR_EXECUTION_ENV) == "1"
+    ):
         build_options["_requires_derived_launch_admission_port"] = True
     agent = build_agent(data, working_dir, **build_options)
     agent._venv_path = str(venv_dir)
