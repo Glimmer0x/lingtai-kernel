@@ -315,6 +315,19 @@ class SessionManager:
     def streaming(self) -> bool:
         return self._streaming
 
+    @streaming.setter
+    def streaming(self, value: bool) -> None:
+        """Switch the streaming/non-streaming send path for later requests.
+
+        Refresh installs the resolved runtime policy here so a changed
+        ``streaming`` setting is not a constructor-only property. Only a real
+        bool is accepted; the flag is read per request, so an in-flight send
+        finishes on the path it started with.
+        """
+        if type(value) is not bool:
+            raise TypeError("streaming must be a bool")
+        self._streaming = value
+
     @property
     def interaction_id(self) -> str | None:
         return self._interaction_id

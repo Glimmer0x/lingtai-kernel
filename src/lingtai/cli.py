@@ -8,6 +8,7 @@ import signal
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
 from lingtai.adapters.posix.git_cli import PosixGitCliAdapter
@@ -29,6 +30,7 @@ from lingtai.llm.service import (
 )
 from lingtai.agent import Agent
 from lingtai.kernel.process_match import match_agent_acp, match_agent_run
+from lingtai.tools.system.settings import resolve_runtime_policy
 
 
 def load_init(working_dir: Path) -> dict:
@@ -76,7 +78,9 @@ def _raise_env_miss(message: str, env_file: str | None) -> None:
     )
 
 
-def build_llm_service(data: dict, working_dir: Path) -> LLMService:
+def build_llm_service(
+    data: dict, working_dir: Path, runtime_policy: Any | None = None
+) -> LLMService:
     """Construct the manifest's ``LLMService`` — no Agent, lease, or heartbeat.
 
     Split out of :func:`build_agent` so short-lived, non-booting entry points
@@ -85,10 +89,18 @@ def build_llm_service(data: dict, working_dir: Path) -> LLMService:
     re-deriving credentials themselves. Loading ``env_file`` stays with the
     caller: boot has refresh-marker semantics that a one-shot CLI must not
     inherit.
+
+    ``max_rpm`` and ``context_limit`` come from the System-resolved runtime
+    policy (env > ``settings/system.json`` v2 > effective manifest > default),
+    the same policy ``Agent._setup_from_init`` applies, so the service built
+    here never disagrees with the later configured setup. Pass
+    *runtime_policy* to reuse an already-resolved policy.
     """
     m = data["manifest"]
     llm = m["llm"]
     env_file = data.get("env_file")
+    if runtime_policy is None:
+        runtime_policy = resolve_runtime_policy(working_dir, m)
 
     api_key = resolve_env_checked(
         llm.get("api_key"),
@@ -100,13 +112,13 @@ def build_llm_service(data: dict, working_dir: Path) -> LLMService:
     # Default 60 matches AgentConfig.max_rpm — agents whose init.json
     # predates this field cooperatively share the network-wide 60 RPM cap
     # by default. Set to 0 in init.json to disable gating.
-    max_rpm = m.get("max_rpm", 60)
+    max_rpm = runtime_policy.max_rpm
     # Pass working_dir so Codex agents get their per-agent session/thread
     # identity (agent path + last molt time) wired in by default.
     provider_defaults = build_provider_defaults_from_manifest_llm(
         llm, max_rpm=max_rpm, working_dir=working_dir
     )
-    context_window = m.get("context_limit")
+    context_window = runtime_policy.context_limit
     if (
         not isinstance(context_window, int)
         or isinstance(context_window, bool)
@@ -150,7 +162,12 @@ def build_agent(
         os.environ.pop("LINGTAI_REFRESH_ENV_OVERWRITE", None)
 
     m = data["manifest"]
-    service = build_llm_service(data, working_dir)
+    # Resolve the ordinary runtime policy once, after env_file loading, and
+    # feed both the early service and the constructor-time streaming flag
+    # from it; _setup_from_init re-resolves the same inputs for the
+    # configured pass, so boot cannot be internally inconsistent.
+    runtime_policy = resolve_runtime_policy(working_dir, m)
+    service = build_llm_service(data, working_dir, runtime_policy)
 
     mail_service = PosixFilesystemMailAdapter(
         working_dir=working_dir,
@@ -177,7 +194,7 @@ def build_agent(
             working_dir,
             ensure_ascii=False,
         ),
-        streaming=m.get("streaming", False),
+        streaming=runtime_policy.streaming,
         _forced_disable=_forced_disable,
         _turn_origin_policy=_turn_origin_policy,
         _requires_turn_origin_policy=_requires_turn_origin_policy,

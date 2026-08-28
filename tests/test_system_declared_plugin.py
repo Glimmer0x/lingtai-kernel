@@ -210,7 +210,10 @@ def test_system_budget_uses_env_then_file_then_default(monkeypatch, tmp_path):
     (
         "{",
         "[]",
-        '{"schema_version": 2, "cache_miss_budget": 1}',
+        # A v2 document is now a valid System document (see
+        # tests/test_system_runtime_policy.py); only unknown versions reject.
+        '{"schema_version": 3, "cache_miss_budget": 1}',
+        '{"schema_version": 2, "cache_miss_budget": 1, "extra": 2}',
         '{"schema_version": 1, "cache_miss_budget": 0}',
         '{"schema_version": 1, "cache_miss_budget": true}',
         '{"schema_version": 1, "cache_miss_budget": "123"}',

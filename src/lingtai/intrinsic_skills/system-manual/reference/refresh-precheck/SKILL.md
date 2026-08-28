@@ -170,8 +170,9 @@ If current context exceeds the target's limit, **the swap is refused before acti
 have already told a human "switching now" is a self-inflicted incident. Order is:
 tend durable stores → `context(action="molt", …)` → re-check → swap.
 
-Note also that the cache-miss budget (`manifest.cache_miss_budget`, default 1,000,000)
-accumulates **since last molt and survives a refresh** — refreshing does not reset it.
+Note also that the cache-miss budget (System-owned `settings/system.json`, default
+2,000,000; legacy `manifest.cache_miss_budget` is ignored) accumulates **since last
+molt and survives a refresh** — refreshing does not reset it.
 
 ### Step 6 — Newly introduced environment variables (trigger: the change adds an env read)
 

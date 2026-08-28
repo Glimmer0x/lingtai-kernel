@@ -188,8 +188,8 @@ procedure you requested may be summarized away before you can follow it.
 
 ### Cache-miss budget
 
-System owns `<agent-workdir>/settings/system.json` for this one setting; there is
-no per-action settings file. The complete document is:
+System owns `<agent-workdir>/settings/system.json`; there is no per-action
+settings file. The closed v1 document carries this one setting:
 
 ```json
 {"schema_version": 1, "cache_miss_budget": 2000000}
@@ -197,10 +197,11 @@ no per-action settings file. The complete document is:
 
 Both values must be JSON integers (not booleans), the version must be `1`, the
 budget must be positive, and no other or duplicate keys are accepted. Resolution
-is live valid `LINGTAI_CACHE_MISS_BUDGET`, then live valid System JSON, then the
-fixed `2,000,000` default. Invalid env falls through; missing, unreadable,
-malformed, or invalid JSON uses the default. A valid env bypasses the file. The
-reader never creates or rewrites it.
+is live valid `LINGTAI_CACHE_MISS_BUDGET`, then live valid System JSON (the v1
+budget, or the v2 `cache_miss_budget` field below), then the fixed `2,000,000`
+default. Invalid env falls through; missing, unreadable, malformed, or invalid
+JSON uses the default. A valid env bypasses the file. The reader never creates
+or rewrites it.
 
 Direct process-env and unshadowed file changes apply on the next metadata
 snapshot; an `env_file` edit still needs refresh. Threshold changes and refreshes
@@ -208,6 +209,40 @@ do not reset cumulative `token_usage.session.cache_miss_tokens`; only molt does.
 The threshold is advisory and never blocks a request. This path is unrelated to
 `.notification/system.json`. Legacy `init.json`
 `manifest.cache_miss_budget` is ignored and has no runtime effect.
+
+### Runtime policy (v2)
+
+The same file may instead be a closed v2 document carrying any subset of the
+ordinary runtime-policy fields, for example:
+
+```json
+{"schema_version": 2, "context_limit": 200000, "max_rpm": 30, "streaming": true}
+```
+
+Accepted keys are exactly `context_limit` (positive integer or `null` = no
+configured limit), `max_rpm` (integer `>= 0`; `0` disables gating), `streaming`
+(boolean), `aed_timeout` (finite positive seconds), `max_aed_attempts` (integer
+`>= 1`), `snapshot_interval` (finite positive seconds or `null` = off),
+`activeness` (non-blank string or `null`), `cache_miss_budget` (positive
+integer), and `notification_max_chars` (positive integer; Core still clamps it to
+2048–10000 and `LINGTAI_NOTIFICATION_MAX_CHARS` still wins). Booleans never stand
+in for numbers, `NaN`/`Infinity` are rejected, and an unknown, duplicate, or
+invalid key rejects the whole document so nothing is applied partially. An
+absent key and an explicit `null` are different: absent falls through to the
+manifest, `null` is the configured value.
+
+Each ordinary field resolves as valid `LINGTAI_CONTEXT_LIMIT` / `LINGTAI_MAX_RPM`
+/ `LINGTAI_STREAMING` / `LINGTAI_AED_TIMEOUT` / `LINGTAI_MAX_AED_ATTEMPTS` /
+`LINGTAI_SNAPSHOT_INTERVAL` (`off` disables) / `LINGTAI_ACTIVENESS` > valid v2
+field > effective `init.json` manifest field > kernel default. The policy is
+resolved once at CLI boot, before the first LLM service is built, and once on
+every refresh, so the service, `AgentConfig`, and the session streaming flag
+always agree; `init.json` and `system/manifest.resolved.json` are never
+rewritten to reflect it. Enabling `snapshot_interval` by refresh on a running
+agent initializes the snapshot repository first; if that fails, snapshots stay
+off for the process and `snapshot_initialize_failed` is logged. The kernel-fixed
+context-pressure thresholds (0.85 / 1.0 / 3 rounds / 0.75) and the legacy
+`molt_*` fields are not settings: naming them makes the document invalid.
 
 Use `presets` and the refresh pre-check route before any authorized preset swap
 or refresh.

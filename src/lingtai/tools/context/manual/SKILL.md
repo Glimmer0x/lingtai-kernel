@@ -198,9 +198,9 @@ When this reminder appears, follow the urgent cadence in `reference/summarize-ma
 
 ### Cache-miss budget
 
-The soft **cache-miss token budget** (default 1,000,000 via `manifest.cache_miss_budget`, cumulative since your last molt, surfaced as `cache miss budget {N} reached, molt now`) is owned by the resident `meta_guidance` token-efficiency guidance. Two details only documented here:
+The soft **cache-miss token budget** (default 2,000,000, System-owned via `<agent-workdir>/settings/system.json`, cumulative since your last molt, surfaced as `cache miss budget {N} reached, molt now`) is owned by the resident `meta_guidance` token-efficiency guidance. Two details only documented here:
 
-- It is **overridable at runtime** by `LINGTAI_CACHE_MISS_BUDGET` (positive int, read live at every budget resolution, so `env_file` + refresh applies it without an init.json edit; an invalid or non-positive value silently falls back to the configured budget). `_meta.agent_meta.agent_state.context` reports the effective `cache_miss_budget` and the current `cache_miss_tokens`.
+- It is **overridable at runtime** by `LINGTAI_CACHE_MISS_BUDGET` (positive int, read live at every budget resolution, so `env_file` + refresh applies it without a file edit; an invalid or non-positive value silently falls back to the System file, then the fixed default). Legacy `manifest.cache_miss_budget` in `init.json` is ignored. `_meta.agent_meta.agent_state.context` reports the effective `cache_miss_budget` and the current `cache_miss_tokens`. The `system-manual` owns the file format.
 - The total **survives a refresh/restart** — it is not the since-refresh runtime delta, so refreshing does not reset the remaining budget. If the sustained context-pressure reminder is also active, both warnings are preserved in `context.molt`.
 
 ## 8. Post-Wipe Recovery

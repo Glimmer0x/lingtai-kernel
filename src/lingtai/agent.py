@@ -109,11 +109,29 @@ def _validate_provider_owned_thinking(preset: dict, name: str) -> None:
         raise ValueError(f"preset {name!r}: {exc}") from exc
 
 
-def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig:
-    """Overlay host manifest values onto AgentConfig defaults."""
+def build_agent_config(
+    manifest: dict[str, Any],
+    *,
+    max_rpm: int,
+    runtime_policy: Any | None = None,
+) -> AgentConfig:
+    """Overlay host manifest values onto AgentConfig defaults.
+
+    When *runtime_policy* (a System-resolved ``ResolvedRuntimePolicy``) is
+    given, the ordinary policy fields it owns — ``context_limit``,
+    ``activeness``, ``snapshot_interval``, ``aed_timeout``,
+    ``max_aed_attempts`` — come from it instead of the raw manifest, so boot
+    and refresh apply one effective policy without mutating the manifest.
+    Without it the legacy manifest-only overlay is unchanged.
+    """
     defaults = AgentConfig()
     soul = manifest.get("soul", {})
     llm = manifest.get("llm", {})
+    if runtime_policy is not None:
+        policy: dict[str, Any] = dict(manifest)
+        policy.update(runtime_policy.as_overrides())
+    else:
+        policy = manifest
 
     return AgentConfig(
         soul_delay=soul.get("delay", defaults.soul_delay),
@@ -128,8 +146,8 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         # Keep AgentConfig.max_turns at its default for API compatibility, but
         # deliberately ignore stale init.json values here.
         language=manifest.get("language", defaults.language),
-        activeness=manifest.get("activeness", defaults.activeness),
-        context_limit=manifest.get("context_limit", defaults.context_limit),
+        activeness=policy.get("activeness", defaults.activeness),
+        context_limit=policy.get("context_limit", defaults.context_limit),
         # Providers that own their omitted-thinking default keep the "default"
         # sentinel instead of being promoted to the legacy cross-provider
         # "high" main-session default: the Codex family (omitted ->
@@ -147,15 +165,15 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         # constants and are NOT agent-configurable. Stale manifest
         # molt_notice/molt_pressure/molt_urgency/molt_prompt values are
         # deliberately ignored.
-        snapshot_interval=manifest.get(
+        snapshot_interval=policy.get(
             "snapshot_interval", defaults.snapshot_interval
         ),
         time_awareness=manifest.get("time_awareness", defaults.time_awareness),
         timezone_awareness=manifest.get(
             "timezone_awareness", defaults.timezone_awareness
         ),
-        aed_timeout=manifest.get("aed_timeout", defaults.aed_timeout),
-        max_aed_attempts=manifest.get(
+        aed_timeout=policy.get("aed_timeout", defaults.aed_timeout),
+        max_aed_attempts=policy.get(
             "max_aed_attempts", defaults.max_aed_attempts
         ),
         max_rpm=max_rpm,
@@ -205,6 +223,22 @@ class Agent(BaseAgent):
         from lingtai.tools.system.settings import resolve_cache_miss_budget
 
         return resolve_cache_miss_budget(self)
+
+    def resolve_notification_max_chars(self) -> int | None:
+        """Lazily expose the System v2 notification cap (file layer only).
+
+        Kernel metadata consults this after its own live env read and applies
+        its own clamp/default; ``None`` means "no System file value".
+        """
+        from lingtai.tools.system.settings import resolve_notification_max_chars
+
+        return resolve_notification_max_chars(self)
+
+    def resolve_runtime_policy(self, manifest: dict[str, Any]) -> Any:
+        """Resolve the ordinary runtime policy for *manifest* once per setup."""
+        from lingtai.tools.system.settings import resolve_runtime_policy
+
+        return resolve_runtime_policy(self._working_dir, manifest)
 
     def __init__(
         self,
@@ -2196,7 +2230,13 @@ class Agent(BaseAgent):
         new_provider = llm["provider"]
         new_model = llm["model"]
         new_base_url = llm.get("base_url")
-        new_context_window = m.get("context_limit")
+        # One System-resolved policy (env > settings/system.json v2 > effective
+        # manifest > default) feeds the service, AgentConfig, and the session
+        # streaming flag below, so boot and refresh never disagree. The
+        # effective manifest ``m`` is read, never mutated, so the published
+        # ``system/manifest.resolved.json`` stays a truthful init artifact.
+        runtime_policy = self.resolve_runtime_policy(m)
+        new_context_window = runtime_policy.context_limit
         if (
             not isinstance(new_context_window, int)
             or isinstance(new_context_window, bool)
@@ -2207,7 +2247,7 @@ class Agent(BaseAgent):
         # Default 60 matches AgentConfig.max_rpm — existing agents whose
         # init.json predates this field cooperatively share the network-wide
         # 60 RPM cap by default. Set to 0 in init.json to disable gating.
-        new_max_rpm = m.get("max_rpm", 60)
+        new_max_rpm = runtime_policy.max_rpm
         # Pass working_dir so a Codex agent's per-agent session/thread identity
         # (the agent path) is resolved into the provider defaults. The agent
         # path anchor is stable across refresh, but #406 makes start/refresh one
@@ -2274,9 +2314,37 @@ class Agent(BaseAgent):
         # Reload config by overlaying explicit init.json values onto
         # AgentConfig defaults. Stale max_turns and molt_* manifest values stay
         # deliberately ignored inside build_agent_config.
-        self._config = build_agent_config(m, max_rpm=new_max_rpm)
+        new_config = build_agent_config(
+            m, max_rpm=new_max_rpm, runtime_policy=runtime_policy
+        )
+        # Snapshot enable transition on a live agent: ``_start`` initializes
+        # the snapshot port only when the policy is on at start, so turning it
+        # on by refresh must initialize the (idempotent) port BEFORE the new
+        # config becomes visible to the heartbeat tick. If initialization
+        # fails, snapshots stay off for this process instead of ticking an
+        # uninitialized port; the diagnostic names the cause.
+        thread = getattr(self, "_thread", None)
+        started = thread is not None and thread.is_alive()
+        if (
+            started
+            and self._config.snapshot_interval is None
+            and new_config.snapshot_interval is not None
+        ):
+            try:
+                self._snapshot_port.initialize()
+            except Exception as exc:
+                self._log(
+                    "snapshot_initialize_failed",
+                    error=str(exc),
+                    snapshot_interval=new_config.snapshot_interval,
+                )
+                new_config.snapshot_interval = None
+        self._config = new_config
         self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config
+        # Streaming is a per-request session flag, not a constructor-only
+        # property: install the resolved value on every boot/refresh setup.
+        self._session.streaming = runtime_policy.streaming
 
         # Reload large-result notification threshold from init.json.
         # Default 3000; 0 disables notifications entirely.  An explicit
