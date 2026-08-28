@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from lingtai.kernel.daemon_supervisor.agent_stub import DaemonSupervisorAgentStub
+from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.adapters.posix.process_identity import (
     process_identity,
@@ -29,6 +30,32 @@ from lingtai.tools.daemon.process_port import (
 
 _DAEMON_COMMON_NAME = "daemon_common"
 _REDACTED_MARKER = "<redacted>"
+_DERIVED_DAEMON_STATE_NAME = "derived_daemon_authority.json"
+_DERIVED_DAEMON_STATE = {
+    "schema_version": 1,
+    "requires_derived_launch_admission": True,
+}
+
+
+def derived_daemon_state_path(run_directory: Path) -> Path:
+    """Return the run-local durable requirement marker for a derived daemon."""
+
+    return Path(run_directory) / _DERIVED_DAEMON_STATE_NAME
+
+
+def mark_derived_daemon_requires_authority(run_directory: Path) -> None:
+    """Persist the restrictive bit before starting a Driver-derived daemon."""
+
+    atomic_write_json(
+        derived_daemon_state_path(run_directory), _DERIVED_DAEMON_STATE, fsync=True
+    )
+
+
+def derived_daemon_requires_authority(run_directory: Path) -> bool:
+    """Treat any surviving marker object, including a broken symlink, as restrictive."""
+
+    marker = derived_daemon_state_path(run_directory)
+    return marker.exists() or marker.is_symlink()
 
 
 def _default_detached_process_port():
@@ -94,7 +121,10 @@ class DetachedDaemonExecutionHost:
         self._agent._derived_launch_admission_port = None
         self._agent._provider_call_admission_port = None
         self._agent._derived_provider_admission_parent = None
-        if os.environ.get("LINGTAI_DERIVED_DAEMON_EXECUTION") == "1":
+        if (
+            derived_daemon_requires_authority(run_dir.path)
+            or os.environ.get("LINGTAI_DERIVED_DAEMON_EXECUTION") == "1"
+        ):
             # The Driver-launched child accepts only a Driver-created endpoint
             # inherited through the exact supervisor->execution-child spawn.
             # Missing authority remains a required-port failure for nested
@@ -102,6 +132,8 @@ class DetachedDaemonExecutionHost:
             # cannot fall back to generic provider I/O.
             from lingtai.adapters.acp.driver_authority import (
                 DriverAuthorityAdapter,
+                DriverAuthorityEndpointBindingMismatch,
+                EndpointBindingMismatchAuthorityAdapter,
                 UnavailableDriverAuthorityAdapter,
                 authority_adapter_from_environment,
             )
@@ -116,9 +148,15 @@ class DetachedDaemonExecutionHost:
             self._agent._provider_call_admission_port = authority
             try:
                 if isinstance(authority, DriverAuthorityAdapter):
-                    parent = authority.derived_provider_parent()
+                    parent = authority.derived_provider_parent(ProviderCallClass.DAEMON)
                 else:
                     parent = authority.derived_provider_parent(ProviderCallClass.DAEMON)
+            except DriverAuthorityEndpointBindingMismatch:
+                authority.close()
+                mismatch = EndpointBindingMismatchAuthorityAdapter()
+                self._agent._provider_call_admission_port = mismatch
+                self._agent._derived_launch_admission_port = mismatch
+                parent = mismatch.derived_provider_parent(ProviderCallClass.DAEMON)
             except Exception:
                 authority = UnavailableDriverAuthorityAdapter()
                 self._agent._provider_call_admission_port = authority

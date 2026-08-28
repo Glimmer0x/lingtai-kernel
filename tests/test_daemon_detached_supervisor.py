@@ -263,6 +263,8 @@ def test_posix_supervisor_hands_only_one_driver_child_endpoint_to_its_child(
     assert kwargs["env"]["LINGTAI_DRIVER_AUTHORITY_FD"] == str(child_fds[0])
     assert kwargs["env"]["LINGTAI_DERIVED_DAEMON_EXECUTION"] == "1"
     assert kwargs["close_fds"] is True
+    from lingtai.tools.daemon.execution_host import derived_daemon_state_path
+    assert derived_daemon_state_path(run_dir.path).is_file()
 
 
 def test_detached_lingtai_run_survives_agent_stop_shutdown_and_reaches_done(tmp_path):
@@ -1189,6 +1191,61 @@ def test_detached_daemon_child_requires_derived_authority_before_nested_launch(t
             "audit_id": None,
         }
     ]
+
+
+def test_persisted_daemon_child_without_fd_fails_before_provider_io(tmp_path, monkeypatch):
+    """A restart without env/fd preserves the derived provider-call refusal."""
+    from lingtai.kernel.provider_admission import (
+        ProviderAdmittedLLMService,
+        ProviderAdmissionError,
+        bind_provider_admission,
+        clear_provider_admission,
+    )
+    from lingtai.tools.daemon.execution_host import (
+        DetachedDaemonExecutionHost,
+        mark_derived_daemon_requires_authority,
+    )
+    from threading import Event
+
+    class _InnerSession:
+        def __init__(self):
+            self.calls = []
+            self.interface = object()
+            self.pre_request_hook = None
+
+        def send(self, message):
+            self.calls.append(message)
+            return message
+
+    class _InnerService:
+        def __init__(self):
+            self.session = _InnerSession()
+
+        def create_session(self, *_args, **_kwargs):
+            return self.session
+
+    monkeypatch.delenv("LINGTAI_DERIVED_DAEMON_EXECUTION", raising=False)
+    monkeypatch.delenv("LINGTAI_DRIVER_AUTHORITY_FD", raising=False)
+    run_dir = _make_run_dir(tmp_path, task="persisted derived daemon")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="persisted derived daemon", tools=[], max_turns=1, timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+    mark_derived_daemon_requires_authority(run_dir.path)
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    inner = _InnerService()
+    service = ProviderAdmittedLLMService(inner, host._agent._provider_call_admission_port)
+    token = bind_provider_admission(host._agent._derived_provider_admission_parent)
+    try:
+        with pytest.raises(ProviderAdmissionError, match="derived_admission_port_unconnected"):
+            service.create_session("system").send("must-not-reach-provider")
+    finally:
+        clear_provider_admission(token)
+    assert inner.session.calls == []
 
 
 

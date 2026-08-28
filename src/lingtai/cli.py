@@ -388,6 +388,8 @@ def run(working_dir: Path) -> None:
     ):
         from lingtai.adapters.acp.driver_authority import (
             DriverAuthorityAdapter,
+            DriverAuthorityEndpointBindingMismatch,
+            EndpointBindingMismatchAuthorityAdapter,
             UnavailableDriverAuthorityAdapter,
             authority_adapter_from_environment,
         )
@@ -407,12 +409,22 @@ def run(working_dir: Path) -> None:
         try:
             if isinstance(authority, DriverAuthorityAdapter):
                 build_options["_derived_provider_admission_parent"] = (
-                    authority.derived_provider_parent()
+                    authority.derived_provider_parent(ProviderCallClass.AVATAR_CHILD)
                 )
             else:
                 build_options["_derived_provider_admission_parent"] = (
                     authority.derived_provider_parent(ProviderCallClass.AVATAR_CHILD)
                 )
+        except DriverAuthorityEndpointBindingMismatch:
+            # A daemon endpoint in an avatar child (or vice versa) is not
+            # authority for this composition, even if its hello is self-consistent.
+            authority.close()
+            mismatch = EndpointBindingMismatchAuthorityAdapter()
+            build_options["_provider_call_admission_port"] = mismatch
+            build_options["_derived_launch_admission_port"] = mismatch
+            build_options["_derived_provider_admission_parent"] = (
+                mismatch.derived_provider_parent(ProviderCallClass.AVATAR_CHILD)
+            )
         except Exception:
             # A wrong-role endpoint is no authority. Keep the provider gate
             # installed and bind a derived-shaped parent so it returns the
