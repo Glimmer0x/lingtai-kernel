@@ -492,6 +492,16 @@ def test_derived_call_class_is_not_inferred_from_user_controlled_text():
     assert port.calls == [(derived, ProviderCallClass.DAEMON)]
 
 
+def test_v0_derived_admission_rejects_nested_derived_execution():
+    """v0 is deliberately one hop: a child cannot mint another parent."""
+
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
+
+    with pytest.raises(TypeError, match="derived admission requires a root admission"):
+        begin_derived_provider_admission(child, ProviderCallClass.AVATAR_CHILD)  # type: ignore[arg-type]
+
+
 def test_denied_provider_admission_never_reaches_the_inner_service():
     """Attack oracle: a valid-looking root context cannot bypass a denial."""
 

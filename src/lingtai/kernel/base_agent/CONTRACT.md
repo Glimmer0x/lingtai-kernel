@@ -364,7 +364,12 @@ Clause IDs are stable; each rule composes the linked normative source.
    correlation ids, paths, registry digests, prompt content, and tool output
    are not credentials. A derived daemon/avatar call uses a typed parent with
    an internal non-serializable handle and crosses the Port again for each
-   actual provider call; it cannot reuse a root grant. A host that binds a
+   actual provider call; it cannot reuse a root grant. v0 is explicitly
+   one-hop: only a `RootProviderAdmission` can mint a derived parent, and a
+   daemon/avatar child cannot mint another model-executing daemon/avatar.
+   Driver launch admission MUST reject the same nested request; adding recursive
+   derivation requires a new contract with per-hop authority and a recursive
+   production-boundary inventory. A host that binds a
    derived parent before its transport is connected receives explicit
    `derived_admission_port_unconnected` indeterminacy and rejects before
    provider I/O. Historical daemon/avatar routes do not yet bind that parent,
