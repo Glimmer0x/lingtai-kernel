@@ -19,7 +19,7 @@ from lingtai.kernel.provider_admission import (
     bind_provider_admission,
     clear_provider_admission,
 )
-from lingtai.kernel.llm_utils import send_with_timeout
+from lingtai.kernel.llm_utils import send_with_timeout, send_with_timeout_stream
 
 
 class _InnerSession:
@@ -73,6 +73,11 @@ class _RecordingAdmissionPort:
 class _MalformedAdmissionPort:
     def authorize_provider_call(self, _parent, _call_class):
         return ProviderCallDecision(state="granted", reason_code="malformed")
+
+
+class _RaisingAdmissionPort:
+    def authorize_provider_call(self, _parent, _call_class):
+        raise RuntimeError("authority unavailable")
 
 
 def test_raw_provider_service_construction_inventory_is_explicit():
@@ -166,6 +171,142 @@ def test_root_admission_reaches_the_real_provider_worker_thread():
     assert result == "through-worker"
     assert inner.session.calls == [("send", "through-worker")]
     assert port.calls == [(root, ProviderCallClass.ROOT)]
+
+
+def test_root_admission_reaches_the_real_streaming_provider_worker_thread():
+    """The production streaming timeout worker retains root admission too."""
+
+    inner = _InnerService()
+    port = _RecordingAdmissionPort()
+    session = ProviderAdmittedLLMService(inner, port).create_session("system")
+    root = RootProviderAdmission("turn-stream-worker", "puffo-v0.test")
+    token = bind_provider_admission(root)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as timeout_pool:
+            result = send_with_timeout_stream(
+                session,
+                "stream-through-worker",
+                timeout_pool,
+                retry_timeout=1.0,
+                agent_name="provider-admission-test",
+                logger=None,
+            )
+    finally:
+        clear_provider_admission(token)
+
+    assert result == "stream-through-worker"
+    assert inner.session.calls == [("stream", "stream-through-worker")]
+    assert port.calls == [(root, ProviderCallClass.ROOT)]
+
+
+def test_provider_worker_does_not_retain_admission_between_reused_tasks():
+    """A copied context must end with its task, even when the worker is reused."""
+
+    inner = _InnerService()
+    port = _RecordingAdmissionPort()
+    session = ProviderAdmittedLLMService(inner, port).create_session("system")
+    root = RootProviderAdmission("turn-reused-worker", "puffo-v0.test")
+    with ThreadPoolExecutor(max_workers=1) as timeout_pool:
+        token = bind_provider_admission(root)
+        try:
+            assert send_with_timeout(
+                session,
+                "admitted",
+                timeout_pool,
+                retry_timeout=1.0,
+                agent_name="provider-admission-test",
+                logger=None,
+            ) == "admitted"
+        finally:
+            clear_provider_admission(token)
+
+        with pytest.raises(ProviderAdmissionError, match="missing_provider_admission"):
+            send_with_timeout(
+                session,
+                "must-not-inherit",
+                timeout_pool,
+                retry_timeout=1.0,
+                agent_name="provider-admission-test",
+                logger=None,
+            )
+
+    assert inner.session.calls == [("send", "admitted")]
+
+
+def test_provider_worker_fails_closed_when_admission_authority_errors():
+    """Worker context propagation cannot turn an authority failure into I/O."""
+
+    inner = _InnerService()
+    session = ProviderAdmittedLLMService(
+        inner, _RaisingAdmissionPort()
+    ).create_session("system")
+    token = bind_provider_admission(RootProviderAdmission("turn-error", "test"))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as timeout_pool:
+            with pytest.raises(
+                ProviderAdmissionError, match="provider_admission_port_error"
+            ) as raised:
+                send_with_timeout(
+                    session,
+                    "authority-error",
+                    timeout_pool,
+                    retry_timeout=1.0,
+                    agent_name="provider-admission-test",
+                    logger=None,
+                )
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.state is ProviderAdmissionState.INDETERMINATE
+    assert inner.session.calls == []
+
+
+def test_provider_worker_rechecks_admission_for_each_call():
+    """A worker may not reuse its first root decision for a later provider call."""
+
+    class _FreshnessPort:
+        def __init__(self):
+            self.calls = 0
+
+        def authorize_provider_call(self, _parent, _call_class):
+            self.calls += 1
+            if self.calls == 1:
+                return ProviderCallDecision(ProviderAdmissionState.GRANTED, "allowed")
+            return ProviderCallDecision(
+                ProviderAdmissionState.INDETERMINATE,
+                "admission_no_longer_current",
+            )
+
+    inner = _InnerService()
+    port = _FreshnessPort()
+    session = ProviderAdmittedLLMService(inner, port).create_session("system")
+    token = bind_provider_admission(RootProviderAdmission("turn-fresh", "test"))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as timeout_pool:
+            assert send_with_timeout(
+                session,
+                "first",
+                timeout_pool,
+                retry_timeout=1.0,
+                agent_name="provider-admission-test",
+                logger=None,
+            ) == "first"
+            with pytest.raises(
+                ProviderAdmissionError, match="admission_no_longer_current"
+            ):
+                send_with_timeout(
+                    session,
+                    "second",
+                    timeout_pool,
+                    retry_timeout=1.0,
+                    agent_name="provider-admission-test",
+                    logger=None,
+                )
+    finally:
+        clear_provider_admission(token)
+
+    assert port.calls == 2
+    assert inner.session.calls == [("send", "first")]
 
 
 def test_derived_call_class_is_not_inferred_from_user_controlled_text():
