@@ -124,6 +124,60 @@ def test_raw_provider_service_construction_inventory_is_explicit():
     }
 
 
+def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[int, str]]:
+    """Return statically visible direct request-constructor call sites.
+
+    The helper is intentionally not a resolver: dynamic factories, registry
+    lookup, and subclass/wrapper overrides are reviewed outside this narrow
+    source inventory.  It does cover the direct forms promised by the
+    Contract, including aliases introduced through package re-exports.
+    """
+    tree = ast.parse(source)
+    aliases = set(targets)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for imported in node.names:
+            if imported.name in targets:
+                aliases.add(imported.asname or imported.name)
+
+    calls: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in aliases:
+            constructor = node.func.id
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in targets
+        ):
+            constructor = node.func.attr
+        else:
+            continue
+        calls.add((node.lineno, constructor))
+    return calls
+
+
+def test_derived_launch_constructor_inventory_matches_promised_static_forms():
+    """Direct names, aliases/re-exports, and attribute calls remain covered."""
+    source = """\
+from package import DaemonSupervisorRequest as Request
+import package as pkg
+
+DaemonSupervisorRequest()\n
+Request()\n
+pkg.AvatarLaunchRequest()\n
+"""
+
+    assert _direct_constructor_calls(
+        source, {"DaemonSupervisorRequest", "AvatarLaunchRequest"}
+    ) == {
+        (4, "DaemonSupervisorRequest"),
+        (6, "Request"),
+        (8, "AvatarLaunchRequest"),
+    }
+
+
 def test_derived_launch_constructor_inventory_is_explicit():
     """Every direct derived-launch request constructor needs classification.
 
@@ -142,28 +196,10 @@ def test_derived_launch_constructor_inventory_is_explicit():
     inventory: set[tuple[str, int, str]] = set()
 
     for source in (root / "src" / "lingtai").rglob("*.py"):
-        tree = ast.parse(source.read_text(encoding="utf-8"))
-        aliases = set(targets)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom):
-                continue
-            for imported in node.names:
-                if imported.name in targets:
-                    aliases.add(imported.asname or imported.name)
-
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            if isinstance(node.func, ast.Name) and node.func.id in aliases:
-                constructor = node.func.id
-            elif (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr in targets
-            ):
-                constructor = node.func.attr
-            else:
-                continue
-            inventory.add((str(source.relative_to(root)), node.lineno, constructor))
+        for lineno, constructor in _direct_constructor_calls(
+            source.read_text(encoding="utf-8"), targets
+        ):
+            inventory.add((str(source.relative_to(root)), lineno, constructor))
 
     assert inventory == {
         # Decode is not a launch, but it is the one wire re-construction point
