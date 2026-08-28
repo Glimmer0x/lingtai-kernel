@@ -706,6 +706,8 @@ class AcpStdioServer:
                 generation,
             )
             try:
+                from lingtai.kernel.turns import TurnOrigin
+
                 handle = self._agent.submit_turn(
                     content,
                     sender="user",
@@ -713,6 +715,7 @@ class AcpStdioServer:
                     execution_workspace=self._execution_workspace,
                     tool_observer=observer,
                     permission_broker=observer,
+                    origin=TurnOrigin.AUTHENTICATED_ADAPTER,
                 )
             except (TypeError, ValueError) as exc:
                 raise _RpcError(INVALID_PARAMS, str(exc)) from exc

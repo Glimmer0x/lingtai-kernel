@@ -1,4 +1,4 @@
-"""Conformance tests for the constrained, registry-backed Puffo ACP profile."""
+"""Conformance tests for the registry-backed full-tool Puffo ACP profile."""
 from __future__ import annotations
 
 import argparse
@@ -16,8 +16,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.adapters.acp.puffo_v0 import (
-    FORCED_DISABLED_CAPABILITIES,
     PuffoV0RegistryError,
+    RUNTIME_POLICY,
     provision_runtime,
     resolve_runtime,
     revoke_runtime,
@@ -26,6 +26,8 @@ from lingtai.adapters.acp.server import AcpStdioServer, INVALID_PARAMS
 from lingtai.agent import Agent
 from lingtai.kernel.execution_workspace import ExecutionWorkspace
 from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.provider_admission import ProviderAdmittedLLMService
+from lingtai.kernel.turns import TurnAdmissionError, TurnOrigin, submit_turn
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 from tests.test_deep_refresh import _make_init
 
@@ -89,7 +91,9 @@ def test_provisioned_runtime_resolves_only_the_canonical_local_paths(tmp_path):
     stored = json.loads(registry.read_text(encoding="utf-8"))
     entry = stored["runtimes"]["puffo-agent-7"]
     assert entry["mcp_servers"] == []
-    assert entry["disabled_capabilities"] == sorted(FORCED_DISABLED_CAPABILITIES)
+    assert entry["tool_surface"] == "operator_managed_full"
+    assert entry["turn_origins"] == ["authenticated_adapter"]
+    assert entry["runtime_policy_version"] == RUNTIME_POLICY.policy_version
 
 
 def test_registry_rejects_tampering_and_revoked_runtime(tmp_path):
@@ -403,7 +407,10 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     binding = DirectoryBinding(device=1, inode=2, owner=3, group=4)
-    runtime = PuffoV0Runtime("runtime-1", agent_dir, workspace, "digest", binding, binding)
+    runtime = PuffoV0Runtime(
+        "runtime-1", agent_dir, workspace, "digest", binding, binding,
+        RUNTIME_POLICY.policy_version,
+    )
     observed = {}
     monkeypatch.setattr(cli_acp, "resolve_runtime", lambda _id: runtime, raising=False)
     # The handler imports from the profile module after parser validation.
@@ -414,7 +421,10 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
 
     assert observed["directory"] == agent_dir
     assert observed["fixed_execution_workspace"].root == workspace
-    assert observed["forced_disable"] == FORCED_DISABLED_CAPABILITIES
+    assert observed.get("forced_disable") is None
+    assert observed["turn_origin_policy"] is RUNTIME_POLICY
+    assert observed["requires_turn_origin_policy"] is True
+    assert observed["provider_call_admission_port"] is RUNTIME_POLICY
     assert observed["puffo_runtime"] == runtime
 
 
@@ -439,22 +449,24 @@ def test_profile_cli_rejects_agent_dir_instead_of_ignoring_it(capsys):
     assert exc_info.value.code == 2
 
 
-def test_forced_profile_capability_denials_override_agent_defaults(tmp_path):
+def test_full_tool_profile_keeps_operator_managed_capabilities_available(tmp_path):
     agent = Agent(
         service=make_mock_service(),
         agent_name="profile-test",
         working_dir=tmp_path / "identity",
-        _forced_disable=FORCED_DISABLED_CAPABILITIES,
+        _turn_origin_policy=RUNTIME_POLICY,
     )
     try:
         registered = {name for name, _ in agent._capabilities}
-        assert FORCED_DISABLED_CAPABILITIES.isdisjoint(registered)
-        assert agent._mcp_init_specs == {}
+        # This is an external product oracle, not the implementation policy's
+        # own constant: the full-tool profile intentionally preserves these
+        # installed, operator-managed capability families.
+        assert {"avatar", "daemon", "file", "mcp", "plugin", "shell", "task_card"} <= registered
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_forced_profile_capability_denials_survive_init_refresh(tmp_path):
+def test_full_tool_profile_refresh_does_not_erase_operator_managed_capabilities(tmp_path):
     (tmp_path / "init.json").write_text(
         json.dumps(_make_init(capabilities={"avatar": {}, "daemon": {}, "mcp": {}})),
         encoding="utf-8",
@@ -468,7 +480,7 @@ def test_forced_profile_capability_denials_survive_init_refresh(tmp_path):
         agent_name="profile-refresh",
         working_dir=tmp_path,
         config=AgentConfig(),
-        _forced_disable=FORCED_DISABLED_CAPABILITIES,
+        _turn_origin_policy=RUNTIME_POLICY,
         _from_init_boot=True,
     )
     agent._from_init_boot = False
@@ -476,7 +488,79 @@ def test_forced_profile_capability_denials_survive_init_refresh(tmp_path):
         agent._setup_from_init()
         agent._setup_from_init()
         registered = {name for name, _ in agent._capabilities}
-        assert FORCED_DISABLED_CAPABILITIES.isdisjoint(registered)
-        assert agent._mcp_init_specs == {}
+        assert {"avatar", "daemon", "mcp"} <= registered
     finally:
         agent.stop(timeout=1.0)
+
+
+def test_profile_refresh_preserves_the_provider_admission_service_boundary(tmp_path):
+    """Refresh cannot replace a profile's admitted service with raw LLM I/O."""
+    (tmp_path / "init.json").write_text(
+        json.dumps(_make_init(capabilities={"avatar": {}, "daemon": {}, "mcp": {}})),
+        encoding="utf-8",
+    )
+    service = MagicMock()
+    service.provider = "different-provider"  # Force the refresh rebuild path.
+    service.model = "different-model"
+    service._base_url = None
+    service._context_window = None
+    service._provider_defaults = {}
+    agent = Agent(
+        service,
+        agent_name="profile-refresh-admission",
+        working_dir=tmp_path,
+        config=AgentConfig(),
+        _turn_origin_policy=RUNTIME_POLICY,
+        provider_call_admission_port=RUNTIME_POLICY,
+        _from_init_boot=True,
+    )
+    agent._from_init_boot = False
+    try:
+        agent._setup_from_init()
+
+        assert isinstance(agent.service, ProviderAdmittedLLMService)
+        assert agent._session._llm_service is agent.service
+        assert agent.service._port is RUNTIME_POLICY
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_profile_admits_only_authenticated_adapter_turns(tmp_path):
+    """Independent origin oracle: non-ACP callers cannot queue provider work."""
+
+    class OriginBoundAgent:
+        def __init__(self):
+            import queue
+
+            self.inbox = queue.Queue()
+            self._shutdown = None
+            self._turn_origin_policy = RUNTIME_POLICY
+
+    agent = OriginBoundAgent()
+
+    with pytest.raises(TurnAdmissionError) as denied:
+        submit_turn(agent, "must not run", origin=TurnOrigin.LEGACY)
+    assert denied.value.decision.reason_code == "origin_not_authenticated_adapter"
+    assert agent.inbox.empty()
+
+    handle = submit_turn(
+        agent,
+        "authenticated prompt",
+        origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+    )
+    assert not handle.done()
+    assert not agent.inbox.empty()
+
+
+def test_constrained_profile_with_a_missing_origin_policy_fails_closed():
+    class MissingPolicyAgent:
+        def __init__(self):
+            import queue
+
+            self.inbox = queue.Queue()
+            self._shutdown = None
+            self._requires_turn_origin_policy = True
+
+    with pytest.raises(TurnAdmissionError) as denied:
+        submit_turn(MissingPolicyAgent(), "must not run")
+    assert denied.value.decision.reason_code == "required_policy_missing"

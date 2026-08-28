@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
+  - src/lingtai/kernel/provider_admission.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/process_match.py
@@ -26,6 +27,7 @@ related_files:
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
   - tests/test_turn_permissions.py
+  - tests/test_provider_admission.py
   - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_process_match.py
@@ -57,7 +59,8 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   transport and active prompt without making stdout teardown authority. Implements
   behavior [ACP001](BEHAVIORS.md#behavior-acp001).
 - `__init__.py` — small public package export for the protocol version and server.
-- `puffo_v0.py` — local operator registry for the constrained `puffo-v0`
+- `puffo_v0.py` — local operator registry and typed ACP-only turn-origin policy
+  for the identity/workspace-bound full-tool `puffo-v0`
   profile. It resolves an opaque runtime id to one canonical persistent identity
   and workspace, verifies an entry digest plus provision-time filesystem
   identity, serializes provision/revoke read-modify-write operations with a
@@ -65,7 +68,8 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   refuses missing, malformed, tampered, retargeted, or revoked entries before
   Agent construction. Its `entry_digest` authenticates registry data rather
   than claiming to authenticate the effective manifest, tool/action, or full
-  launch policy. Its Phase A
+  launch policy. Its policy admits only authenticated driving-adapter provider
+  turns; it is not a tool/runtime containment policy. Its Phase A
   owner-only-filesystem implementation deliberately rejects Windows until an
   equivalent ACL-backed adapter exists.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
@@ -80,7 +84,7 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   ACP data-plane surface.
 - `../../kernel/process_match.py` — exact duplicate-host grammar for module,
   console, legacy, and quoted Windows `.exe` ACP launch forms.
-- `../../kernel/turns.py`, `../../kernel/execution_workspace.py`, `../../kernel/turn_events.py`, `../../kernel/turn_permissions.py`, and `../../kernel/tool_executor.py` — inward Core boundary consumed by the Adapter:
+- `../../kernel/turns.py`, `../../kernel/execution_workspace.py`, `../../kernel/turn_events.py`, `../../kernel/turn_permissions.py`, `../../kernel/provider_admission.py`, and `../../kernel/tool_executor.py` — inward Core boundary consumed by the Adapter:
   `TurnHandle`, `TurnResult`, terminal outcome, exact correlation, and matching
   cooperative cancellation, immutable workspace metadata, task-local scope, and
   failure-isolated lifecycle observation and fail-closed one-shot permission.
@@ -98,8 +102,10 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 Inbound: a local ACP client launches `lingtai-agent acp --agent-dir <dir>` and
 exchanges one JSON-RPC object per stdio line. The constrained Puffo profile instead
 launches `lingtai-agent acp --profile puffo-v0 --runtime-id <opaque-id>`; its
-registry resolves the full spawn identity locally and server policy fixes the
-workspace and denies session MCP. The composition root re-resolves a profile
+registry resolves the full spawn identity locally, server policy fixes the
+workspace and denies session MCP, and Core admits only the typed authenticated
+adapter origin to provider dispatch. This controls turn initiation, not what
+state the eventual turn can read. The composition root re-resolves a profile
 runtime immediately before Agent composition so a normal resolve-to-start drift
 fails closed; host-principal filesystem replacement after that check remains
 outside this profile's trust boundary. Outbound: the Adapter calls only the

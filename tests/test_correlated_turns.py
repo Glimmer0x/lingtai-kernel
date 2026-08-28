@@ -8,14 +8,23 @@ from types import SimpleNamespace
 
 import pytest
 
+from lingtai.kernel import message as message_module
 from lingtai.kernel.base_agent import turn
 from lingtai.kernel.execution_workspace import (
     ExecutionWorkspace,
     current_execution_workspace,
 )
-from lingtai.kernel.message import MSG_TC_WAKE, _make_message
+from lingtai.kernel.message import (
+    MESSAGE_TYPES,
+    MSG_CORRELATED_TURN,
+    MSG_REQUEST,
+    MSG_TC_WAKE,
+    MSG_USER_INPUT,
+    _make_message,
+)
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.turns import (
+    TurnOrigin,
     TurnOutcome,
     begin_turn,
     cancel_all_turns,
@@ -24,8 +33,22 @@ from lingtai.kernel.turns import (
     settle_turn,
     submit_turn,
 )
+from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
 from lingtai.kernel.turn_events import current_turn_tool_observer
 from lingtai.kernel.turn_permissions import current_turn_permission_broker
+from lingtai.kernel.provider_admission import current_provider_admission
+
+
+def test_canonical_message_type_inventory_is_complete():
+    """Adding a ``MSG_*`` inbox kind must update the closed admission surface."""
+
+    declared_message_types = {
+        value
+        for name, value in vars(message_module).items()
+        if name.startswith("MSG_") and isinstance(value, str)
+    }
+
+    assert message_module.MESSAGE_TYPES == frozenset(declared_message_types)
 
 
 class _Interface:
@@ -408,6 +431,56 @@ def test_claimed_correlated_envelope_is_skipped_without_provider_dispatch(
 
     assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
     _stop_loop(agent, worker)
+
+
+@pytest.mark.parametrize(
+    "message_type", sorted(MESSAGE_TYPES - {MSG_CORRELATED_TURN})
+)
+def test_profile_rejects_untrusted_event_before_any_provider_dispatch(
+    tmp_path, monkeypatch, message_type
+):
+    """An inbox event cannot obtain provider execution merely by its message type."""
+
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+
+    def must_not_dispatch(*_args, **_kwargs):
+        raise AssertionError("an untrusted event reached provider dispatch")
+
+    monkeypatch.setattr(turn, "_handle_request", must_not_dispatch)
+    monkeypatch.setattr(turn, "_handle_tc_wake", must_not_dispatch)
+    result = turn._handle_message(agent, _make_message(message_type, "mail", "wake"))
+
+    assert result is None
+    assert any(name == "turn_origin_rejected" for name, _ in agent.logs)
+
+
+def test_profile_binds_root_provider_admission_only_for_the_admitted_turn(
+    tmp_path, monkeypatch
+):
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    handle = submit_turn(
+        agent,
+        "hello",
+        correlation_id="turn-provider-admission",
+        origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+    )
+    seen = []
+
+    def fake_handle(current, _msg):
+        parent = current_provider_admission()
+        assert parent is not None
+        seen.append((parent.correlation_id, parent.policy_version))
+        current._shutdown.set()
+        return {"text": "ok", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
+    assert seen == [("turn-provider-admission", RUNTIME_POLICY.policy_version)]
+    assert current_provider_admission() is None
 
 
 def test_cancel_and_terminal_settlement_linearize_exactly_once(tmp_path):

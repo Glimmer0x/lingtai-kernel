@@ -15,6 +15,7 @@ from ..message import (
     MSG_REQUEST,
     MSG_USER_INPUT,
     MSG_TC_WAKE,
+    MESSAGE_TYPES,
 )
 from ..i18n import t as _t
 from ..logging import get_logger
@@ -937,11 +938,13 @@ def _run_loop(agent) -> None:
         from ..execution_workspace import clear_execution_workspace
         from ..turn_events import clear_turn_tool_observer
         from ..turn_permissions import clear_turn_permission_broker
+        from ..provider_admission import clear_current_provider_admission
 
         cancel_all_turns(agent, reason="agent run loop stopped")
         clear_execution_workspace()
         clear_turn_tool_observer()
         clear_turn_permission_broker()
+        clear_current_provider_admission()
 
 
 def _run_loop_body(agent) -> None:
@@ -1034,13 +1037,37 @@ def _run_loop_body(agent) -> None:
             # stale-latch reset and message-merge boundary. Pending cancellation
             # then becomes the current cooperative latch without affecting the
             # turn ahead of it in the same inbox.
-            from ..turns import begin_turn, correlated_message_text
+            from ..turns import (
+                TurnAdmissionError,
+                TurnOutcome,
+                admit_turn_origin,
+                begin_turn,
+                correlated_message_text,
+                settle_turn,
+            )
 
             turn_control = begin_turn(agent, msg)
             execution_workspace_token = None
             tool_observer_token = None
             permission_broker_token = None
+            provider_admission_token = None
             if turn_control is not None:
+                # Admission was checked synchronously before publication. Check
+                # again at the final inbox-to-provider boundary so a forged or
+                # stale correlated envelope cannot become provider work merely
+                # by reaching the run loop.
+                try:
+                    admission_decision = admit_turn_origin(agent, turn_control.origin)
+                except TurnAdmissionError as exc:
+                    settle_turn(
+                        agent,
+                        turn_control,
+                        outcome=TurnOutcome.FAILED,
+                        error="turn origin was not admitted",
+                        errors=(exc.decision.reason_code,),
+                    )
+                    agent._set_state(AgentState.IDLE, reason="turn origin rejected")
+                    continue
                 from ..execution_workspace import (
                     bind_execution_workspace,
                     clear_execution_workspace,
@@ -1068,6 +1095,21 @@ def _run_loop_body(agent) -> None:
                 clear_turn_permission_broker()
                 permission_broker_token = bind_turn_permission_broker(
                     turn_control.permission_broker
+                )
+                from ..provider_admission import (
+                    RootProviderAdmission,
+                    bind_provider_admission,
+                )
+
+                # The typed origin is checked immediately above.  Keep its
+                # Core-private parent in a ContextVar for the entire logical
+                # turn so every concrete provider send is gated by the
+                # service wrapper, not merely this root inbox path.
+                provider_admission_token = bind_provider_admission(
+                    RootProviderAdmission(
+                        correlation_id=turn_control.correlation_id,
+                        policy_version=admission_decision.policy_version,
+                    )
                 )
                 msg = correlated_message_text(msg)
             elif msg.type == MSG_CORRELATED_TURN:
@@ -1667,6 +1709,9 @@ def _run_loop_body(agent) -> None:
             if permission_broker_token is not None:
                 from ..turn_permissions import reset_turn_permission_broker
                 reset_turn_permission_broker(permission_broker_token)
+            if provider_admission_token is not None:
+                from ..provider_admission import clear_provider_admission
+                clear_provider_admission(provider_admission_token)
             _settle_correlated_after_turn(
                 agent,
                 turn_control,
@@ -1679,6 +1724,7 @@ def _run_loop_body(agent) -> None:
 
 
 _TEXT_MSG_TYPES = (MSG_REQUEST, MSG_USER_INPUT)
+_UNTRUSTED_PROVIDER_ORIGIN_MESSAGE_TYPES = MESSAGE_TYPES - {MSG_CORRELATED_TURN}
 
 
 def _concat_queued_messages(agent, msg: Message) -> Message:
@@ -1729,6 +1775,16 @@ def _concat_queued_messages(agent, msg: Message) -> Message:
 
 def _handle_message(agent, msg: Message) -> dict | None:
     """Route message by type. Subclasses may override for routing."""
+    if msg.type in _UNTRUSTED_PROVIDER_ORIGIN_MESSAGE_TYPES:
+        # These legacy/involuntary inbox shapes carry no authenticated adapter
+        # admission. A constrained outer profile rejects them before any
+        # downstream request, continuation, state, or notice handler runs.
+        from ..turns import TurnAdmissionError, TurnOrigin, admit_turn_origin
+
+        try:
+            admit_turn_origin(agent, TurnOrigin.INTERNAL_EVENT)
+        except TurnAdmissionError:
+            return None
     if msg.type in (MSG_REQUEST, MSG_USER_INPUT, MSG_CORRELATED_TURN):
         return _handle_request(agent, msg)
     if msg.type == MSG_TC_WAKE:

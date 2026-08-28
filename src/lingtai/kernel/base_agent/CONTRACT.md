@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
+  - src/lingtai/kernel/provider_admission.py
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -33,6 +34,7 @@ related_files:
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
   - tests/test_turn_permissions.py
+  - tests/test_provider_admission.py
   - tests/test_acp_stdio.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/process_scan.py
@@ -155,6 +157,13 @@ This contract owns one new Core Port and composes the linked ones:
   `RefreshWatcherPort`/`RefreshWatcherProcessPort`, `LifecycleClockPort`,
   `NotificationStorePort`, `EventJournalPort` — each normatively owned by its
   linked contract.
+- `ProviderCallAdmissionPort` (`src/lingtai/kernel/provider_admission.py`) —
+  optional, technology-neutral outbound decision Port for a constrained
+  composition. Core installs an opaque, task-local root or derived parent and
+  crosses the Port immediately before every concrete provider `send`,
+  `send_stream`, or direct `generate`. A missing parent, malformed decision, or
+  denial fails before provider I/O. Correlation is audit-only, never authority;
+  transport/authentication remains adapter-owned.
 
 ## Adapters
 
@@ -341,6 +350,72 @@ Clause IDs are stable; each rule composes the linked normative source.
    tool id/name; absent brokerage passes through, while broker exceptions or
    invalid decisions deny. It still promises no hard provider abort or
    running-tool preemption.
+13. `agent-runtime.provider-admission.v1` — A composition that injects a
+   `ProviderCallAdmissionPort` turns the service boundary into the single
+   structural provider-call gate. Core binds a `RootProviderAdmission` only
+   after the final correlated-turn origin check, and service/session proxies
+   call the Port before each provider request. A live refresh that rebuilds
+   the concrete provider adapter MUST reapply the same admitted-service
+   wrapper before publishing it to the session. A Port returns exactly one of
+   `GRANTED`, `DENIED`, or `INDETERMINATE`; only `GRANTED` may reach the
+   provider. No bound parent, a malformed Port response, a Port exception, an
+   explicit denial, or indeterminate authority MUST prevent the underlying
+   provider request. The parent is a Core-private in-memory object;
+   correlation ids, paths, registry digests, prompt content, and tool output
+   are not credentials. A derived daemon/avatar call uses a typed parent with
+   an internal non-serializable handle and crosses the Port again for each
+   actual provider call; it cannot reuse a root grant. A host that binds a
+   derived parent before its transport is connected receives explicit
+   `derived_admission_port_unconnected` indeterminacy and rejects before
+   provider I/O. Historical daemon/avatar routes do not yet bind that parent,
+   so they remain outside this gate until the separate driver-mediated adapter
+   is wired. The raw `LLMService` direct-construction inventory (including
+   imported aliases and attribute calls) is pinned by
+   `tests/test_provider_admission.py`; adding a constructor requires an
+   explicit classification rather than silently creating another route. The
+   future host Port MUST decide against authority current at that
+   call, not a turn-start snapshot or an implicit cache. This rule prevents
+   accidental or structurally separate non-admitted paths. It does not claim
+   that a full-tool Agent sharing the same OS trust domain as Core is sandboxed
+   from its own host process.
+   The current dispatch-propagation inventory is closed as follows. The main
+   `SessionManager.send()` path calls `send_with_timeout()` and the streaming
+   path calls `send_with_timeout_stream()`; both submit the already-wrapped
+   session into the session timeout worker under a copy of the submitting
+   context. Main-turn retries, recovery, tool-result continuation, and stream
+   continuation all return through one of those two `SessionManager` paths.
+   Soul consultation/inquiry creates an independently timed daemon thread and
+   likewise copies the submitting context before its wrapped `session.send()`.
+   If provider RPM gating is configured, `APICallGate` runs *after* the outer
+   admitted-session proxy has made its Port decision; it never performs an
+   additional admission lookup. `ProviderAdmittedLLMService.generate()` makes
+   its Port decision synchronously before delegating to the adapter; no Core
+   root-turn production caller currently invokes that one-shot API. Historical
+   daemon/avatar services remain outside this inventory until their separate
+   driver-mediated adapter is wired. Adding another dispatch mechanism between
+   an admitted parent and a wrapped provider call requires a propagation test
+   at that concrete boundary; no inferred coverage is sufficient. The source
+   creation-point inventory in `tests/test_provider_admission.py` independently
+   enumerates direct `Thread`, executor, `to_thread`, and `run_in_executor`
+   calls under `src/lingtai/**`. It classifies the session timeout pool and
+   Soul worker as context-propagation boundaries, `APICallGate` as
+   post-admission dispatch, and every other current point as outside root
+   provider dispatch. A new direct creation point therefore fails until it is
+   classified; this structural tripwire is not a whole-program proof over
+   dynamic concurrency factories. It presently inventories creation points,
+   not dispatches to an already-created pool (`submit`, `map`, or
+   `apply_async`); a future hardening must inventory those dispatch operations
+   as a separate axis. Its `(file, line, constructor)` keys are likewise an
+   intentionally narrow implementation: a later revision should use the
+   enclosing qualified function instead, so unrelated line movement cannot
+   turn the tripwire into mechanical maintenance. Neither limitation reduces
+   the concrete propagation tests required above.
+   A constrained composition MUST carry its origin policy at startup; a missing
+   required policy rejects rather than falling back to the generic default. Its
+   closed inbox surface is `MESSAGE_TYPES`: every canonical message other than
+   the private correlated-turn envelope is rejected before downstream request,
+   continuation, state, or notice handlers execute. The envelope still needs
+   its independent typed-origin check at the final inbox-to-provider boundary.
 
 ## Contract tests
 

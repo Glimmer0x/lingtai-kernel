@@ -184,7 +184,15 @@ class _SubmitFn:
         fn = getattr(self.chat, self._method)
         if self._retry_timeout is not None and hasattr(self.chat, "_request_timeout"):
             self.chat._request_timeout = self._retry_timeout
-        return self._pool.submit(fn, self.message, *self._extra_args)
+        # ``ContextVar`` state is thread-local.  Provider admission is bound by
+        # the Agent turn on its run-loop thread, while the concrete send runs
+        # in this timeout worker; copy at submission so a valid root admission
+        # reaches the actual provider-I/O boundary rather than failing closed
+        # as if the turn were untrusted.
+        context = contextvars.copy_context()
+        return self._pool.submit(
+            context.run, fn, self.message, *self._extra_args
+        )
 
 
 def send_with_timeout(

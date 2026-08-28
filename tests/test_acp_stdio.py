@@ -15,7 +15,7 @@ import pytest
 
 from lingtai.adapters.acp.server import AcpStdioServer
 from lingtai.kernel.base_agent import BaseAgent, StopResult, StopStatus
-from lingtai.kernel.turns import TurnOutcome, TurnResult, control_from_message
+from lingtai.kernel.turns import TurnOrigin, TurnOutcome, TurnResult, control_from_message
 from lingtai.kernel.turn_events import ToolLifecycleEvent, ToolLifecycleState
 from lingtai.kernel.turn_permissions import (
     PermissionDecision,
@@ -62,6 +62,7 @@ class _Agent:
         execution_workspace=None,
         tool_observer=None,
         permission_broker=None,
+        origin=None,
     ):
         self.submissions.append({
             "content": content,
@@ -70,6 +71,7 @@ class _Agent:
             "execution_workspace": execution_workspace,
             "tool_observer": tool_observer,
             "permission_broker": permission_broker,
+            "origin": origin,
         })
         self.handle.correlation_id = correlation_id
         return self.handle
@@ -161,6 +163,7 @@ def test_session_new_canonicalizes_existing_directory_and_mounts_stdio_mcp(tmp_p
         "prompt": [{"type": "text", "text": "go"}],
     })
     assert agent.submissions[0]["execution_workspace"].root == workspace.resolve()
+    assert agent.submissions[0]["origin"] is TurnOrigin.AUTHENTICATED_ADAPTER
     assert agent._working_dir == tmp_path / "agent-identity"
     server.close()
     server.close()
@@ -195,6 +198,7 @@ def test_acp_prompt_queues_canonical_workspace_through_real_base_agent(tmp_path)
     assert control.execution_workspace.root == workspace.resolve()
     assert control.tool_observer is not None
     assert control.permission_broker is not None
+    assert control.origin is TurnOrigin.AUTHENTICATED_ADAPTER
 
 
 def test_permission_wire_allows_only_matching_allow_once_then_lifecycle_progresses():
@@ -1121,6 +1125,75 @@ def test_cli_composition_quarantines_application_stdout_and_stops_agent(
         output_stream=io.StringIO(),
     )
     assert fake_agent.started and fake_agent.stopped
+
+
+@pytest.mark.parametrize(
+    ("forced_disable", "expected_allow_session_mcp"),
+    [
+        (None, True),
+        (frozenset(), True),
+        (frozenset({"avatar"}), True),
+        (frozenset({"mcp"}), False),
+    ],
+)
+def test_cli_forced_disable_preserves_generic_session_mcp_semantics(
+    tmp_path, monkeypatch, forced_disable, expected_allow_session_mcp
+):
+    """Generic ACP disables session MCP only when its forced policy names MCP."""
+
+    import lingtai.adapters.acp as acp_package
+    import lingtai.cli as cli
+    import lingtai.cli_acp as cli_acp
+    import lingtai.kernel.logging as kernel_logging
+    import lingtai.venv_resolve as venv_resolve
+
+    class FakeAgent:
+        _llm_worker_interface_poisoned = False
+
+        def start(self):
+            return None
+
+        def stop(self, timeout=0):
+            return StopResult(StopStatus.STOPPED, False, False)
+
+    observed = {}
+
+    class FakeServer:
+        def __init__(
+            self,
+            _agent,
+            _input,
+            _output,
+            *,
+            fixed_execution_workspace=None,
+            allow_session_mcp=True,
+        ):
+            observed["fixed_execution_workspace"] = fixed_execution_workspace
+            observed["allow_session_mcp"] = allow_session_mcp
+
+        def serve(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
+    monkeypatch.setattr(cli, "load_init", lambda _path: {})
+    monkeypatch.setattr(cli, "build_agent", lambda _data, _path, **_kw: FakeAgent())
+    monkeypatch.setattr(cli, "_force_exit_if_worker_poisoned", lambda _agent: None)
+    monkeypatch.setattr(kernel_logging, "setup_logging", lambda **_kw: None)
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: tmp_path / "venv")
+    monkeypatch.setattr(acp_package, "AcpStdioServer", FakeServer)
+
+    cli_acp.run_acp(
+        tmp_path,
+        input_stream=io.StringIO(),
+        output_stream=io.StringIO(),
+        forced_disable=forced_disable,
+    )
+
+    assert observed["allow_session_mcp"] is expected_allow_session_mcp
 
 
 def test_cli_poison_force_exit_skips_log_after_successful_stop_releases_lease(
