@@ -124,7 +124,7 @@ def test_raw_provider_service_construction_inventory_is_explicit():
     }
 
 
-def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[int, str]]:
+def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[str, str]]:
     """Return statically visible direct request-constructor call sites.
 
     The helper is intentionally not a resolver: dynamic factories, registry
@@ -141,20 +141,41 @@ def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[int, 
             if imported.name in targets:
                 aliases.add(imported.asname or imported.name)
 
-    calls: set[tuple[int, str]] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Name) and node.func.id in aliases:
-            constructor = node.func.id
-        elif (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr in targets
-        ):
-            constructor = node.func.attr
-        else:
-            continue
-        calls.add((node.lineno, constructor))
+    calls: set[tuple[str, str]] = set()
+
+    class _InventoryVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self._scope: list[str] = []
+
+        def _visit_scoped(self, node: ast.AST, name: str) -> None:
+            self._scope.append(name)
+            self.generic_visit(node)
+            self._scope.pop()
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self._visit_scoped(node, node.name)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._visit_scoped(node, node.name)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._visit_scoped(node, node.name)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Name) and node.func.id in aliases:
+                constructor = node.func.id
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in targets
+            ):
+                constructor = node.func.attr
+            else:
+                self.generic_visit(node)
+                return
+            calls.add((".".join(self._scope) or "<module>", constructor))
+            self.generic_visit(node)
+
+    _InventoryVisitor().visit(tree)
     return calls
 
 
@@ -164,17 +185,21 @@ def test_derived_launch_constructor_inventory_matches_promised_static_forms():
 from package import DaemonSupervisorRequest as Request
 import package as pkg
 
-DaemonSupervisorRequest()\n
-Request()\n
-pkg.AvatarLaunchRequest()\n
+def direct():
+    DaemonSupervisorRequest()
+    Request()
+
+class Launcher:
+    def by_attribute(self):
+        pkg.AvatarLaunchRequest()
 """
 
     assert _direct_constructor_calls(
         source, {"DaemonSupervisorRequest", "AvatarLaunchRequest"}
     ) == {
-        (4, "DaemonSupervisorRequest"),
-        (6, "Request"),
-        (8, "AvatarLaunchRequest"),
+        ("direct", "DaemonSupervisorRequest"),
+        ("direct", "Request"),
+        ("Launcher.by_attribute", "AvatarLaunchRequest"),
     }
 
 
@@ -193,26 +218,26 @@ def test_derived_launch_constructor_inventory_is_explicit():
     """
     root = Path(__file__).resolve().parents[1]
     targets = {"DaemonSupervisorRequest", "AvatarLaunchRequest"}
-    inventory: set[tuple[str, int, str]] = set()
+    inventory: set[tuple[str, str, str]] = set()
 
     for source in (root / "src" / "lingtai").rglob("*.py"):
-        for lineno, constructor in _direct_constructor_calls(
+        for scope, constructor in _direct_constructor_calls(
             source.read_text(encoding="utf-8"), targets
         ):
-            inventory.add((str(source.relative_to(root)), lineno, constructor))
+            inventory.add((str(source.relative_to(root)), scope, constructor))
 
     assert inventory == {
         # Decode is not a launch, but it is the one wire re-construction point
         # and therefore must stay visible beside the production constructors.
-        ("src/lingtai/kernel/daemon_supervisor/__init__.py", 97,
+        ("src/lingtai/kernel/daemon_supervisor/__init__.py", "decode_request",
          "DaemonSupervisorRequest"),
         # LingTai-backend daemon launch and external-CLI daemon launch.
-        ("src/lingtai/tools/daemon/__init__.py", 3520,
+        ("src/lingtai/tools/daemon/__init__.py", "DaemonManager._spawn_detached_lingtai_run",
          "DaemonSupervisorRequest"),
-        ("src/lingtai/tools/daemon/__init__.py", 5876,
+        ("src/lingtai/tools/daemon/__init__.py", "DaemonManager._handle_emanate_cli",
          "DaemonSupervisorRequest"),
         # Avatar detached-child launch.
-        ("src/lingtai/tools/avatar/__init__.py", 873,
+        ("src/lingtai/tools/avatar/__init__.py", "AvatarManager._launch",
          "AvatarLaunchRequest"),
     }
 
