@@ -402,7 +402,14 @@ Clause IDs are stable; each rule composes the linked normative source.
    post-admission dispatch, and every other current point as outside root
    provider dispatch. A new direct creation point therefore fails until it is
    classified; this structural tripwire is not a whole-program proof over
-   dynamic concurrency factories.
+   dynamic concurrency factories. It presently inventories creation points,
+   not dispatches to an already-created pool (`submit`, `map`, or
+   `apply_async`); a future hardening must inventory those dispatch operations
+   as a separate axis. Its `(file, line, constructor)` keys are likewise an
+   intentionally narrow implementation: a later revision should use the
+   enclosing qualified function instead, so unrelated line movement cannot
+   turn the tripwire into mechanical maintenance. Neither limitation reduces
+   the concrete propagation tests required above.
    A constrained composition MUST carry its origin policy at startup; a missing
    required policy rejects rather than falling back to the generic default. Its
    closed inbox surface is `MESSAGE_TYPES`: every canonical message other than
