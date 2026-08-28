@@ -1412,6 +1412,55 @@ def test_profile_daemon_launch_reaches_structured_admission_before_supervisor(
     ]
 
 
+def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, monkeypatch):
+    """The zero-supervisor assertion has a same-recorder positive control."""
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from tests._daemon_helpers import install_fake_detached_owner
+
+    class _GrantingPort:
+        def __init__(self):
+            self.calls = []
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "derived_launch_allowed_by_test",
+                audit_id="audit-daemon-positive-2a",
+            )
+
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    _enable_detached_fake_llm(agent, monkeypatch)
+    port = _GrantingPort()
+    agent._derived_launch_admission_port = port
+    audit = []
+    records = install_fake_detached_owner(monkeypatch)
+    monkeypatch.setattr(agent, "_log", lambda event, **fields: audit.append((event, fields)))
+
+    root = RootProviderAdmission("root-daemon-positive-2a", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {"action": "emanate", "tasks": [{"task": "test", "tools": []}]}
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result["status"] == "dispatched"
+    assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
+    assert len(records) == 1
+    assert records[0]["manifest"]["backend"] == "lingtai"
+    assert (
+        "derived_launch_admission_decision",
+        {
+            "capability": "daemon",
+            "state": "granted",
+            "reason_code": "derived_launch_allowed_by_test",
+            "audit_id": "audit-daemon-positive-2a",
+        },
+    ) in audit
+
+
 def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
     tmp_path, monkeypatch
 ):

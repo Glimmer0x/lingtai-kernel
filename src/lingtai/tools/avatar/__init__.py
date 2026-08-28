@@ -942,15 +942,14 @@ class AvatarManager:
             decision = DerivedLaunchDecision(
                 ProviderAdmissionState.GRANTED, "legacy_default"
             )
-        if decision.reason_code != "legacy_default":
-            self._append_ledger(
-                "avatar_admission_decision",
-                peer_name,
-                capability=DerivedLaunchCapability.AVATAR.value,
-                state=decision.state.value,
-                reason_code=decision.reason_code,
-                audit_id=decision.audit_id,
-            )
+        self._append_ledger(
+            "avatar_admission_decision",
+            peer_name,
+            capability=DerivedLaunchCapability.AVATAR.value,
+            state=decision.state.value,
+            reason_code=decision.reason_code,
+            audit_id=decision.audit_id,
+        )
 
     # ------------------------------------------------------------------
     # Ledger reading

@@ -851,7 +851,11 @@ def daemon_runtime_for_agent(
         from lingtai.kernel.provider_admission import require_derived_launch_admission
 
         return require_derived_launch_admission(
-            getattr(agent, "_derived_launch_admission_port", None), capability
+            getattr(agent, "_derived_launch_admission_port", None),
+            capability,
+            required=bool(
+                getattr(agent, "_requires_derived_launch_admission_port", False)
+            ),
         )
 
     def _log(event_type: str, **fields: Any) -> None:
@@ -1589,7 +1593,11 @@ def agent_host_ports(
         from lingtai.kernel.provider_admission import require_derived_launch_admission
 
         return require_derived_launch_admission(
-            getattr(agent, "_derived_launch_admission_port", None), capability
+            getattr(agent, "_derived_launch_admission_port", None),
+            capability,
+            required=bool(
+                getattr(agent, "_requires_derived_launch_admission_port", False)
+            ),
         )
 
     ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}

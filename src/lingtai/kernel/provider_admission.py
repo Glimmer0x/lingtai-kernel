@@ -254,6 +254,8 @@ def current_provider_call_class() -> ProviderCallClass:
 def require_derived_launch_admission(
     port: DerivedLaunchAdmissionPort | None,
     capability: DerivedLaunchCapability,
+    *,
+    required: bool = False,
 ) -> DerivedLaunchDecision:
     """Decide one daemon/avatar launch before it can create process state.
 
@@ -266,6 +268,13 @@ def require_derived_launch_admission(
     if not isinstance(capability, DerivedLaunchCapability):
         raise TypeError("derived launch capability must be typed")
     if port is None:
+        if required:
+            raise DerivedLaunchAdmissionError(
+                DerivedLaunchDecision(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "required_derived_launch_admission_port_missing",
+                )
+            )
         return DerivedLaunchDecision(ProviderAdmissionState.GRANTED, "legacy_default")
 
     parent = current_provider_admission()

@@ -244,6 +244,7 @@ class Agent(BaseAgent):
         _forced_disable: frozenset[str] | None = None,
         _turn_origin_policy: Any | None = None,
         _requires_turn_origin_policy: bool = False,
+        _requires_derived_launch_admission_port: bool = False,
         _from_init_boot: bool = False,
         **kwargs: Any,
     ):
@@ -253,6 +254,9 @@ class Agent(BaseAgent):
         self._forced_disable = frozenset(_forced_disable or ())
         self._turn_origin_policy = _turn_origin_policy
         self._requires_turn_origin_policy = _requires_turn_origin_policy
+        self._requires_derived_launch_admission_port = (
+            _requires_derived_launch_admission_port
+        )
         # Psyche SHOW reports only the Pad configuration successfully consumed
         # by canonical reconstruction. Direct construction begins at the two
         # meaningful defaults; ambient init/source edits never mutate this pair.
