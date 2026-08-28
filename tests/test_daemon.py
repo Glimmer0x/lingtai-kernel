@@ -12,6 +12,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.provider_admission import (
+    DerivedLaunchCapability,
+    DerivedLaunchDecision,
+    ProviderAdmissionState,
+    RootProviderAdmission,
+    bind_provider_admission,
+    clear_provider_admission,
+)
 from lingtai.kernel.llm.base import ChatSession, FunctionSchema, LLMResponse, ToolCall, UsageMetadata
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock, ToolResultBlock
 from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
@@ -1343,6 +1351,129 @@ def test_handle_emanate_maps_prompt_default_and_preserves_whitespace_before_deta
     assert "system task one" in prompts[0]
     assert "  first user  " not in prompts[0]
     assert "system task two" in prompts[1]
+
+
+def test_profile_daemon_launch_reaches_structured_admission_before_supervisor(
+    tmp_path, monkeypatch
+):
+    """The real emanate path reaches the 2a seam before process I/O."""
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+
+    class _DenyingPort:
+        def __init__(self):
+            self.calls = []
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.DENIED,
+                "derived_launch_denied_by_test",
+                audit_id="audit-daemon-2a",
+            )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    _enable_detached_fake_llm(agent, monkeypatch)
+    port = _DenyingPort()
+    agent._derived_launch_admission_port = port
+    supervisor_calls = []
+    audit = []
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: supervisor_calls.append("spawn"),
+    )
+    monkeypatch.setattr(agent, "_log", lambda event, **fields: audit.append((event, fields)))
+
+    root = RootProviderAdmission("root-daemon-2a", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {"action": "emanate", "tasks": [{"task": "test", "tools": []}]}
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result["status"] == "error"
+    assert "derived_launch_denied_by_test" in result["message"]
+    assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
+    assert supervisor_calls == []
+    decisions = [row for row in audit if row[0] == "derived_launch_admission_decision"]
+    assert decisions == [
+        (
+            "derived_launch_admission_decision",
+            {
+                "capability": "daemon",
+                "state": "denied",
+                "reason_code": "derived_launch_denied_by_test",
+                "audit_id": "audit-daemon-2a",
+            },
+        )
+    ]
+
+
+def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
+    tmp_path, monkeypatch
+):
+    """The shared external-CLI supervisor path cannot bypass the 2a seam."""
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+
+    class _DenyingPort:
+        def __init__(self):
+            self.calls = []
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.DENIED,
+                "derived_launch_denied_by_test",
+                audit_id="audit-external-cli-2a",
+            )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    port = _DenyingPort()
+    agent._derived_launch_admission_port = port
+    supervisor_calls = []
+    audit = []
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: supervisor_calls.append("spawn"),
+    )
+    monkeypatch.setattr(agent, "_log", lambda event, **fields: audit.append((event, fields)))
+
+    root = RootProviderAdmission("root-external-cli-2a", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "backend": "codex",
+                "tasks": [{"task": "test", "tools": []}],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result == {
+        "status": "error",
+        "message": "derived launch was not admitted: derived_launch_denied_by_test",
+    }
+    assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
+    assert supervisor_calls == []
+    decisions = [row for row in audit if row[0] == "derived_launch_admission_decision"]
+    assert decisions == [
+        (
+            "derived_launch_admission_decision",
+            {
+                "capability": "daemon",
+                "state": "denied",
+                "reason_code": "derived_launch_denied_by_test",
+                "audit_id": "audit-external-cli-2a",
+            },
+        )
+    ]
 
 
 def test_task_skills_render_compact_catalog_from_dir_and_file(tmp_path):

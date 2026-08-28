@@ -3486,6 +3486,7 @@ class DaemonManager:
         the batch entry cleanly — never claims a detached run started when it
         did not.
         """
+        self._authorize_derived_launch("daemon")
         from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
         from lingtai.kernel.daemon_supervisor.manifest import build_manifest, write_manifest
 
@@ -5857,6 +5858,7 @@ class DaemonManager:
             # boundary.  The parent writes a complete, redacted manifest and
             # retains only the durable run-dir facade.
             try:
+                self._authorize_derived_launch("daemon")
                 self._commit_dispatch(run_dir)
                 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
                 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
@@ -9509,6 +9511,35 @@ class DaemonManager:
     def _log(self, event_type: str, **fields) -> None:
         """Log through Daemon's narrow parent-runtime port."""
         self._runtime.log(event_type, **fields)
+
+    def _authorize_derived_launch(self, capability_name: str) -> None:
+        """Reach the host decision seam before a daemon launch side effect."""
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchAdmissionError,
+            DerivedLaunchCapability,
+        )
+
+        capability = DerivedLaunchCapability(capability_name)
+        try:
+            decision = self._runtime.authorize_derived_launch(capability)
+        except DerivedLaunchAdmissionError as exc:
+            decision = exc.decision
+            self._log(
+                "derived_launch_admission_decision",
+                capability=capability.value,
+                state=decision.state.value,
+                reason_code=decision.reason_code,
+                audit_id=decision.audit_id,
+            )
+            raise
+        if decision.reason_code != "legacy_default":
+            self._log(
+                "derived_launch_admission_decision",
+                capability=capability.value,
+                state=decision.state.value,
+                reason_code=decision.reason_code,
+                audit_id=decision.audit_id,
+            )
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s

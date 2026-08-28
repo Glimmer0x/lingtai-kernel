@@ -10,6 +10,9 @@ import pytest
 
 from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
 from lingtai.kernel.provider_admission import (
+    DerivedLaunchAdmissionError,
+    DerivedLaunchCapability,
+    DerivedLaunchDecision,
     ProviderAdmittedLLMService,
     ProviderAdmissionError,
     ProviderAdmissionState,
@@ -19,6 +22,7 @@ from lingtai.kernel.provider_admission import (
     begin_derived_provider_admission,
     bind_provider_admission,
     clear_provider_admission,
+    require_derived_launch_admission,
 )
 from lingtai.kernel.llm_utils import send_with_timeout, send_with_timeout_stream
 from lingtai.llm.api_gate import APICallGate
@@ -82,6 +86,24 @@ class _MalformedAdmissionPort:
 class _RaisingAdmissionPort:
     def authorize_provider_call(self, _parent, _call_class):
         raise RuntimeError("authority unavailable")
+
+
+class _RecordingDerivedLaunchPort:
+    def __init__(self, *, state=ProviderAdmissionState.GRANTED):
+        self.state = state
+        self.calls = []
+
+    def authorize_derived_launch(self, parent, capability):
+        self.calls.append((parent, capability))
+        return DerivedLaunchDecision(
+            state=self.state,
+            reason_code=(
+                "derived_launch_allowed"
+                if self.state is ProviderAdmissionState.GRANTED
+                else "derived_launch_denied_by_test"
+            ),
+            audit_id="audit-derived-test",
+        )
 
 
 def test_raw_provider_service_construction_inventory_is_explicit():
@@ -361,8 +383,8 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
         ("src/lingtai/tools/bash/__init__.py", 1467, "Thread"),
         ("src/lingtai/tools/bash/__init__.py", 1714, "Thread"),
         ("src/lingtai/tools/daemon/__init__.py", 1764, "ThreadPoolExecutor"),
-        ("src/lingtai/tools/daemon/__init__.py", 6507, "Thread"),
-        ("src/lingtai/tools/daemon/__init__.py", 9111, "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/__init__.py", 6509, "Thread"),
+        ("src/lingtai/tools/daemon/__init__.py", 9113, "ThreadPoolExecutor"),
         ("src/lingtai/tools/daemon/claude_interactive.py", 611, "Thread"),
         ("src/lingtai/tools/daemon/execution_host.py", 610, "ThreadPoolExecutor"),
         ("src/lingtai/tools/daemon/posix_process.py", 112, "Thread"),
@@ -648,6 +670,60 @@ def test_v0_derived_admission_rejects_nested_derived_execution():
 
     with pytest.raises(TypeError, match="derived admission requires a root admission"):
         begin_derived_provider_admission(child, ProviderCallClass.AVATAR_CHILD)  # type: ignore[arg-type]
+
+
+def test_derived_launch_requires_root_admission_and_never_accepts_a_child_parent():
+    """A one-hop child cannot self-authorize another daemon/avatar launch."""
+
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
+    port = _RecordingDerivedLaunchPort()
+    token = bind_provider_admission(child)
+    try:
+        with pytest.raises(
+            DerivedLaunchAdmissionError, match="nested_derived_launch_denied"
+        ) as raised:
+            require_derived_launch_admission(port, DerivedLaunchCapability.AVATAR)
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.decision.state is ProviderAdmissionState.DENIED
+    assert port.calls == []
+
+
+def test_derived_launch_port_is_fail_closed_when_unconnected_or_indeterminate():
+    """A constrained profile cannot mistake an unavailable Driver for a grant."""
+
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        with pytest.raises(
+            DerivedLaunchAdmissionError,
+            match="derived_launch_admission_port_unconnected",
+        ) as raised:
+            require_derived_launch_admission(
+                RUNTIME_POLICY, DerivedLaunchCapability.DAEMON
+            )
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+
+
+def test_derived_launch_port_returns_auditable_grant_for_an_admitted_root():
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    port = _RecordingDerivedLaunchPort()
+    token = bind_provider_admission(root)
+    try:
+        decision = require_derived_launch_admission(
+            port, DerivedLaunchCapability.DAEMON
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert decision.allowed is True
+    assert decision.audit_id == "audit-derived-test"
+    assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
 
 
 def test_denied_provider_admission_never_reaches_the_inner_service():

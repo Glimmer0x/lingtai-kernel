@@ -485,6 +485,7 @@ class BaseAgent:
         source_revision_port: SourceRevisionPort,
         refresh_watcher: RefreshWatcherPort | None = None,
         provider_call_admission_port=None,
+        derived_launch_admission_port=None,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
@@ -512,6 +513,11 @@ class BaseAgent:
         # ContextVar or be treated as covered here. Generic agents retain the
         # unwrapped historical path.
         self._provider_call_admission_port = provider_call_admission_port
+        # A separate host-mediated port decides daemon/avatar *process* launch.
+        # It is intentionally not inferred from the provider-call port: generic
+        # Agents preserve legacy behavior while a constrained composition must
+        # supply its own fail-closed Driver authority.
+        self._derived_launch_admission_port = derived_launch_admission_port
         if provider_call_admission_port is None:
             self.service = service
         else:

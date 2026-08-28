@@ -425,6 +425,7 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     assert observed["turn_origin_policy"] is RUNTIME_POLICY
     assert observed["requires_turn_origin_policy"] is True
     assert observed["provider_call_admission_port"] is RUNTIME_POLICY
+    assert observed["derived_launch_admission_port"] is RUNTIME_POLICY
     assert observed["puffo_runtime"] == runtime
 
 
