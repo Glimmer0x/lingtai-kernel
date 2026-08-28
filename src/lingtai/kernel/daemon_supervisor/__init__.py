@@ -115,7 +115,9 @@ class DaemonSupervisorPort(ABC):
     """
 
     @abstractmethod
-    def spawn_detached(self, request: DaemonSupervisorRequest) -> None:
+    def spawn_detached(
+        self, request: DaemonSupervisorRequest, *, authority_lease: object | None = None
+    ) -> None:
         """Launch the supervisor process described by *request*.
 
         The adapter encodes *request* using the technology-neutral
@@ -132,7 +134,9 @@ class DaemonSupervisorPort(ABC):
         the run's ``daemon.json`` once it starts (see
         ``tools/daemon/supervisor_runtime.py::run_supervisor``) so a
         caller-side startup handshake can observe successful launch without
-        this Port returning one.
+        this Port returning one. ``authority_lease`` is an opaque adapter-owned
+        one-use handoff for the immediate derived child. Core can pass it but
+        cannot inspect it, serialize it, or turn it into a descriptor/token.
         """
         ...
 

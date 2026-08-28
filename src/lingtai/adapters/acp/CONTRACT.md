@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
+  - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
@@ -30,6 +31,7 @@ related_files:
   - tests/test_turn_events.py
   - tests/test_turn_permissions.py
   - tests/test_provider_admission.py
+  - tests/test_driver_authority_adapter.py
   - tests/test_tool_executor.py
   - tests/test_session_mcp.py
   - tests/test_process_match.py
@@ -238,14 +240,21 @@ argv, environment, or MCP command from the remote caller.
     boundary is provider-turn initiation: the current PR2 Core slice enforces
     direct authenticated ACP root prompts at the actual root provider request,
     while inbox, task-card, alarm, mail/MCP wake, and other independent root
-    events are denied before provider dispatch. Daemon and avatar still use
-    their historical independent execution routes and remain outside this
-    root-only gate. A future route that binds a derived parent before its host
-    transport is connected will receive explicit
-    `derived_admission_port_unconnected` and reject before provider I/O. The
-    separate driver-mediated derived-admission transport must wire those
-    historical routes before this profile can claim all provider/model turns
-    are covered. This controls who may start a root
+    events are denied before provider dispatch. The constrained POSIX profile
+    composes `driver_authority.DriverAuthorityAdapter` as both the provider and
+    derived-launch Port. Its carrier is a Driver-created connected Unix-domain
+    socket endpoint, not a token, path, environment value, or audit id. A root
+    endpoint is inherited only by the ACP host and becomes close-on-exec; an
+    allowed one-hop launch receives a separate single-use child endpoint by
+    `SCM_RIGHTS`, consumed only by the exact POSIX `pass_fds` spawn. Core does
+    not parse fd/frame/registry data. A derived endpoint is server-bound to
+    `depth=1` and cannot mint another child. A persistent derived marker means
+    authority is required, never granted: missing, closed, malformed, or
+    unavailable transport is a structured indeterminate denial before any
+    spawn/provider I/O and never a `legacy_default` fallback. This wiring does
+    not itself establish the external Driver server, identity/workdir binding,
+    CAS grant consumption, or dynamic revoke, so it does not yet claim those
+    protections or complete all-turn coverage. This controls who may start a root
     turn, not what state a later admitted turn may read: non-ACP sources may
     still write state. The profile adds no `external_send` approval
     boundary and does not promise workspace-only writes, process containment,

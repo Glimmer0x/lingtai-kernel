@@ -127,6 +127,8 @@ class ProviderCallDecision:
 
     state: ProviderAdmissionState
     reason_code: str
+    audit_id: str | None = None
+    admission_id: str | None = None
 
     @property
     def allowed(self) -> bool:
@@ -146,6 +148,11 @@ class DerivedLaunchDecision:
     state: ProviderAdmissionState
     reason_code: str
     audit_id: str | None = None
+    admission_id: str | None = None
+    # This is a Driver-adapter-owned, non-serializable spawn handoff.  Core can
+    # carry it only opaquely to the process-launch adapter; it is neither a
+    # descriptor number nor a bearer that Core can inspect or reconstruct.
+    child_endpoint_lease: object | None = field(default=None, repr=False, compare=False)
 
     @property
     def allowed(self) -> bool:
@@ -299,9 +306,13 @@ def require_derived_launch_admission(
         or not isinstance(decision.state, ProviderAdmissionState)
         or not isinstance(decision.reason_code, str)
         or not decision.reason_code
+        or any(
+            value is not None and (not isinstance(value, str) or not value)
+            for value in (decision.audit_id, decision.admission_id)
+        )
         or (
-            decision.audit_id is not None
-            and (not isinstance(decision.audit_id, str) or not decision.audit_id)
+            decision.state is ProviderAdmissionState.GRANTED
+            and decision.child_endpoint_lease is None
         )
     ):
         decision = DerivedLaunchDecision(
@@ -340,6 +351,10 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
         or not isinstance(decision.reason_code, str)
         or not decision.reason_code
         or decision.state is not ProviderAdmissionState.GRANTED
+        or any(
+            value is not None and (not isinstance(value, str) or not value)
+            for value in (decision.audit_id, decision.admission_id)
+        )
     ):
         reason = (
             decision.reason_code

@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/kernel/daemon_supervisor/manifest.py
   - src/lingtai/kernel/daemon_supervisor/control.py
   - src/lingtai/adapters/posix/daemon_supervisor.py
+  - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/posix/daemon_execution_child_entrypoint.py
   - src/lingtai/adapters/posix/daemon_resume_owner_entrypoint.py
   - src/lingtai/adapters/posix/process_identity.py
@@ -39,9 +40,12 @@ POSIX process APIs.
 ## Ports
 
 `DaemonSupervisorPort.spawn_detached(request)` accepts only a validated
-`DaemonSupervisorRequest` carrying run ID, manifest path, and interpreter. The
-Port returns after launch and never exposes a process handle, future, or parent
-Agent object.
+`DaemonSupervisorRequest` carrying run ID, manifest path, and interpreter. A
+constrained host may additionally carry an opaque one-use authority lease; Core
+cannot inspect it. Only the POSIX production adapter may consume that lease for
+the exact child `pass_fds` handoff, and it closes an unconsumed lease on spawn
+failure. The Port returns after launch and never exposes a process handle,
+future, parent Agent object, fd, or authority bearer.
 
 ## Adapters
 
@@ -51,6 +55,11 @@ supervisor/child stdout/stderr to restrictive run-owned logs. The supervisor
 starts an exact execution child before its watcher; terminal CLI resume uses a
 durable single-writer generation and a detached resume owner. No parent future
 or process handle is retained, and no broad process matching is performed.
+When it receives an opaque Driver authority lease, it passes only the resulting
+child endpoint to the detached supervisor and then its exact execution child;
+the root endpoint is close-on-exec and never becomes a child `pass_fds` entry.
+Windows has no equivalent Driver endpoint transport and rejects such a lease
+before launch.
 
 The Windows adapter (`WindowsDaemonSupervisorAdapter`) is the `nt` production
 sibling behind the same Port: the same encoded request and secret-stripped

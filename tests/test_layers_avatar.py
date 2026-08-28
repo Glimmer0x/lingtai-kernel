@@ -296,6 +296,7 @@ class TestAvatarManager:
                     ProviderAdmissionState.GRANTED,
                     "derived_launch_allowed_by_test",
                     audit_id="audit-avatar-positive-2a",
+                    child_endpoint_lease=object(),
                 )
 
         launch_calls = []
@@ -309,7 +310,7 @@ class TestAvatarManager:
             launch_patch.setattr(
                 AvatarManager,
                 "_launch",
-                lambda _self, working_dir: (
+                lambda _self, working_dir, **_kwargs: (
                     launch_calls.append(working_dir)
                     or (receipt, Path("/tmp/avatar-positive-2a.stderr"))
                 ),

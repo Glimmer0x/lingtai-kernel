@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
+  - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
@@ -21,6 +22,7 @@ related_files:
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
+  - ENVIRONMENT_VARIABLES.md
   - tests/test_acp_stdio.py
   - tests/test_puffo_v0_profile.py
   - tests/test_correlated_turns.py
@@ -72,6 +74,13 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   turns; it is not a tool/runtime containment policy. Its Phase A
   owner-only-filesystem implementation deliberately rejects Windows until an
   equivalent ACL-backed adapter exists.
+- `driver_authority.py` — constrained POSIX Driver authority adapter. It owns
+  bounded versioned Unix-socket framing, immediate close-on-exec handling of
+  the inherited endpoint, `SCM_RIGHTS` child-endpoint receipt, and opaque
+  single-use lease handling; Core receives typed Port decisions only. Socket
+  loss, malformed frames, bad versions, and invalid descriptors become
+  structured indeterminacy, never a default grant. This module is an ACP/Driver
+  boundary, not a registry, identity-binding, or sandbox implementation.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
   quarantines Python application stdout to stderr before Agent construction,
   composes the existing Agent, consumes the typed bounded stop proof, and hard-

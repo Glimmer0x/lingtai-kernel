@@ -103,6 +103,7 @@ class _RecordingDerivedLaunchPort:
                 else "derived_launch_denied_by_test"
             ),
             audit_id="audit-derived-test",
+            child_endpoint_lease=object() if self.state is ProviderAdmissionState.GRANTED else None,
         )
 
 
@@ -353,10 +354,10 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
         ("src/lingtai/tools/bash/__init__.py", 1467, "Thread"),
         ("src/lingtai/tools/bash/__init__.py", 1714, "Thread"),
         ("src/lingtai/tools/daemon/__init__.py", 1764, "ThreadPoolExecutor"),
-        ("src/lingtai/tools/daemon/__init__.py", 6509, "Thread"),
-        ("src/lingtai/tools/daemon/__init__.py", 9113, "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/__init__.py", 6540, "Thread"),
+        ("src/lingtai/tools/daemon/__init__.py", 9144, "ThreadPoolExecutor"),
         ("src/lingtai/tools/daemon/claude_interactive.py", 611, "Thread"),
-        ("src/lingtai/tools/daemon/execution_host.py", 610, "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/execution_host.py", 663, "ThreadPoolExecutor"),
         ("src/lingtai/tools/daemon/posix_process.py", 112, "Thread"),
         ("src/lingtai/tools/daemon/runtime.py", 133, "Thread"),
         ("src/lingtai/tools/daemon/runtime.py", 220, "Thread"),

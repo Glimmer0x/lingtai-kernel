@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/tools/avatar/manual/SKILL.md
   - src/lingtai/adapters/avatar_launcher.py
   - src/lingtai/adapters/posix/avatar_launcher.py
+  - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/windows/avatar_launcher.py
   - src/lingtai/cli.py
   - ENVIRONMENT_VARIABLES.md
@@ -326,7 +327,10 @@ live descendant.
   `logs/spawn.stderr` to the avatar-local Port. Cwd is inherited. The
   `LINGTAI_DERIVED_AVATAR_EXECUTION=1` environment override is redundant
   immediate-launch defense only; it is non-secret and never carries an
-  authority bearer.
+  authority bearer. A Driver-approved constrained launch additionally carries
+  an opaque, one-use child-endpoint lease through the Core launch decision;
+  only the POSIX launcher consumes it for that exact child's `pass_fds` and
+  closes it on launch failure. The root endpoint is never inherited by avatar.
 - The Port returns a positive PID and an opaque adapter handle. `poll()` is
   nonblocking and returns the exact integer child return code or `None`.
 - Production adapters disconnect stdin/stdout and own a binary-write stderr

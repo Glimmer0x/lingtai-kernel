@@ -3486,7 +3486,7 @@ class DaemonManager:
         the batch entry cleanly — never claims a detached run started when it
         did not.
         """
-        self._authorize_derived_launch("daemon")
+        launch_decision = self._authorize_derived_launch("daemon")
         from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
         from lingtai.kernel.daemon_supervisor.manifest import build_manifest, write_manifest
 
@@ -3556,6 +3556,13 @@ class DaemonManager:
         if runtime_llm:
             capsule.setdefault("llm", {}).update(runtime_llm)
         if use_central_manager:
+            if launch_decision.child_endpoint_lease is not None:
+                from lingtai.adapters.acp.driver_authority import close_child_endpoint_lease
+
+                close_child_endpoint_lease(launch_decision.child_endpoint_lease)
+                raise RuntimeError(
+                    "driver-authorized daemon launch cannot use central manager"
+                )
             self._enqueue_central_daemon_manager_run(
                 request,
                 capsule=capsule,
@@ -3563,7 +3570,17 @@ class DaemonManager:
                 run_dir=run_dir,
             )
         else:
-            select_daemon_supervisor_adapter().spawn_detached(request, capsule=capsule)
+            supervisor = select_daemon_supervisor_adapter()
+            if launch_decision.child_endpoint_lease is None:
+                # Preserve the public generic Port call shape. The opaque
+                # extension is only present for a real Driver grant.
+                supervisor.spawn_detached(request, capsule=capsule)
+            else:
+                supervisor.spawn_detached(
+                    request,
+                    capsule=capsule,
+                    authority_lease=launch_decision.child_endpoint_lease,
+                )
             self._await_supervisor_startup(run_dir)
 
     def _await_supervisor_startup(self, run_dir: DaemonRunDir) -> None:
@@ -3742,6 +3759,13 @@ class DaemonManager:
             service_kwargs["key_resolver"] = effective_preset_llm["key_resolver"]
         service_kwargs["context_window"] = context_window
         service = LLMService(**service_kwargs)
+        provider_admission_port = getattr(
+            getattr(self, "_agent", None), "_provider_call_admission_port", None
+        )
+        if provider_admission_port is not None:
+            from lingtai.kernel.provider_admission import ProviderAdmittedLLMService
+
+            service = ProviderAdmittedLLMService(service, provider_admission_port)
 
         session = service.create_session(
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
@@ -5858,7 +5882,14 @@ class DaemonManager:
             # boundary.  The parent writes a complete, redacted manifest and
             # retains only the durable run-dir facade.
             try:
-                self._authorize_derived_launch("daemon")
+                launch_decision = self._authorize_derived_launch("daemon")
+                if launch_decision.child_endpoint_lease is not None:
+                    from lingtai.adapters.acp.driver_authority import close_child_endpoint_lease
+
+                    close_child_endpoint_lease(launch_decision.child_endpoint_lease)
+                    raise RuntimeError(
+                        "external daemon backend is unsupported by Driver admission"
+                    )
                 self._commit_dispatch(run_dir)
                 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
                 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
@@ -9512,7 +9543,7 @@ class DaemonManager:
         """Log through Daemon's narrow parent-runtime port."""
         self._runtime.log(event_type, **fields)
 
-    def _authorize_derived_launch(self, capability_name: str) -> None:
+    def _authorize_derived_launch(self, capability_name: str):
         """Reach the host decision seam before a daemon launch side effect."""
         from lingtai.kernel.provider_admission import (
             DerivedLaunchAdmissionError,
@@ -9539,6 +9570,7 @@ class DaemonManager:
             reason_code=decision.reason_code,
             audit_id=decision.audit_id,
         )
+        return decision
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s
