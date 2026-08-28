@@ -14,6 +14,7 @@ import pytest
 from lingtai.adapters.acp.driver_authority import (
     DriverAuthorityAdapter,
     DriverAuthorityEndpointBindingMismatch,
+    EndpointBindingMismatchAuthorityAdapter,
     DriverAuthorityTransportError,
     UnavailableDriverAuthorityAdapter,
     authority_adapter_from_environment,
@@ -22,6 +23,8 @@ from lingtai.adapters.acp.driver_authority import (
 from lingtai.kernel.provider_admission import (
     DerivedLaunchCapability,
     ProviderAdmissionState,
+    ProviderAdmittedLLMService,
+    ProviderAdmissionError,
     ProviderCallClass,
     RootProviderAdmission,
     begin_derived_provider_admission,
@@ -183,6 +186,42 @@ def test_local_child_mode_must_match_the_driver_endpoint_capability(
     adapter.close()
     thread.join(timeout=2)
     assert errors == []
+
+
+@pytest.mark.parametrize(
+    "call_class", [ProviderCallClass.DAEMON, ProviderCallClass.AVATAR_CHILD]
+)
+def test_cross_mode_binding_mismatch_rejects_before_inner_provider_io(call_class):
+    """Both child compositions use the typed mismatch denial, never generic I/O."""
+
+    class InnerSession:
+        interface = object()
+        pre_request_hook = None
+
+        def __init__(self):
+            self.calls = []
+
+        def send(self, message):
+            self.calls.append(message)
+            return message
+
+    class InnerService:
+        def __init__(self):
+            self.session = InnerSession()
+
+        def create_session(self, *_args, **_kwargs):
+            return self.session
+
+    adapter = EndpointBindingMismatchAuthorityAdapter()
+    inner = InnerService()
+    service = ProviderAdmittedLLMService(inner, adapter)
+    token = bind_provider_admission(adapter.derived_provider_parent(call_class))
+    try:
+        with pytest.raises(ProviderAdmissionError, match="endpoint_binding_mismatch"):
+            service.create_session("system").send("must-not-reach-provider")
+    finally:
+        clear_provider_admission(token)
+    assert inner.session.calls == []
 
 
 def test_derived_provider_call_uses_its_own_endpoint_and_driver_known_fields():
