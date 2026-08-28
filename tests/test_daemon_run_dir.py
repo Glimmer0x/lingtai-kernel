@@ -82,7 +82,7 @@ def test_initial_daemon_json_fields(tmp_path):
     assert data["turn"] == 0
     assert data["current_tool"] is None
     assert data["tool_call_count"] == 0
-    assert data["tokens"] == {"input": 0, "output": 0, "thinking": 0, "cached": 0}
+    assert data["tokens"] == {"input": 0, "output": 0, "thinking": 0, "cached": 0, "calls": 0}
     assert data["result_preview"] is None
     assert data["error"] is None
     # started_at is ISO 8601 UTC
@@ -213,7 +213,7 @@ def test_mark_done_keeps_authoritative_state_and_usage_in_daemon_json(tmp_path):
     state = json.loads(rd.daemon_json_path.read_text())
     assert state["state"] == "done"
     assert state["finished_at"] is not None
-    assert state["tokens"] == {"input": 10, "output": 4, "thinking": 0, "cached": 0}
+    assert state["tokens"] == {"input": 10, "output": 4, "thinking": 0, "cached": 0, "calls": 1}
     assert state["cli_tokens"] == {"input": 7, "output": 3, "thinking": 0, "cached": 1, "calls": 1}
 
 def test_bump_turn_appends_assistant_chat_entry(tmp_path):
@@ -700,7 +700,7 @@ def test_append_tokens_updates_running_totals(tmp_path):
     rd.append_tokens(input=100, output=20, thinking=5, cached=10)
     rd.append_tokens(input=50, output=15, thinking=3, cached=5)
     data = json.loads(rd.daemon_json_path.read_text())
-    assert data["tokens"] == {"input": 150, "output": 35, "thinking": 8, "cached": 15}
+    assert data["tokens"] == {"input": 150, "output": 35, "thinking": 8, "cached": 15, "calls": 2}
 
 
 def test_append_tokens_skipped_when_all_zero(tmp_path):
@@ -757,7 +757,7 @@ def test_record_cli_tokens_does_not_touch_token_ledgers(tmp_path):
     assert not parent_ledger.exists()
     # The kernel `tokens` running totals stay zero too.
     data = json.loads(rd.daemon_json_path.read_text())
-    assert data["tokens"] == {"input": 0, "output": 0, "thinking": 0, "cached": 0}
+    assert data["tokens"] == {"input": 0, "output": 0, "thinking": 0, "cached": 0, "calls": 0}
 
 
 def test_record_cli_tokens_backfills_missing_cli_tokens_for_old_state(tmp_path):
@@ -768,6 +768,18 @@ def test_record_cli_tokens_backfills_missing_cli_tokens_for_old_state(tmp_path):
     rd.record_cli_tokens(input=3, output=2, cached=1, thinking=0)
     data = json.loads(rd.daemon_json_path.read_text())
     assert data["cli_tokens"] == {
+        "input": 3, "output": 2, "thinking": 0, "cached": 1, "calls": 1,
+    }
+
+
+def test_append_tokens_backfills_missing_calls_for_old_state(tmp_path):
+    """A pre-call-counter LingTai run remains appendable after upgrade."""
+    rd = _make_run_dir(tmp_path)
+    rd._state["tokens"].pop("calls")
+    rd._atomic_write_json(rd.daemon_json_path, rd._state)
+    rd.append_tokens(input=3, output=2, thinking=0, cached=1)
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["tokens"] == {
         "input": 3, "output": 2, "thinking": 0, "cached": 1, "calls": 1,
     }
 

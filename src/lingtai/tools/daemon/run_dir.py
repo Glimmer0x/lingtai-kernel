@@ -201,7 +201,7 @@ class DaemonRunDir:
             "turn": 0,
             "current_tool": None,
             "tool_call_count": 0,
-            "tokens": {"input": 0, "output": 0, "thinking": 0, "cached": 0},
+            "tokens": {"input": 0, "output": 0, "thinking": 0, "cached": 0, "calls": 0},
             # CLI-backend usage (claude-p / codex / ...) is accumulated here
             # for UI display only — NOT in `tokens` (which feeds the kernel
             # token ledgers). External CLIs bill on their own provider account
@@ -1199,6 +1199,10 @@ class DaemonRunDir:
             self._state["tokens"]["output"] += output
             self._state["tokens"]["thinking"] += thinking
             self._state["tokens"]["cached"] += cached
+            # Older in-flight runs predate the count field; make the additive
+            # schema extension safe before recording this usage event.
+            self._state["tokens"].setdefault("calls", 0)
+            self._state["tokens"]["calls"] += 1
             self._persist_daemon_state()
         self._safe_state("append_tokens.state", _update_state)
 
