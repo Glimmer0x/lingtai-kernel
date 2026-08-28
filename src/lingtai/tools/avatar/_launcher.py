@@ -3,15 +3,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Mapping, Protocol
+
+
+# This is deliberately a restrictive boot marker, never an authority bearer:
+# a child that forges it can only make its own nested derived launch fail closed.
+DERIVED_AVATAR_EXECUTION_ENV = "LINGTAI_DERIVED_AVATAR_EXECUTION"
 
 
 @dataclass(frozen=True)
 class AvatarLaunchRequest:
-    """The complete launch input; cwd and environment are inherited."""
+    """The complete launch input; cwd is inherited and env overrides are explicit."""
 
     argv: tuple[str, ...]
     stderr_path: Path
+    environment: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)

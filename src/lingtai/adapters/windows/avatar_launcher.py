@@ -15,6 +15,7 @@ immediate termination of exactly the owned process (never a process tree).
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import Any
 
@@ -27,11 +28,16 @@ class WindowsAvatarLauncherAdapter:
         request.stderr_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_fh = request.stderr_path.open("wb")
         try:
-            process = subprocess.Popen(
-                list(request.argv), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=stderr_fh, creationflags=_win32.DETACHED_CREATIONFLAGS,
-                close_fds=True,
-            )
+            kwargs = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": stderr_fh,
+                "creationflags": _win32.DETACHED_CREATIONFLAGS,
+                "close_fds": True,
+            }
+            if request.environment is not None:
+                kwargs["env"] = {**os.environ, **request.environment}
+            process = subprocess.Popen(list(request.argv), **kwargs)
         finally:
             stderr_fh.close()
         return AvatarLaunchReceipt(process.pid, process)

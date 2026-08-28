@@ -899,6 +899,51 @@ def test_run_wires_file_logging(monkeypatch, tmp_path):
     reset_logging()
 
 
+def test_run_marks_derived_avatar_child_as_requiring_authority(monkeypatch, tmp_path):
+    """The real ``lingtai run`` boot consumes only a restrictive child marker."""
+    from lingtai import cli
+
+    class _Flag:
+        def set(self):
+            pass
+
+    class _Shutdown:
+        def wait(self):
+            return None
+
+    class _FakeAgent:
+        def __init__(self):
+            self._asleep = _Flag()
+            self._shutdown = _Shutdown()
+            self._state = None
+            self._venv_path = None
+
+        def start(self):
+            pass
+
+        def stop(self, timeout=10.0):
+            pass
+
+    captured = {}
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
+    monkeypatch.setattr(cli, "load_init", lambda working_dir: {})
+    def fake_build_agent(data, working_dir, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeAgent()
+
+    monkeypatch.setattr(cli, "build_agent", fake_build_agent)
+    import lingtai.venv_resolve as venv_resolve
+
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda data: tmp_path / "runtime-venv")
+    monkeypatch.setenv("LINGTAI_DERIVED_AVATAR_EXECUTION", "1")
+
+    cli.run(tmp_path)
+
+    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+
+
 def test_log_doctor_does_not_create_agent_log(monkeypatch, tmp_path):
     """Inspector subcommands must stay write-free w.r.t. agent.log.
 

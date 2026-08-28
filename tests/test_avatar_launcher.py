@@ -32,6 +32,33 @@ def test_posix_launch_contract_and_release(tmp_path):
     process.kill.assert_called_once()
 
 
+def test_posix_launch_propagates_explicit_derived_child_requirement(tmp_path):
+    """A derived-avatar marker tightens child boot without carrying authority."""
+    process = MagicMock(pid=418, poll=MagicMock(return_value=None))
+    stderr = tmp_path / "logs" / "spawn.stderr"
+    request = AvatarLaunchRequest(
+        ("python", "-m", "lingtai", "run", "/avatar"),
+        stderr,
+        environment={"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"},
+    )
+    with patch("lingtai.adapters.posix.avatar_launcher.subprocess.Popen", return_value=process) as popen:
+        PosixAvatarLauncherAdapter().launch(request)
+    assert popen.call_args.kwargs["env"]["LINGTAI_DERIVED_AVATAR_EXECUTION"] == "1"
+
+
+def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):
+    """The production avatar launch request carries no authority bearer."""
+    launcher = MagicMock()
+    launcher.launch.return_value = AvatarLaunchReceipt(419, object())
+    manager = AvatarManager(SimpleNamespace(), launcher=launcher)
+    with patch("lingtai.venv_resolve.resolve_venv", return_value=tmp_path), patch(
+        "lingtai.venv_resolve.venv_python", return_value=tmp_path / "python"
+    ):
+        manager._launch(tmp_path)
+    request = launcher.launch.call_args.args[0]
+    assert request.environment == {"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"}
+
+
 def test_manager_boot_policy_uses_opaque_port_and_preserves_precedence(tmp_path):
     launcher = MagicMock()
     manager = AvatarManager(SimpleNamespace(), launcher=launcher)

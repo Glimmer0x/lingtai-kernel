@@ -86,6 +86,12 @@ class DetachedDaemonExecutionHost:
             Path(manifest["parent_working_dir"]),
             log_fn=lambda event, **fields: run_dir.append_event(event, **fields),
         )
+        # A detached child receives no derived authority today. Marking the
+        # requirement here preserves its full tool surface while making any
+        # nested daemon/avatar launch fail closed rather than use legacy allow.
+        # This boolean is deliberately not a bearer; later Driver wiring must
+        # inject the actual authority separately.
+        self._agent._requires_derived_launch_admission_port = True
         self._agent._config.language = manifest.get("language", "en") or "en"
         self._agent.service = SimpleNamespace(
             model=(manifest.get("llm") or {}).get("model", "unknown"),

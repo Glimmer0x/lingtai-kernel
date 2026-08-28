@@ -1103,6 +1103,34 @@ def test_detached_execution_composes_inherited_process_and_terminal_ports(tmp_pa
     assert host._interactive_terminal_port._start_new_session is False
 
 
+def test_detached_daemon_child_requires_derived_authority_before_nested_launch(tmp_path):
+    """A production detached child cannot fall back to legacy nested launch."""
+    from lingtai.kernel.provider_admission import (
+        DerivedLaunchAdmissionError,
+        DerivedLaunchCapability,
+        ProviderAdmissionState,
+    )
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="derived authority requirement")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="derived authority requirement", tools=[], max_turns=1, timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+
+    assert host._agent._requires_derived_launch_admission_port is True
+    with pytest.raises(DerivedLaunchAdmissionError) as raised:
+        host._runtime.authorize_derived_launch(DerivedLaunchCapability.DAEMON)
+    assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+    assert raised.value.decision.reason_code == "required_derived_launch_admission_port_missing"
+
+
 
 def test_detached_shell_async_uses_run_local_events_not_agent_notifications(tmp_path):
     """Actual detached Shell async completion is pollable without an Agent sink."""
