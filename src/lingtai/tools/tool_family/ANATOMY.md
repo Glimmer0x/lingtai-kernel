@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/__init__.py
+  - src/lingtai/tools/tool_family/settings.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
@@ -29,6 +31,7 @@ related_files:
   - src/lingtai/tools/tool_family/glossary-en.md
   - src/lingtai/tools/tool_family/glossary-wen.md
   - src/lingtai/tools/tool_family/glossary-zh.md
+  - tests/test_tool_settings_contract.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -59,8 +62,8 @@ that generic dispatch route.
 - `ChildTool` — a frozen descriptor pairing one child's canonical name,
   `input_schema`, `handler`, and an optional `diagnostics` sidecar; name
   doubles as the model `action` constant and dispatch key
-  (`__init__.py:138-166`, preceded by the `DiagnosticDescriptor` dataclass at
-  `__init__.py:120-135`). `diagnostics` maps a structural trigger name
+  (`__init__.py:143-170`, preceded by the `DiagnosticDescriptor` dataclass at
+  `__init__.py:125-140`). `diagnostics` maps a structural trigger name
   (today: only
   `TRIGGER_UNSUPPORTED_INPUT_FIELD`) to the static `DiagnosticDescriptor`
   (`code`/`expected_form`/`reason`/`fix`) that action owns for it — see
@@ -74,7 +77,7 @@ that generic dispatch route.
   and strips root `summarize`, rejects unknown root fields, and rejects
   `input` keys outside the selected child's own declared schema properties
   before calling that child's handler with only its `input`
-  (`__init__.py:169-438`). Two enforcement layers correlate `action` with
+  (`__init__.py:173-472`). Two enforcement layers correlate `action` with
   `input`, generated purely from the child registry with no name/schema
   mapping table: (1) schema-level — a root `allOf` with one `if`/`then`
   condition per child, each `if` testing `action` via `const` against that
@@ -86,6 +89,9 @@ that generic dispatch route.
   correlation was adopted after a live non-strict Codex Responses probe on
   2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
   the current route (see `CONTRACT.md` "Contract rules").
+- `settings.py` — owns the public `SettingRow`/`SettingsProvider` seam and the
+  injected five-field SHOW projection with private redaction and incremental
+  response bounding (`settings.py:1-137`, guarded by T011).
 
 ### Diagnostics sidecar
 

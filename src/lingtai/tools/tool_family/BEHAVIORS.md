@@ -1,12 +1,16 @@
 ---
 name: tool-family-behavior-tests
-behavior_version: 1
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/__init__.py
+  - src/lingtai/tools/tool_family/settings.py
   - src/lingtai/tools/tool_family/manual.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/psyche/CONTRACT.md
@@ -15,6 +19,7 @@ related_files:
   - tests/test_file_tool_family.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_family_manual_contract.py
+  - tests/test_tool_settings_contract.py
   - tests/test_psyche_family.py
   - tests/test_mcp_identity_discovery.py
   - tests/test_email_abs_reply_route.py
@@ -24,8 +29,8 @@ maintenance: |
   for the generic ChildTool/ToolFamily infrastructure and the migrating
   families (file, avatar, psyche, mcp, email). When a guarded contract changes
   in a way that affects agent-observable behavior (envelope errors, receipts,
-  manual result shape, identity projection, reply routing), update the matching
-  LABT here in the same change. Each LABT is self-contained: an agent executes
+  settings SHOW inventory, manual result shape, identity projection, reply
+  routing), update the matching LABT here in the same change. Each LABT is self-contained: an agent executes
   it verbatim with only the tools it names, never by opening another file.
 ---
 # ToolFamily Behavior Tests
@@ -617,3 +622,34 @@ raw value/path/exception string, or if any wording implies
 `session_journal_path` must be relative. Forbidden side effect: any rejected
 molt call (with or without a diagnostic) must shed no context and write no
 new snapshot/summary/session state.
+
+## Behavior T011 — settings SHOW is redaction-safe, bounded, and read-only
+
+- **id**: T011
+- **title**: settings SHOW is redaction-safe, bounded, and read-only
+- **guards**: tool-family § [Optional settings provider](CONTRACT.md#optional-settings-provider)
+  and § [Contract rules](CONTRACT.md#contract-rules)
+- **runner**: any LingTai agent with shell and file access to a clean checkout
+- **prerequisites**: a clean checkout; a working .venv/
+- **estimate**: ≈ 1 minute
+
+### Steps
+
+1. Run:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" .venv/bin/python \
+     -m pytest -q -p no:cacheprovider tests/test_tool_settings_contract.py
+   ```
+
+### Expected evidence
+
+- [ ] Opt-in/order, exact input, exact five-field success, private redaction,
+      manual `comment` route, fixed whole-action failures, incremental bounding,
+      exports, and production opt-out pass.
+
+### Pass / Fail
+
+Pass when the suite passes; fail on any extra success field, leakage, partial
+rows, mutation operation, or unbounded provider consumption. This task performs
+no writes.

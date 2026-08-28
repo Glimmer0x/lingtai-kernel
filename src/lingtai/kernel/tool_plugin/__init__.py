@@ -80,6 +80,20 @@ __all__ = [
 #: only lets the declaration enforce it before an Agent exists.
 MANUAL_ACTION = "manual"
 
+# Optional read-only discovery action. Its implementation and public row type
+# belong to ``lingtai.tools.tool_family``; the kernel declaration needs only
+# this reserved spelling to advertise an opted-in family.
+_SETTINGS_ACTION = "settings"
+
+
+def _settings_input_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+
 
 #: Every host port an official declaration may name in ``requires``.
 #:
@@ -996,13 +1010,13 @@ class ToolPluginDeclaration:
     construction so a packaging defect fails loudly at import instead of
     shipping silently.
 
-    ``actions`` are the family's *operational* actions. The reserved
-    :data:`MANUAL_ACTION` is never among them; it is appended by
-    :attr:`public_actions` and its schema by :attr:`public_input_schemas`,
+    ``actions`` are operational. Optional ``settings`` and reserved ``manual``
+    are added by :attr:`public_actions`, with ``settings`` immediately before
+    ``manual`` when its boolean opt-in is true. Their schemas come from
+    :attr:`public_input_schemas`,
     mirroring ``lingtai.mcp_servers._plugin.CuratedMcpPlugin.actions``. The
     family still owns the manual child's handler and its packaged/installed
-    source — the kernel only guarantees the reserved slot exists exactly once
-    and last.
+    source.
 
     ``binder`` is how this family composes itself against a granted host. It is
     called only through :meth:`bind`, which builds nothing itself.
@@ -1017,6 +1031,7 @@ class ToolPluginDeclaration:
     binder: Callable[[ToolPluginHost], BoundToolPlugin]
     requires: tuple[str, ...] = ()
     glossary_package: str | None = None
+    settings: bool = False
 
     def __post_init__(self) -> None:
         for attribute in ("name", "manual", "description"):
@@ -1025,16 +1040,23 @@ class ToolPluginDeclaration:
                 raise ToolPluginDeclarationError(
                     f"ToolPluginDeclaration {attribute!r} must be a non-empty string"
                 )
-        if not isinstance(self.actions, tuple) or not self.actions:
+        if type(self.settings) is not bool:
             raise ToolPluginDeclarationError(
-                f"ToolPluginDeclaration {self.name!r} must declare at least one "
-                "action, as a tuple"
+                f"ToolPluginDeclaration {self.name!r} settings must be a boolean"
             )
-        if MANUAL_ACTION in self.actions:
+        if not isinstance(self.actions, tuple) or (not self.actions and not self.settings):
+            raise ToolPluginDeclarationError(
+                f"ToolPluginDeclaration {self.name!r} must declare actions as a "
+                "tuple and may be empty only with settings opt-in"
+            )
+        reserved = [
+            action for action in (_SETTINGS_ACTION, MANUAL_ACTION) if action in self.actions
+        ]
+        if reserved:
             raise ToolPluginDeclarationError(
                 f"ToolPluginDeclaration {self.name!r} must not declare the "
-                f"reserved {MANUAL_ACTION!r} action; it is appended from the "
-                "family's own manual"
+                f"reserved {reserved[0]!r} action; reserved actions are added "
+                "by the generic declaration contract"
             )
         if len(set(self.actions)) != len(self.actions):
             raise ToolPluginDeclarationError(
@@ -1065,12 +1087,16 @@ class ToolPluginDeclaration:
 
     @property
     def public_actions(self) -> tuple[str, ...]:
-        """Declared actions plus the reserved ``manual``, in that order."""
-        return (*self.actions, MANUAL_ACTION)
+        """Public actions, adding opted-in ``settings`` immediately before manual."""
+        if not self.settings:
+            return (*self.actions, MANUAL_ACTION)
+        return (*self.actions, _SETTINGS_ACTION, MANUAL_ACTION)
 
     def public_input_schemas(self) -> dict[str, Mapping[str, Any]]:
-        """Declared ``input`` schemas plus the reserved ``manual`` schema."""
+        """Return declared schemas plus the generically composed reserved schemas."""
         schemas: dict[str, Mapping[str, Any]] = dict(self.input_schemas)
+        if self.settings:
+            schemas[_SETTINGS_ACTION] = _settings_input_schema()
         schemas[MANUAL_ACTION] = self.manual_input_schema
         return schemas
 
@@ -1078,13 +1104,11 @@ class ToolPluginDeclaration:
         """Compose this family against a granted host facade.
 
         Pure composition: it must not mount, start, spawn, or connect anything.
-        The bound plugin's name is checked against the declaration so a family
-        cannot bind itself onto a different model-facing name than the one the
-        kernel reserved, and its advertised action inventory is checked against
-        :attr:`public_actions` so a family cannot ship a public surface it did
-        not declare. Both checks run on every boot, in the registrar's own
-        path — declared-versus-shipped agreement is enforced here, not merely
-        asserted once in a test.
+        Two declaration gates run on every boot: the bound plugin's name must
+        match the reserved name, and its advertised action inventory must equal
+        :attr:`public_actions`.
+        Declared-versus-shipped agreement is enforced here in the registrar's
+        own path, not merely asserted once in a test.
         """
         if not isinstance(host, ToolPluginHost):
             raise HostPortError(

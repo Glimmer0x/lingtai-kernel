@@ -1136,6 +1136,17 @@ def test_resident_prompts_route_to_system_manual_nested_references():
     assert "reference/procedures-manual/SKILL.md" in procedures
 
 
+def test_tool_plugin_settings_reference_is_catalogued_and_routable():
+    root = Path(__file__).resolve().parents[1]
+    router_path = root / "src/lingtai/intrinsic_skills/system-manual/SKILL.md"
+    router_body = router_path.read_text(encoding="utf-8")
+    location = "reference/tool-plugin-settings/SKILL.md"
+    assert f"location: {location}" in router_body and f"`{location}`" in router_body
+    assert _parse_skill_frontmatter(router_path.parent / location)["name"] == (
+        "tool-plugin-settings-reference"
+    )
+
+
 def test_skills_manual_documents_external_skill_intake_default():
     manual = (
         Path(__file__).resolve().parents[1]

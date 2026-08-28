@@ -63,6 +63,7 @@ related_files:
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_settings_contract.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
@@ -152,7 +153,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     `__post_init__` (guarded by TP001), with `public_actions`,
     `public_input_schemas()`, and `bind()` — which checks the bound plugin's
     name *and* its advertised action inventory against the declaration, via the
-    module-private `_advertised_actions` reader;
+    module-private `_advertised_actions` reader; its `settings` boolean only
+    adds the reserved read-only action immediately before `manual`;
   - `register_official_tool_plugins`, the fail-fast registrar whose two-phase
     body — check every name, then bind/activate/mount — is the ordering promise
     (guarded by TP002).

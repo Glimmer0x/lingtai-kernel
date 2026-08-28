@@ -1,6 +1,6 @@
 ---
 name: declared-host-tool-plugin
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -57,6 +57,7 @@ related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_settings_contract.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
@@ -388,11 +389,12 @@ This component never selects.
    `binder`; and a duplicate-free `requires` drawn only from
    `GRANTABLE_HOST_PORTS`. A violation raises `ToolPluginDeclarationError` at
    import.
-2. **The reserved `manual` action is appended, never declared.**
-   `public_actions` is `actions + ("manual",)` and `public_input_schemas()`
-   adds the declaration's own `manual_input_schema`. The family still owns the
-   manual child's handler and its packaged or installed source; this component
-   only guarantees the reserved slot exists exactly once and last. The
+2. **Reserved actions are appended, never declared.** The boolean `settings`
+   opt-in adds its strict-empty schema and action immediately before `manual`;
+   the existing bound-schema inventory check proves that the family exposes the
+   same order, while false preserves `actions + ("manual",)`. The family still
+   owns both handlers and their implementation; this component only guarantees
+   the reserved slots. The
    reserved-action rule itself remains normative in
    [`src/lingtai/tools/CONTRACT.md`](../../tools/CONTRACT.md).
 3. **`OFFICIAL_TOOL_PLUGIN_NAMES` is the reserved official namespace.** It is a

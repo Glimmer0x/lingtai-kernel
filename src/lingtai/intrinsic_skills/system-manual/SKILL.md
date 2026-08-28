@@ -4,9 +4,9 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.16.0
-last_changed_at: "2026-08-24T23:00:00Z"
-tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
+version: 1.17.0
+last_changed_at: "2026-08-27T00:00:00Z"
+tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, settings, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -22,6 +22,8 @@ related_files:
 - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/openai/adapter.py
+- src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
+- tests/test_skills.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -96,6 +98,10 @@ The router table is the routing authority; this list is the inventory.
     Router to the repo-root `ENVIRONMENT_VARIABLES.md` registry, which owns
     every LingTai environment variable's purpose, default, accepted values,
     scope, read point, reload behavior, and invalid-value handling.
+- name: tool-plugin-settings
+  location: reference/tool-plugin-settings/SKILL.md
+  description: |
+    Developer reference for one ToolFamily's optional SHOW-only settings provider.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
@@ -136,6 +142,7 @@ The router table is the routing authority; this list is the inventory.
 | About to call `system(action="refresh")`; preset swap/revert pre-flight; "will this refresh break something?"; refresh returned but MCP/tools/LLM look wrong; refresh failed | `reference/refresh-precheck/SKILL.md` |
 | Kernel update lifecycle; runtime/source discovery; `kernel_version` and `source_drift`; heartbeat nudge dispatch; `.notification/nudge.json`; durable state; sync/wake/dismiss mechanics; packaged vs editable/source installs; refresh vs TUI-managed update; verification/troubleshooting | `reference/runtime-update-checks/SKILL.md` |
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
+| Add or inspect a ToolFamily SHOW-only settings provider | `reference/tool-plugin-settings/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
 | LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |
