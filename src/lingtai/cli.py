@@ -356,7 +356,15 @@ def run(working_dir: Path) -> None:
     # explicitly edit it if they want to persist this choice.
     data["venv_path"] = str(venv_dir)
 
-    agent = build_agent(data, working_dir)
+    # Avatar child processes carry only this restrictive marker. It conveys no
+    # parent/grant/authority: it merely makes a missing derived-launch port
+    # fail closed should the child attempt a nested daemon/avatar launch.
+    from lingtai.tools.avatar._launcher import DERIVED_AVATAR_EXECUTION_ENV
+
+    build_options = {}
+    if os.environ.get(DERIVED_AVATAR_EXECUTION_ENV) == "1":
+        build_options["_requires_derived_launch_admission_port"] = True
+    agent = build_agent(data, working_dir, **build_options)
     agent._venv_path = str(venv_dir)
     _install_signal_handlers(working_dir, agent)
 

@@ -41,6 +41,7 @@ related_files:
   - src/lingtai/tools/daemon/windows_process.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/kernel/provider_admission.py
   - src/lingtai/tools/daemon/shell_prompt_events.py
   - src/lingtai/tools/bash/CONTRACT.md
   - tests/test_daemon_shell_prompt_events.py
@@ -971,6 +972,16 @@ not inspect or terminate a detached supervisor or its backend child. Explicit
 cancellation. `daemon(action="ask")` uses the run-local control spool and is
 accepted only while durable state is running. The ownership transition is
 unconditional; detached supervision is not gated behind a production flag.
+
+The detached execution child is not currently given derived-launch authority.
+Its production composition root sets only the restrictive
+`_requires_derived_launch_admission_port` requirement. Therefore, if its full
+tool surface reaches a nested daemon/avatar launch, absence of a real authority
+is a structured `required_derived_launch_admission_port_missing` refusal before
+launch side effects; it must not fall back to generic `legacy_default` allow.
+This requirement flag is not a grant, parent identity, or bearer. A future
+Driver authority bridge must supply those separately before any legitimate
+derived launch can be allowed.
 
 ## Acceptance Gate
 

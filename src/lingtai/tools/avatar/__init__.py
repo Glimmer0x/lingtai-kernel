@@ -47,7 +47,12 @@ from lingtai.kernel.i18n import t
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 from ..tool_family import ChildTool, SettingsProvider, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
-from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
+from ._launcher import (
+    DERIVED_AVATAR_EXECUTION_ENV,
+    AvatarLaunchReceipt,
+    AvatarLaunchRequest,
+    AvatarLauncherPort,
+)
 from .settings import (
     AVATAR_NAME_MAX_CHARACTERS,
     AVATAR_NAME_MIN_CHARACTERS,
@@ -907,7 +912,11 @@ class AvatarManager:
         logs_dir.mkdir(parents=True, exist_ok=True)
         stderr_path = logs_dir / "spawn.stderr"
         receipt = self._launcher.launch(
-            AvatarLaunchRequest(argv=cmd, stderr_path=stderr_path)
+            AvatarLaunchRequest(
+                argv=cmd,
+                stderr_path=stderr_path,
+                environment={DERIVED_AVATAR_EXECUTION_ENV: "1"},
+            )
         )
         return receipt, stderr_path
 

@@ -15,6 +15,8 @@ related_files:
   - src/lingtai/adapters/avatar_launcher.py
   - src/lingtai/adapters/posix/avatar_launcher.py
   - src/lingtai/adapters/windows/avatar_launcher.py
+  - src/lingtai/cli.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
@@ -304,8 +306,10 @@ live descendant.
 
 - `AvatarManager` resolves the existing interpreter policy and submits the
   exact argv `[python, "-m", "lingtai", "run", <dir>]` plus
-  `logs/spawn.stderr` to the avatar-local Port. Cwd and environment are
-  inherited; the Port does not add a cwd or environment override.
+  `logs/spawn.stderr` to the avatar-local Port. Cwd is inherited. The only
+  environment override is `LINGTAI_DERIVED_AVATAR_EXECUTION=1`: it is a
+  restrictive, non-secret child-boot marker that requires a nested derived
+  launch to have authority and never carries an authority bearer.
 - The Port returns a positive PID and an opaque adapter handle. `poll()` is
   nonblocking and returns the exact integer child return code or `None`.
 - Production adapters disconnect stdin/stdout and own a binary-write stderr
