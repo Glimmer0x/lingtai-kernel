@@ -394,8 +394,11 @@ Clause IDs are stable; each rule composes the linked normative source.
    factory indirection) or subclasses/wrappers that override a launch entry;
    those are explicit blind spots that require focused review and production
    path E2E, not an inference from a green inventory. The Core `TypeError` is
-   merely a structural
-   backstop and must not be the only rejection signal. This adapter integration
+   merely a structural backstop and must not be the only rejection signal. The
+   derived-launch inventory uses `(file, enclosing qualified function,
+   constructor)` keys, so unrelated line movement does not turn that specific
+   tripwire into mechanical maintenance.
+   This adapter integration
    is not delivered by this Core type boundary alone. A host that
    binds a derived parent before its transport is connected receives explicit
    `derived_admission_port_unconnected` indeterminacy and rejects before
@@ -437,9 +440,10 @@ Clause IDs are stable; each rule composes the linked normative source.
    dynamic concurrency factories. It presently inventories creation points,
    not dispatches to an already-created pool (`submit`, `map`, or
    `apply_async`); a future hardening must inventory those dispatch operations
-   as a separate axis. Its `(file, enclosing qualified function, constructor)`
-   keys avoid mechanical churn from unrelated line movement while continuing
-   to distinguish independent construction sites. Neither limitation reduces
+   as a separate axis. Its `(file, line, constructor)` keys are likewise an
+   intentionally narrow implementation: a later revision should use the
+   enclosing qualified function instead, so unrelated line movement cannot
+   turn the tripwire into mechanical maintenance. Neither limitation reduces
    the concrete propagation tests required above.
    A constrained composition MUST carry its origin policy at startup; a missing
    required policy rejects rather than falling back to the generic default. Its
