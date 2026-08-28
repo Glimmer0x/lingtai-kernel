@@ -105,7 +105,6 @@ class DetachedDaemonExecutionHost:
             # launch; a bad endpoint installs an unavailable provider gate and
             # cannot fall back to generic provider I/O.
             from lingtai.adapters.acp.driver_authority import (
-                DriverAuthorityAdapter,
                 DriverAuthorityEndpointBindingMismatch,
                 EndpointBindingMismatchAuthorityAdapter,
                 UnavailableDriverAuthorityAdapter,
@@ -121,10 +120,7 @@ class DetachedDaemonExecutionHost:
                 self._agent._derived_launch_admission_port = authority
             self._agent._provider_call_admission_port = authority
             try:
-                if isinstance(authority, DriverAuthorityAdapter):
-                    parent = authority.derived_provider_parent(ProviderCallClass.DAEMON)
-                else:
-                    parent = authority.derived_provider_parent(ProviderCallClass.DAEMON)
+                parent = authority.derived_provider_parent(ProviderCallClass.DAEMON)
             except DriverAuthorityEndpointBindingMismatch:
                 authority.close()
                 mismatch = EndpointBindingMismatchAuthorityAdapter()

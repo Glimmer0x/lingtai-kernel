@@ -387,7 +387,6 @@ def run(working_dir: Path) -> None:
         or os.environ.get(DERIVED_AVATAR_EXECUTION_ENV) == "1"
     ):
         from lingtai.adapters.acp.driver_authority import (
-            DriverAuthorityAdapter,
             DriverAuthorityEndpointBindingMismatch,
             EndpointBindingMismatchAuthorityAdapter,
             UnavailableDriverAuthorityAdapter,
@@ -407,14 +406,9 @@ def run(working_dir: Path) -> None:
             None if authority_was_missing else authority
         )
         try:
-            if isinstance(authority, DriverAuthorityAdapter):
-                build_options["_derived_provider_admission_parent"] = (
-                    authority.derived_provider_parent(ProviderCallClass.AVATAR_CHILD)
-                )
-            else:
-                build_options["_derived_provider_admission_parent"] = (
-                    authority.derived_provider_parent(ProviderCallClass.AVATAR_CHILD)
-                )
+            build_options["_derived_provider_admission_parent"] = (
+                authority.derived_provider_parent(ProviderCallClass.AVATAR_CHILD)
+            )
         except DriverAuthorityEndpointBindingMismatch:
             # A daemon endpoint in an avatar child (or vice versa) is not
             # authority for this composition, even if its hello is self-consistent.
