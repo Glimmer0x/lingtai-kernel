@@ -295,7 +295,10 @@ untrusted inbox event cannot reach provider dispatch under this profile policy.
 `tests/test_provider_admission.py` independently proves a missing, denied, or
 indeterminate provider admission cannot reach the underlying provider service;
 that each provider request needs a new decision rather than reusing a previous
-grant; and that the typed call class is not inferred from request text.
+grant; that the typed call class is not inferred from request text; and that
+the real non-streaming, streaming, Soul consultation, rate-gated, and reused
+worker dispatch boundaries preserve admission rather than treating a direct
+proxy test as production-path proof.
 `tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_turn_permissions.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP
 wire tests pin workspace rooting/escape/isolation, stdio validation, atomic
 publication/rollback, collisions, and close/EOF ownership.

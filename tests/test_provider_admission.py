@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,9 @@ from lingtai.kernel.provider_admission import (
     clear_provider_admission,
 )
 from lingtai.kernel.llm_utils import send_with_timeout, send_with_timeout_stream
+from lingtai.llm.api_gate import APICallGate
+from lingtai.llm.base import _GatedSession
+from lingtai.tools.soul.consultation import _send_with_timeout as soul_send_with_timeout
 
 
 class _InnerSession:
@@ -196,6 +200,59 @@ def test_root_admission_reaches_the_real_streaming_provider_worker_thread():
 
     assert result == "stream-through-worker"
     assert inner.session.calls == [("stream", "stream-through-worker")]
+    assert port.calls == [(root, ProviderCallClass.ROOT)]
+
+
+def test_root_admission_reaches_rate_gated_provider_io_worker():
+    """Nested timeout and rate-gate workers both retain root admission."""
+
+    inner = _InnerService()
+    gate = APICallGate(max_rpm=60, pool_size=1)
+    inner.session = _GatedSession(inner.session, gate)
+    port = _RecordingAdmissionPort()
+    session = ProviderAdmittedLLMService(inner, port).create_session("system")
+    root = RootProviderAdmission("turn-rate-gated-worker", "puffo-v0.test")
+    token = bind_provider_admission(root)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as timeout_pool:
+            result = send_with_timeout(
+                session,
+                "through-rate-gate",
+                timeout_pool,
+                retry_timeout=1.0,
+                agent_name="provider-admission-test",
+                logger=None,
+            )
+    finally:
+        clear_provider_admission(token)
+        gate.shutdown()
+
+    assert result == "through-rate-gate"
+    assert inner.session._inner.calls == [("send", "through-rate-gate")]
+    assert port.calls == [(root, ProviderCallClass.ROOT)]
+
+
+def test_root_admission_reaches_soul_consultation_worker_thread():
+    """Soul's production daemon-thread dispatch retains the admitted root."""
+
+    class _SoulRuntime:
+        config = SimpleNamespace(retry_timeout=1.0)
+
+        def log(self, *_args, **_kwargs):
+            return None
+
+    inner = _InnerService()
+    port = _RecordingAdmissionPort()
+    session = ProviderAdmittedLLMService(inner, port).create_session("system")
+    root = RootProviderAdmission("turn-soul-worker", "puffo-v0.test")
+    token = bind_provider_admission(root)
+    try:
+        result = soul_send_with_timeout(_SoulRuntime(), session, "soul-worker")
+    finally:
+        clear_provider_admission(token)
+
+    assert result == "soul-worker"
+    assert inner.session.calls == [("send", "soul-worker")]
     assert port.calls == [(root, ProviderCallClass.ROOT)]
 
 

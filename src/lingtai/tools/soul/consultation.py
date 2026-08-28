@@ -48,6 +48,7 @@ def _send_with_timeout(runtime: "SoulRuntimePort", session, content: "str | list
 
     Uses a daemon thread so it dies with the process — no orphaned threads.
     """
+    import contextvars
     import threading
     timeout = runtime.config.retry_timeout
     result_box: list = []
@@ -59,7 +60,11 @@ def _send_with_timeout(runtime: "SoulRuntimePort", session, content: "str | list
         except Exception as e:
             error_box.append(e)
 
-    t = threading.Thread(target=_worker, daemon=True)
+    # A Puffo root admission is bound on the initiating Agent turn.  This
+    # consultation deliberately changes threads for timeout containment, so
+    # preserve the submitting context through the actual wrapped session call.
+    context = contextvars.copy_context()
+    t = threading.Thread(target=context.run, args=(_worker,), daemon=True)
     t.start()
     t.join(timeout=timeout)
 

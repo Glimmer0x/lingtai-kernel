@@ -378,6 +378,23 @@ Clause IDs are stable; each rule composes the linked normative source.
    accidental or structurally separate non-admitted paths. It does not claim
    that a full-tool Agent sharing the same OS trust domain as Core is sandboxed
    from its own host process.
+   The current dispatch-propagation inventory is closed as follows. The main
+   `SessionManager.send()` path calls `send_with_timeout()` and the streaming
+   path calls `send_with_timeout_stream()`; both submit the already-wrapped
+   session into the session timeout worker under a copy of the submitting
+   context. Main-turn retries, recovery, tool-result continuation, and stream
+   continuation all return through one of those two `SessionManager` paths.
+   Soul consultation/inquiry creates an independently timed daemon thread and
+   likewise copies the submitting context before its wrapped `session.send()`.
+   If provider RPM gating is configured, `APICallGate` runs *after* the outer
+   admitted-session proxy has made its Port decision; it never performs an
+   additional admission lookup. `ProviderAdmittedLLMService.generate()` makes
+   its Port decision synchronously before delegating to the adapter; no Core
+   root-turn production caller currently invokes that one-shot API. Historical
+   daemon/avatar services remain outside this inventory until their separate
+   driver-mediated adapter is wired. Adding another dispatch mechanism between
+   an admitted parent and a wrapped provider call requires a propagation test
+   at that concrete boundary; no inferred coverage is sufficient.
    A constrained composition MUST carry its origin policy at startup; a missing
    required policy rejects rather than falling back to the generic default. Its
    closed inbox surface is `MESSAGE_TYPES`: every canonical message other than
