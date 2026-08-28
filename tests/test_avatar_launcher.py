@@ -1,5 +1,11 @@
 """Focused Contract tests for the avatar-local launcher boundary."""
+import errno
+import json
+import os
 import socket
+import struct
+import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -131,6 +137,79 @@ def test_posix_launch_passes_only_the_one_shot_driver_child_endpoint(tmp_path):
         assert kwargs["close_fds"] is True
     finally:
         driver.close()
+
+
+def test_real_child_cannot_use_root_fd_but_can_handshake_its_child_endpoint(tmp_path):
+    """Exercise the child boundary, not just the launcher's ``pass_fds`` list."""
+    root_client, root_driver = socket.socketpair()
+    child_client, child_driver = socket.socketpair()
+    result_path = tmp_path / "child-result.json"
+    server_errors: list[BaseException] = []
+
+    def driver_server() -> None:
+        try:
+            header = child_driver.recv(4)
+            assert len(header) == 4
+            size = struct.unpack("!I", header)[0]
+            request = child_driver.recv(size)
+            assert json.loads(request.decode("utf-8")) == {"version": 1, "op": "hello"}
+            response = json.dumps(
+                {"version": 1, "role": "derived", "launch_id": "child-1", "capability": "avatar"},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            child_driver.sendall(struct.pack("!I", len(response)) + response)
+        except BaseException as exc:
+            server_errors.append(exc)
+        finally:
+            child_driver.close()
+
+    child_code = """
+import errno, json, os, socket, struct
+result = {}
+try:
+    root = socket.socket(fileno=int(os.environ[\"ROOT_AUTHORITY_FD\"]))
+except OSError as exc:
+    result[\"root_errno\"] = exc.errno
+else:
+    result[\"root_open\"] = True
+    root.close()
+child = socket.socket(fileno=int(os.environ[\"LINGTAI_DRIVER_AUTHORITY_FD\"]))
+payload = json.dumps({\"version\": 1, \"op\": \"hello\"}, separators=(\",\", \":\")).encode(\"utf-8\")
+child.sendall(struct.pack(\"!I\", len(payload)) + payload)
+header = child.recv(4)
+size = struct.unpack(\"!I\", header)[0]
+body = bytearray()
+while len(body) < size:
+    body.extend(child.recv(size - len(body)))
+result[\"child_role\"] = json.loads(bytes(body).decode(\"utf-8\"))[\"role\"]
+child.close()
+with open(os.environ[\"RESULT_PATH\"], \"w\", encoding=\"utf-8\") as output:
+    json.dump(result, output)
+"""
+    server = threading.Thread(target=driver_server)
+    server.start()
+    request = AvatarLaunchRequest(
+        (sys.executable, "-c", child_code),
+        tmp_path / "logs" / "spawn.stderr",
+        environment={
+            "ROOT_AUTHORITY_FD": str(root_client.fileno()),
+            "RESULT_PATH": str(result_path),
+        },
+        authority_lease=DriverChildEndpointLease(child_client),
+    )
+    try:
+        receipt = PosixAvatarLauncherAdapter().launch(request)
+        assert receipt.handle.wait(timeout=2) == 0
+        server.join(timeout=2)
+        assert server_errors == []
+        assert json.loads(result_path.read_text()) == {
+            "root_errno": errno.EBADF,
+            "child_role": "derived",
+        }
+    finally:
+        root_client.close()
+        root_driver.close()
+        child_driver.close()
 
 
 def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):

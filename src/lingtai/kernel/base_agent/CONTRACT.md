@@ -405,7 +405,7 @@ Clause IDs are stable; each rule composes the linked normative source.
    composition now supplies `DriverAuthorityAdapter` as both Ports. Its only
    authority carrier is a Driver-created connected Unix-domain socket endpoint:
    an inherited root endpoint is close-on-exec, while an allowed root launch
-   receives a separate, opaque, one-use child-endpoint lease through `SCM_RIGHTS`.
+   receives a separate, opaque child-endpoint lease through `SCM_RIGHTS`.
    Core carries that lease without parsing an fd, frame, registry entry, path,
    depth, or lineage. Only the exact POSIX child launch adapter consumes it
    into an allowlisted `pass_fds` handoff. A persisted derived child has a
@@ -425,10 +425,10 @@ Clause IDs are stable; each rule composes the linked normative source.
    distinct high-signal `DENIED / endpoint_binding_mismatch`, never an
    ordinary business denial. The daemon/avatar compositions each compare their
    locally expected call class with the endpoint hello capability; a cross-mode
-    endpoint becomes that same denial before provider I/O. Until the external #299 CAS work lands,
-    `authorize_provider_call` is a per-call decision only: it does not provide
-    replay protection, atomic consumption, or exactly-once provider I/O.
-    This Core wiring deliberately does not claim that the
+   endpoint becomes that same denial before provider I/O. Until the external #299 CAS work lands,
+   `authorize_provider_call` is a per-call decision only: it does not provide
+   replay protection, atomic consumption, or exactly-once provider I/O.
+   This Core wiring deliberately does not claim that the
    external Driver server, registry/identity binding, grant-CAS consumption, or
    dynamic revoke is implemented here. The following remain **constrained host-
    adapter requirements**, not claims made by this Core seam:

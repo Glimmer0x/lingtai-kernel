@@ -75,7 +75,9 @@ class AvatarLaunchRequest:
 
     ``authority_lease`` is opaque adapter state. Avatar Core can carry it from
     a typed decision to this Port but never sees a file descriptor or treats it
-    as authority itself.
+    as authority itself. Its local one-shot handling only owns resources; the
+    Driver server owns the security claim when it accepts the first v1
+    handshake for the endpoint.
     """
 
     argv: tuple[str, ...]
