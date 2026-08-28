@@ -298,31 +298,35 @@ class TestAvatarManager:
         proc = MagicMock(pid=12345)
         proc.poll.return_value = None
         receipt = AvatarLaunchReceipt(pid=12345, handle=proc)
-        monkeypatch.setattr(
-            AvatarManager,
-            "_launch",
-            lambda _self, working_dir: (
-                launch_calls.append(working_dir)
-                or (receipt, Path("/tmp/avatar-positive-2a.stderr"))
-            ),
-        )
-        parent = Agent(
-            service=make_mock_service(),
-            agent_name="parent",
-            working_dir=tmp_path / "parent",
-            capabilities=["avatar"],
-            _turn_origin_policy=RUNTIME_POLICY,
-            derived_launch_admission_port=_GrantingPort(),
-        )
-        port = parent._derived_launch_admission_port
-        root = RootProviderAdmission("root-avatar-positive-2a", RUNTIME_POLICY.policy_version)
-        token = bind_provider_admission(root)
-        try:
-            result = parent.get_capability("avatar").handle(
-                {"action": "spawn", "input": {"name": "child", "confirm": True}}
+        # Scope this override inside the autouse fixture's AvatarManager patch.
+        # A test-level monkeypatch restored after that fixture would otherwise
+        # leave its stale mock behind for later launcher-contract tests.
+        with monkeypatch.context() as launch_patch:
+            launch_patch.setattr(
+                AvatarManager,
+                "_launch",
+                lambda _self, working_dir: (
+                    launch_calls.append(working_dir)
+                    or (receipt, Path("/tmp/avatar-positive-2a.stderr"))
+                ),
             )
-        finally:
-            clear_provider_admission(token)
+            parent = Agent(
+                service=make_mock_service(),
+                agent_name="parent",
+                working_dir=tmp_path / "parent",
+                capabilities=["avatar"],
+                _turn_origin_policy=RUNTIME_POLICY,
+                derived_launch_admission_port=_GrantingPort(),
+            )
+            port = parent._derived_launch_admission_port
+            root = RootProviderAdmission("root-avatar-positive-2a", RUNTIME_POLICY.policy_version)
+            token = bind_provider_admission(root)
+            try:
+                result = parent.get_capability("avatar").handle(
+                    {"action": "spawn", "input": {"name": "child", "confirm": True}}
+                )
+            finally:
+                clear_provider_admission(token)
 
         assert result["status"] == "ok"
         assert port.calls == [(root, DerivedLaunchCapability.AVATAR)]
