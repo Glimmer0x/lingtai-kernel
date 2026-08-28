@@ -2,6 +2,7 @@ import json
 import os
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 def _posix_scan_pinned():
@@ -1107,6 +1108,73 @@ def test_avatar_child_cli_boot_reaches_structured_missing_authority_denial(
             "audit_id": None,
         }
     ]
+
+
+def test_avatar_spawned_directory_stays_restricted_without_launch_env(
+    monkeypatch, tmp_path,
+):
+    """A direct restart of the real spawned child cannot lose its requirement."""
+    from lingtai import cli
+    from lingtai.agent import Agent
+    from lingtai.kernel.provider_admission import (
+        DerivedLaunchAdmissionError,
+        ProviderAdmissionState,
+    )
+    from lingtai.tools.avatar import AvatarManager
+    from lingtai.tools.avatar._launcher import AvatarLaunchReceipt, derived_avatar_state_path
+    from tests._service_helpers import make_gemini_mock_service
+
+    parent_dir = tmp_path / "parent"
+    parent_dir.mkdir()
+    _write_init(
+        parent_dir,
+        {"manifest": {"capabilities": {"avatar": {}}}},
+    )
+    parent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="parent",
+        working_dir=parent_dir,
+        capabilities=["avatar"],
+    )
+    parent_avatar = parent.get_capability("avatar")
+    parent_avatar._launcher = SimpleNamespace(release=lambda handle: None)
+    with patch.object(
+        AvatarManager,
+        "_launch",
+        return_value=(AvatarLaunchReceipt(12345, object()), tmp_path / "spawn.stderr"),
+    ), patch.object(AvatarManager, "_wait_for_boot", return_value=("ok", None)):
+        spawned = parent_avatar.handle(
+            {"action": "spawn", "input": {"name": "child", "confirm": True}}
+        )
+
+    child_dir = parent_dir.parent / "child"
+    assert spawned["status"] == "ok"
+    assert derived_avatar_state_path(child_dir).is_file()
+
+    captured = []
+    real_build_agent = cli.build_agent
+
+    def capture_build_agent(data, working_dir, **kwargs):
+        agent = real_build_agent(data, working_dir, **kwargs)
+        captured.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
+    monkeypatch.setattr(cli, "build_agent", capture_build_agent)
+    monkeypatch.setattr(Agent, "start", lambda self: self._shutdown.set())
+    monkeypatch.setattr(Agent, "stop", lambda self, timeout=10.0: None)
+    monkeypatch.delenv("LINGTAI_DERIVED_AVATAR_EXECUTION", raising=False)
+
+    cli.run(child_dir)
+
+    child = captured.pop()
+    assert child._requires_derived_launch_admission_port is True
+    with pytest.raises(DerivedLaunchAdmissionError) as raised:
+        child.get_capability("avatar")._authorize_derived_launch("nested")
+    assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+    assert raised.value.decision.reason_code == "required_derived_launch_admission_port_missing"
 
 
 def test_log_doctor_does_not_create_agent_log(monkeypatch, tmp_path):
