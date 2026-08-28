@@ -173,6 +173,71 @@ class TestAvatarManager:
         assert record["name"] == "clone"
         assert record["boot_status"] == "ok"
 
+    def test_profile_avatar_launch_reaches_structured_admission_before_spawn(
+        self, tmp_path, monkeypatch
+    ):
+        """The real AvatarManager/Agent adapter path reaches the 2a seam."""
+        from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchDecision,
+            ProviderAdmissionState,
+            RootProviderAdmission,
+            bind_provider_admission,
+            clear_provider_admission,
+        )
+        from lingtai.agent import Agent
+
+        class _DenyingPort:
+            def __init__(self):
+                self.calls = []
+
+            def authorize_derived_launch(self, parent, capability):
+                self.calls.append((parent, capability))
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.DENIED,
+                    "derived_launch_denied_by_test",
+                    audit_id="audit-avatar-2a",
+                )
+
+        parent = Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=tmp_path / "parent",
+            capabilities=["avatar"],
+            _turn_origin_policy=RUNTIME_POLICY,
+            derived_launch_admission_port=_DenyingPort(),
+        )
+        port = parent._derived_launch_admission_port
+        root = RootProviderAdmission("root-avatar-2a", RUNTIME_POLICY.policy_version)
+        token = bind_provider_admission(root)
+        try:
+            result = parent.get_capability("avatar").handle(
+                {"action": "spawn", "input": {"name": "child", "confirm": True}}
+            )
+        finally:
+            clear_provider_admission(token)
+
+        assert "derived_launch_denied_by_test" in result["error"]
+        assert port.calls == [(root, "avatar")]
+        assert not (parent._working_dir.parent / "child").exists()
+        records = [
+            json.loads(line)
+            for line in (parent._working_dir / "delegates" / "ledger.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert records == [
+            {
+                "ts": records[0]["ts"],
+                "event": "avatar_admission_decision",
+                "name": "child",
+                "capability": "avatar",
+                "state": "denied",
+                "reason_code": "derived_launch_denied_by_test",
+                "audit_id": "audit-avatar-2a",
+            }
+        ]
+
 
 class TestMissionQualityGate:
     """Issue #33 — mission/dry_run/confirm guardrails on avatar_spawn."""

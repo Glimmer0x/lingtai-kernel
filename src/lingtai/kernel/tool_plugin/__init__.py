@@ -345,6 +345,9 @@ class AvatarParentPort(Protocol):
     def has_rule_privilege(self) -> bool:
         """Whether this parent may distribute rules through its avatar subtree."""
 
+    def authorize_derived_launch(self, capability: Any) -> Any:
+        """Decide one avatar-derived process launch before side effects."""
+
 
 class DaemonRuntimePort(Protocol):
     """Daemon's capability-native view of the current agent runtime.
@@ -388,6 +391,9 @@ class DaemonRuntimePort(Protocol):
     @property
     def manager_options(self) -> Mapping[str, Any]:
         """Resolved construction options for this daemon manager binding."""
+
+    def authorize_derived_launch(self, capability: Any) -> Any:
+        """Decide one daemon-derived process launch before side effects."""
 
     def setup_preset_capability(
         self, name: str, kwargs: Mapping[str, Any]

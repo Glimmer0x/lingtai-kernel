@@ -365,7 +365,18 @@ class AvatarManager:
         reasoning = raw.get("_reasoning")
         self._pending_reasoning = reasoning if isinstance(reasoning, str) else None
         try:
-            result = self._family.handle(args)
+            try:
+                result = self._family.handle(args)
+            except Exception as exc:
+                from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
+
+                if not isinstance(exc, DerivedLaunchAdmissionError):
+                    raise
+                return {
+                    "error": str(exc),
+                    "reason_code": exc.decision.reason_code,
+                    "audit_id": exc.decision.audit_id,
+                }
         finally:
             self._pending_reasoning = None
         if result.get("error_code") == "ACTION_REQUIRED":
@@ -522,6 +533,8 @@ class AvatarManager:
                 },
                 "message": "Dry run — no process spawned, no files written.",
             }
+
+        self._authorize_derived_launch(peer_name)
 
         # Working dir: sibling of parent, named after the avatar. Defense-in-depth
         # scope check — resolve and assert the target's parent equals the network
@@ -897,6 +910,47 @@ class AvatarManager:
             AvatarLaunchRequest(argv=cmd, stderr_path=stderr_path)
         )
         return receipt, stderr_path
+
+    def _authorize_derived_launch(self, peer_name: str) -> None:
+        """Reach the host decision seam before avatar filesystem/process effects."""
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchAdmissionError,
+            DerivedLaunchCapability,
+            DerivedLaunchDecision,
+            ProviderAdmissionState,
+        )
+
+        authorize = getattr(self._host.avatar_parent, "authorize_derived_launch", None)
+        if callable(authorize):
+            try:
+                decision = authorize(DerivedLaunchCapability.AVATAR)
+            except DerivedLaunchAdmissionError as exc:
+                decision = exc.decision
+                self._append_ledger(
+                    "avatar_admission_decision",
+                    peer_name,
+                    capability=DerivedLaunchCapability.AVATAR.value,
+                    state=decision.state.value,
+                    reason_code=decision.reason_code,
+                    audit_id=decision.audit_id,
+                )
+                raise
+        else:
+            # Direct legacy test/composition hosts predate the narrow decision
+            # operation. Puffo-v0 never takes this branch: its Agent adapter
+            # always supplies a configured (currently fail-closed) port.
+            decision = DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED, "legacy_default"
+            )
+        if decision.reason_code != "legacy_default":
+            self._append_ledger(
+                "avatar_admission_decision",
+                peer_name,
+                capability=DerivedLaunchCapability.AVATAR.value,
+                state=decision.state.value,
+                reason_code=decision.reason_code,
+                audit_id=decision.audit_id,
+            )
 
     # ------------------------------------------------------------------
     # Ledger reading

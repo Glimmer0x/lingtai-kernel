@@ -68,6 +68,7 @@ def run_acp(
     turn_origin_policy=None,
     requires_turn_origin_policy: bool = False,
     provider_call_admission_port=None,
+    derived_launch_admission_port=None,
     puffo_runtime=None,
 ) -> None:
     """Compose one Agent and the local ACP stdio driving adapter.
@@ -145,6 +146,8 @@ def run_acp(
             build_options["_requires_turn_origin_policy"] = True
         if provider_call_admission_port is not None:
             build_options["_provider_call_admission_port"] = provider_call_admission_port
+        if derived_launch_admission_port is not None:
+            build_options["_derived_launch_admission_port"] = derived_launch_admission_port
         agent = build_agent(data, agent_dir, **build_options)
         agent._venv_path = str(venv_dir)
         agent.start()
@@ -232,6 +235,7 @@ def handle_acp_command(args) -> None:
         turn_origin_policy=RUNTIME_POLICY,
         requires_turn_origin_policy=True,
         provider_call_admission_port=RUNTIME_POLICY,
+        derived_launch_admission_port=RUNTIME_POLICY,
     )
 
 
