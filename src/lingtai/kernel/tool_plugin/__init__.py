@@ -389,6 +389,10 @@ class DaemonRuntimePort(Protocol):
         """The parent guard supplied to daemon-local tool execution, if any."""
 
     @property
+    def derived_launch_tool_surface_open(self) -> bool:
+        """Whether persistent derived identity opens daemon/avatar to admission."""
+
+    @property
     def manager_options(self) -> Mapping[str, Any]:
         """Resolved construction options for this daemon manager binding."""
 

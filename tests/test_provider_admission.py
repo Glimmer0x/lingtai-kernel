@@ -22,6 +22,7 @@ from lingtai.kernel.provider_admission import (
     begin_derived_provider_admission,
     bind_provider_admission,
     clear_provider_admission,
+    current_provider_call_audit_id,
     require_derived_launch_admission,
 )
 from lingtai.kernel.llm_utils import send_with_timeout, send_with_timeout_stream
@@ -76,6 +77,37 @@ class _RecordingAdmissionPort:
                 else "denied_by_test"
             ),
         )
+
+
+class _AuditRecordingAdmissionPort:
+    """A Driver-shaped port whose audit log is the E2E adjudication oracle."""
+
+    def __init__(self):
+        self.adjudications = []
+
+    def authorize_provider_call(self, _parent, _call_class):
+        audit_id = f"audit-{len(self.adjudications) + 1}"
+        self.adjudications.append(audit_id)
+        return ProviderCallDecision(
+            ProviderAdmissionState.GRANTED,
+            "allowed",
+            audit_id=audit_id,
+        )
+
+
+class _AuditRecordingInnerService:
+    """A recording transport that observes only the scoped audit trace."""
+
+    def __init__(self, *, fan_out: bool = False):
+        self.provider_calls = []
+        self._fan_out = fan_out
+
+    def generate(self, _prompt, **_kwargs):
+        audit_id = current_provider_call_audit_id()
+        self.provider_calls.append(audit_id)
+        if self._fan_out:
+            self.provider_calls.append(audit_id)
+        return "generated"
 
 
 class _MalformedAdmissionPort:
@@ -353,11 +385,11 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
         ("src/lingtai/tools/bash/__init__.py", 1306, "Thread"),
         ("src/lingtai/tools/bash/__init__.py", 1467, "Thread"),
         ("src/lingtai/tools/bash/__init__.py", 1714, "Thread"),
-        ("src/lingtai/tools/daemon/__init__.py", 1764, "ThreadPoolExecutor"),
-        ("src/lingtai/tools/daemon/__init__.py", 6540, "Thread"),
-        ("src/lingtai/tools/daemon/__init__.py", 9144, "ThreadPoolExecutor"),
+            ("src/lingtai/tools/daemon/__init__.py", 1786, "ThreadPoolExecutor"),
+            ("src/lingtai/tools/daemon/__init__.py", 6575, "Thread"),
+            ("src/lingtai/tools/daemon/__init__.py", 9179, "ThreadPoolExecutor"),
         ("src/lingtai/tools/daemon/claude_interactive.py", 611, "Thread"),
-        ("src/lingtai/tools/daemon/execution_host.py", 671, "ThreadPoolExecutor"),
+            ("src/lingtai/tools/daemon/execution_host.py", 687, "ThreadPoolExecutor"),
         ("src/lingtai/tools/daemon/posix_process.py", 112, "Thread"),
         ("src/lingtai/tools/daemon/runtime.py", 133, "Thread"),
         ("src/lingtai/tools/daemon/runtime.py", 220, "Thread"),
@@ -400,6 +432,66 @@ def test_every_session_send_and_generate_crosses_the_same_admission_port():
         (root, ProviderCallClass.ROOT),
         (root, ProviderCallClass.ROOT),
     ]
+
+
+def _assert_single_audited_provider_operation(
+    adjudications: list[str], provider_calls: list[str | None]
+) -> None:
+    """D6's two independent exact-count checks, joined by one audit id."""
+
+    assert len(adjudications) == 1
+    audit_id = adjudications[0]
+    assert provider_calls == [audit_id]
+
+
+def test_provider_trace_carries_only_audited_string_to_the_recording_transport():
+    """D6 happy path: one Driver decision maps to one recorded provider I/O."""
+
+    port = _AuditRecordingAdmissionPort()
+    inner = _AuditRecordingInnerService()
+    service = ProviderAdmittedLLMService(inner, port)
+    token = bind_provider_admission(RootProviderAdmission("turn-d6", "test"))
+    try:
+        assert service.generate("legal-operation") == "generated"
+    finally:
+        clear_provider_admission(token)
+
+    _assert_single_audited_provider_operation(port.adjudications, inner.provider_calls)
+
+
+def test_d6_replay_mutation_must_make_the_adjudication_count_red():
+    """A repeated legal operation is visible to D6; this is not CAS protection."""
+
+    port = _AuditRecordingAdmissionPort()
+    inner = _AuditRecordingInnerService()
+    service = ProviderAdmittedLLMService(inner, port)
+    token = bind_provider_admission(RootProviderAdmission("turn-d6-replay", "test"))
+    try:
+        service.generate("legal-operation")
+        service.generate("replayed-legal-operation")
+    finally:
+        clear_provider_admission(token)
+
+    with pytest.raises(AssertionError):
+        _assert_single_audited_provider_operation(port.adjudications, inner.provider_calls)
+
+
+def test_d6_fanout_mutation_must_make_the_provider_count_red():
+    """Two provider I/O events after one decision cannot satisfy D6's call count."""
+
+    port = _AuditRecordingAdmissionPort()
+    inner = _AuditRecordingInnerService(fan_out=True)
+    service = ProviderAdmittedLLMService(inner, port)
+    token = bind_provider_admission(RootProviderAdmission("turn-d6-fanout", "test"))
+    try:
+        service.generate("legal-operation")
+    finally:
+        clear_provider_admission(token)
+
+    assert port.adjudications == ["audit-1"]
+    assert inner.provider_calls == ["audit-1", "audit-1"]
+    with pytest.raises(AssertionError):
+        _assert_single_audited_provider_operation(port.adjudications, inner.provider_calls)
 
 
 def test_root_admission_reaches_the_real_provider_worker_thread():

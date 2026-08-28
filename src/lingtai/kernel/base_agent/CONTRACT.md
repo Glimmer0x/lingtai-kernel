@@ -372,8 +372,11 @@ Clause IDs are stable; each rule composes the linked normative source.
    production-boundary inventory. This is an authorization rule, not a tool
    surface reduction: a full-tool child must be able to make its real
    daemon/avatar request, which Core/Driver then reject before any provider
-   I/O. In particular, the historical daemon `EMANATION_BLACKLIST` currently
-   filters both capabilities before authorization. The transition is ordered:
+   I/O. Generic LingTai retains the historical daemon `EMANATION_BLACKLIST`.
+   A child with the persistent "derived authority required" restriction alone
+   bypasses the daemon/avatar entries, so its full tool surface reaches the
+   typed authorization seam instead of being silently filtered. The transition
+   is ordered:
    (1) every production derived-launch constructor first routes through an
    observable domain decision; (2a) while the filter remains, a production
    launch-path test reaches that decision and records the principal, requested
@@ -393,7 +396,24 @@ Clause IDs are stable; each rule composes the linked normative source.
    whole-program proof over dynamic dispatch (`getattr`, registry lookup, or
    factory indirection) or subclasses/wrappers that override a launch entry;
    those are explicit blind spots that require focused review and production
-   path E2E, not an inference from a green inventory. The Core `TypeError` is
+   path E2E, not an inference from a green inventory. The currently implemented
+   Step 3 slice is refusal-side evidence only: a persistent derived child opens
+   both real tool paths and reaches the typed nested denial before provider I/O.
+   It is neither complete 2b nor merge authorization. Complete 2b additionally
+   requires a real Driver server to issue and claim the endpoint on a legal
+   root-to-one-hop launch, then the same recording transport must show a
+   non-empty legal provider call and empty denied nested calls. A protocol test
+   fixture can prove Core-only interoperability but cannot replace that
+   production Driver-server gate. **Acceptance record:** this is a Step 3
+   refusal-side scoped candidate only and carries **NO MERGE** authorization.
+   The current process probe proves only the supervisor-to-execution-child
+   (hop-2) boundary; the first supervisor hop and entrypoint adoption have no
+   end-to-end behavior proof. Driver-side `ISSUED -> CLAIMED` enforcement and
+   endpoint binding, #299 directory binding/provider-call CAS, dynamic revoke,
+   and any global removal of the generic daemon/avatar filter remain
+   unimplemented. Persistent child markers prevent accidental launch/restart
+   confusion only; a same-OS-user child able to rewrite its own directory or
+   run manifest is outside this guarantee. The Core `TypeError` is
    merely a structural backstop and must not be the only rejection signal. The
    derived-launch inventory uses `(file, enclosing qualified function,
    constructor)` keys, so unrelated line movement does not turn that specific
@@ -469,10 +489,17 @@ Clause IDs are stable; each rule composes the linked normative source.
    7. Production E2E must assert the authorization seam's exact `reason_code`
       and an audit record linkable by `audit_id` or `admission_id`; merely
       observing a rejection is insufficient evidence that the seam ran.
-   8. In one run, one recording transport must observe a non-empty provider
-      call list for a legal root-to-one-hop path and `provider_calls == []` for
-      each refused nested daemon/avatar path. This proves the recorder is live
-      and rules out an empty assertion caused by a disconnected recorder.
+   8. In one run, one recording transport must observe exactly one legal
+      provider call for one Driver adjudication and `provider_calls == []` for
+      each refused nested daemon/avatar path. The recorder's scoped
+      `audit_id` string must equal the Driver record for that adjudication;
+      it is observability only, not a grant. The E2E harness must have two
+      directed must-red mutations: replaying the legal operation makes the
+      exact adjudication count fail, and fanning out two provider I/O events
+      after one adjudication makes the exact per-`audit_id` provider count
+      fail. These checks make duplication visible in the test run; they do
+      not claim replay protection, atomic consumption, or exactly-once
+      provider I/O in production.
 
    Dynamic revoke freshness and propagation remain explicitly undelivered;
    these requirements reserve no claim that they are already implemented. A

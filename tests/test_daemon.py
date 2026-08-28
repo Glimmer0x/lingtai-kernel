@@ -543,6 +543,41 @@ def test_build_tool_surface_blacklist(tmp_path):
     assert "file" in names
 
 
+def test_emanation_blacklist_requires_an_explicit_surface_policy():
+    """A future composition cannot silently default a generic/derived choice."""
+    with pytest.raises(TypeError):
+        daemon_tool.emanation_blacklist()
+
+
+@pytest.mark.parametrize(
+    ("write_marker", "expected_derived_tools"),
+    [(False, set()), (True, {"daemon", "avatar"})],
+)
+def test_agent_tool_surface_uses_persistent_derived_identity_not_required_bit(
+    tmp_path, write_marker, expected_derived_tools,
+):
+    """The universal required bit alone never opens daemon/avatar."""
+    from lingtai.tools.avatar._launcher import (
+        DERIVED_AVATAR_STATE,
+        derived_avatar_state_path,
+    )
+
+    agent = _make_agent(tmp_path, ["file", "daemon", "avatar"])
+    state_path = derived_avatar_state_path(agent._working_dir)
+    if write_marker:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(DERIVED_AVATAR_STATE), encoding="utf-8")
+    agent._requires_derived_launch_admission_port = True
+    mgr = agent.get_capability("daemon")
+
+    schemas, dispatch = mgr._build_tool_surface(["file", "avatar", "daemon"])
+    names = {schema.name for schema in schemas}
+
+    assert "file" in names
+    assert ({"daemon", "avatar"} & names) == expected_derived_tools
+    assert ({"daemon", "avatar"} & set(dispatch)) == expected_derived_tools
+
+
 def test_build_tool_surface_unknown_tool(tmp_path):
     """Unknown tool name raises ValueError."""
     agent = _make_agent(tmp_path, ["daemon"])

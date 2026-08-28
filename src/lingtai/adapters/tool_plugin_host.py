@@ -66,6 +66,7 @@ __all__ = [
     "AgentTaskCardNotificationsAdapter",
     "agent_task_card_ports",
     "agent_host_ports",
+    "persistent_derived_tool_surface_open",
     "daemon_runtime_for_agent",
     "register_agent_tool_plugins",
 ]
@@ -86,6 +87,14 @@ class AgentWorkdirAdapter:
     @property
     def path(self) -> Path:
         return self._read()
+
+
+def persistent_derived_tool_surface_open(working_dir: Path) -> bool:
+    """Read the durable avatar-derived identity without accepting an env proxy."""
+    from lingtai.tools.avatar._launcher import derived_avatar_state_path
+
+    marker = derived_avatar_state_path(working_dir)
+    return marker.exists() or marker.is_symlink()
 
 
 class AgentActiveProviderAdapter:
@@ -672,6 +681,7 @@ class AgentDaemonRuntimeAdapter:
         "_read_language",
         "_read_max_aed_attempts",
         "_read_tool_call_guard",
+        "_read_derived_launch_tool_surface_open",
         "_authorize_derived_launch",
         "_manager_options",
         "_setup_preset_capability",
@@ -694,6 +704,7 @@ class AgentDaemonRuntimeAdapter:
         read_language: Callable[[], str],
         read_max_aed_attempts: Callable[[], int],
         read_tool_call_guard: Callable[[], Any],
+        read_derived_launch_tool_surface_open: Callable[[], bool],
         authorize_derived_launch: Callable[[Any], Any],
         manager_options: Mapping[str, Any],
         setup_preset_capability: Callable[[str, Mapping[str, Any]], tuple[dict[str, Any], dict[str, Callable[[dict], dict]]]],
@@ -711,6 +722,9 @@ class AgentDaemonRuntimeAdapter:
         self._read_language = read_language
         self._read_max_aed_attempts = read_max_aed_attempts
         self._read_tool_call_guard = read_tool_call_guard
+        self._read_derived_launch_tool_surface_open = (
+            read_derived_launch_tool_surface_open
+        )
         self._authorize_derived_launch = authorize_derived_launch
         self._manager_options = dict(manager_options)
         self._setup_preset_capability = setup_preset_capability
@@ -749,6 +763,10 @@ class AgentDaemonRuntimeAdapter:
     @property
     def tool_call_guard(self) -> Any:
         return self._read_tool_call_guard()
+
+    @property
+    def derived_launch_tool_surface_open(self) -> bool:
+        return self._read_derived_launch_tool_surface_open()
 
     def authorize_derived_launch(self, capability: Any) -> Any:
         return self._authorize_derived_launch(capability)
@@ -807,7 +825,10 @@ class AgentDaemonRuntimeAdapter:
 
 
 def daemon_runtime_for_agent(
-    agent: Any, manager_options: Mapping[str, Any]
+    agent: Any,
+    manager_options: Mapping[str, Any],
+    *,
+    read_derived_launch_tool_surface_open: Callable[[], bool],
 ) -> AgentDaemonRuntimeAdapter:
     """Build Daemon's adapter from the current Agent's narrow operations."""
 
@@ -911,6 +932,7 @@ def daemon_runtime_for_agent(
         read_language=_read_language,
         read_max_aed_attempts=_read_max_aed_attempts,
         read_tool_call_guard=lambda: getattr(agent, "_tool_call_guard", None),
+        read_derived_launch_tool_surface_open=read_derived_launch_tool_surface_open,
         authorize_derived_launch=_authorize_derived_launch,
         manager_options=manager_options,
         setup_preset_capability=_setup_preset_capability,
