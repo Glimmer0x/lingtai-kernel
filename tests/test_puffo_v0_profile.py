@@ -426,7 +426,22 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     assert observed["requires_turn_origin_policy"] is True
     assert observed["provider_call_admission_port"] is RUNTIME_POLICY
     assert observed["derived_launch_admission_port"] is RUNTIME_POLICY
+    assert observed["requires_derived_launch_admission_port"] is True
     assert observed["puffo_runtime"] == runtime
+
+
+def test_constrained_acp_refuses_to_start_without_its_derived_launch_port(tmp_path):
+    import lingtai.cli_acp as cli_acp
+
+    with pytest.raises(
+        ValueError, match="constrained ACP composition requires a derived-launch admission port"
+    ):
+        cli_acp.run_acp(
+            tmp_path,
+            input_stream=io.StringIO(),
+            output_stream=io.StringIO(),
+            requires_derived_launch_admission_port=True,
+        )
 
 
 def test_profile_cli_rejects_agent_dir_instead_of_ignoring_it(capsys):

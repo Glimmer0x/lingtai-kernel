@@ -9532,14 +9532,13 @@ class DaemonManager:
                 audit_id=decision.audit_id,
             )
             raise
-        if decision.reason_code != "legacy_default":
-            self._log(
-                "derived_launch_admission_decision",
-                capability=capability.value,
-                state=decision.state.value,
-                reason_code=decision.reason_code,
-                audit_id=decision.audit_id,
-            )
+        self._log(
+            "derived_launch_admission_decision",
+            capability=capability.value,
+            state=decision.state.value,
+            reason_code=decision.reason_code,
+            audit_id=decision.audit_id,
+        )
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s

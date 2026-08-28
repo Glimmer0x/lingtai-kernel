@@ -710,6 +710,25 @@ def test_derived_launch_port_is_fail_closed_when_unconnected_or_indeterminate():
     assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
 
 
+def test_required_derived_launch_port_cannot_fall_back_to_legacy_default():
+    """A constrained composition must expose a missing Driver seam."""
+
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        with pytest.raises(
+            DerivedLaunchAdmissionError,
+            match="required_derived_launch_admission_port_missing",
+        ) as raised:
+            require_derived_launch_admission(
+                None, DerivedLaunchCapability.DAEMON, required=True
+            )
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+
+
 def test_derived_launch_port_returns_auditable_grant_for_an_admitted_root():
     root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
     port = _RecordingDerivedLaunchPort()
