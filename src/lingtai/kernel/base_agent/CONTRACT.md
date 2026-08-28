@@ -424,14 +424,16 @@ Clause IDs are stable; each rule composes the linked normative source.
       interface that carries any of those derived facts MUST compare each one
       against that state and deny a mismatch with a distinct attack-signal
       reason code.
-   5. The real provider/capability requested by transport must exactly match
-      the grant. Consumption is Driver-side only: keyed by `admission_id`, an
-      atomic `unused -> consumed_before_io` CAS must succeed before provider
-      I/O. A local transport mark is not consumption; an unsuccessful CAS
-      prevents provider I/O.
+   5. The Driver-side CAS request carries the provider and exact capability
+      that transport is about to execute. In the same atomic operation, the
+      Driver compares both values with the grant issued for `admission_id` and
+      performs `unused -> consumed_before_io`; a mismatch fails as the distinct
+      attack-signal denial from requirement 4. A local transport mark is not
+      consumption; an unsuccessful CAS prevents provider I/O.
    6. A timeout or crash after that CAS and before a known provider result is
       `consumed_outcome_unknown`: the grant remains consumed and is never
-      restored or reused. A retry uses a new `call_id` and obtains a new grant.
+      restored or reused, and this outcome is recorded in the auditable
+      admission record. A retry uses a new `call_id` and obtains a new grant.
    7. Production E2E must assert the authorization seam's exact `reason_code`
       and an audit record linkable by `audit_id` or `admission_id`; merely
       observing a rejection is insufficient evidence that the seam ran.
