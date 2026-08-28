@@ -373,10 +373,18 @@ Clause IDs are stable; each rule composes the linked normative source.
    surface reduction: a full-tool child must be able to make its real
    daemon/avatar request, which Core/Driver then reject before any provider
    I/O. In particular, the historical daemon `EMANATION_BLACKLIST` currently
-   filters those tools before authorization and must be removed or bypassed for
-   the puffo-v0 derived composition as part of the driver-mediated adapter;
-   that integration is not delivered by this Core type boundary alone. A host
-   that binds a derived parent before its transport is connected receives explicit
+   filters those tools before authorization. It remains the temporary effective
+   safeguard until the driver-mediated adapter has first routed every production
+   derived-launch constructor through an observable domain decision, and a
+   production child has exercised real nested daemon/avatar requests that are
+   denied with zero provider I/O. Only then may puffo-v0 remove or bypass that
+   filter; removing it earlier opens a grandchild-launch window. The launch
+   inventory is a regression tripwire, not a one-time review: a new constructor
+   must fail until classified. The production decision records the principal,
+   requested capability, and reason code; the Core `TypeError` is merely a
+   structural backstop and must not be the only rejection signal. This adapter
+   integration is not delivered by this Core type boundary alone. A host that
+   binds a derived parent before its transport is connected receives explicit
    `derived_admission_port_unconnected` indeterminacy and rejects before
    provider I/O. Historical daemon/avatar routes do not yet bind that parent,
    so they remain outside this gate until the separate driver-mediated adapter
