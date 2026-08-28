@@ -381,9 +381,12 @@ Clause IDs are stable; each rule composes the linked normative source.
    or bypass the `daemon` and `avatar` filters together; (2b) the change that
    removes those filters cannot merge until a production child uses each real
    tool path, receives the denial, and a recording transport proves zero
-   provider I/O. Thus 2a proves that removing the old safeguard cannot make an
-   unguarded window, while 2b proves that the opened tool surface reaches the
-   intended refusal rather than empty-passing at the old filter. The launch
+   provider I/O. Thus 2a proves that the decision already applies on every
+   production launch path covered by the inventory before the old safeguard is
+   removed; it does not prove the inventory's explicit static blind spots.
+   Those require focused review and production-path E2E. 2b proves that the
+   opened tool surface reaches the intended refusal rather than empty-passing
+   at the old filter. The launch
    inventory is a regression tripwire, not a one-time review: a new constructor
    must fail until classified. Its static matcher must cover direct-name and
    attribute calls, imported aliases, and package re-exports. It is not a
