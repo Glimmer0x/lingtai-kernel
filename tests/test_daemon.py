@@ -1449,6 +1449,7 @@ def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, mo
                 ProviderAdmissionState.GRANTED,
                 "derived_launch_allowed_by_test",
                 audit_id="audit-daemon-positive-2a",
+                child_endpoint_lease=object(),
             )
 
     agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})

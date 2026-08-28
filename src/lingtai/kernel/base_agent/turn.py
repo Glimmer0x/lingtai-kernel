@@ -1129,6 +1129,24 @@ def _run_loop_body(agent) -> None:
                 )
                 continue
 
+            # A Driver-created daemon/avatar endpoint is represented in Core
+            # only by an opaque derived parent attached at child composition.
+            # Unlike root ACP turns it has no turn-origin policy: every actual
+            # provider call still crosses the Driver-backed Port. Binding here
+            # makes that boundary live for the child's ordinary inbox/tool
+            # paths without serializing a parent grant into child state.
+            if provider_admission_token is None:
+                from ..provider_admission import (
+                    DerivedProviderAdmission,
+                    bind_provider_admission,
+                )
+
+                derived_parent = getattr(
+                    agent, "_derived_provider_admission_parent", None
+                )
+                if isinstance(derived_parent, DerivedProviderAdmission):
+                    provider_admission_token = bind_provider_admission(derived_parent)
+
             # --- Process with AED (Automatic Error Detection) ---
             sleep_state = AgentState.IDLE
             handler_result = None

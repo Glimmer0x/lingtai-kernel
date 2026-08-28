@@ -105,7 +105,11 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
     """
 
     def spawn_detached(
-        self, request: DaemonSupervisorRequest, *, capsule: dict | None = None
+        self,
+        request: DaemonSupervisorRequest,
+        *,
+        capsule: dict | None = None,
+        authority_lease: object | None = None,
     ) -> None:
         """Launch one owner and optionally hand it one-shot runtime values.
 
@@ -122,7 +126,7 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
         stderr_path = run_dir / "supervisor.stderr.log"
         stdout = open(stdout_path, "ab", buffering=0)
         stderr = open(stderr_path, "ab", buffering=0)
-        read_fd = write_fd = None
+        read_fd = write_fd = authority_fd = None
         capsule_bytes = None
         if capsule:
             capsule_bytes = json.dumps(
@@ -140,10 +144,23 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                 except OSError:
                     pass
             env = _supervisor_environment(request)
-            pass_fds = ()
+            pass_fds: tuple[int, ...] = ()
             if read_fd is not None:
                 env["LINGTAI_DAEMON_CAPSULE_FD"] = str(read_fd)
                 pass_fds = (read_fd,)
+            if authority_lease is not None:
+                from lingtai.adapters.acp.driver_authority import (
+                    DRIVER_AUTHORITY_FD_ENV,
+                    consume_posix_child_endpoint_lease,
+                )
+
+                authority_fd = consume_posix_child_endpoint_lease(authority_lease)
+                env[DRIVER_AUTHORITY_FD_ENV] = str(authority_fd)
+                # Restrictive boot requirement only, never a grant/bearer.
+                # This survives the supervisor hop so a missing fd cannot make
+                # the Driver-launched child look like an ordinary daemon.
+                env["LINGTAI_DERIVED_DAEMON_EXECUTION"] = "1"
+                pass_fds = (*pass_fds, authority_fd)
             subprocess.Popen(
                 [request.python_executable, "-m", ENTRYPOINT_MODULE, payload],
                 stdin=subprocess.DEVNULL,
@@ -165,7 +182,7 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                 os.close(write_fd)
                 write_fd = None
         finally:
-            for fd in (read_fd, write_fd):
+            for fd in (read_fd, write_fd, authority_fd):
                 if fd is not None:
                     try:
                         os.close(fd)
@@ -199,6 +216,18 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
         parts = [str(source_root)]
         parts.extend(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)
         env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(parts))
+        authority_fd = None
+        raw_authority_fd = env.get("LINGTAI_DRIVER_AUTHORITY_FD")
+        if raw_authority_fd is not None:
+            try:
+                authority_fd = int(raw_authority_fd)
+                os.set_inheritable(authority_fd, False)
+            except (OSError, ValueError):
+                # The execution child will receive the locator only if this
+                # supervisor owns a live endpoint. A broken descriptor must
+                # not be silently inherited as an apparent authority.
+                env.pop("LINGTAI_DRIVER_AUTHORITY_FD", None)
+                authority_fd = None
         if read_fd is not None:
             env["LINGTAI_DAEMON_CAPSULE_FD"] = str(read_fd)
         stdout_path = run_dir / ("execution.stdout.log" if "execution_child" in module else "resume-owner.stdout.log")
@@ -216,7 +245,9 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                 env=env, cwd=str(run_dir.parent.parent),
                 start_new_session=True, close_fds=True,
-                pass_fds=(read_fd,) if read_fd is not None else (),
+                pass_fds=tuple(
+                    fd for fd in (read_fd, authority_fd) if fd is not None
+                ),
             )
             if read_fd is not None:
                 os.close(read_fd)

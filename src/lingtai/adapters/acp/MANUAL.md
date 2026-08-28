@@ -144,17 +144,18 @@ event before it can dispatch a provider/model turn. This applies to **every**
 root provider/model turn, not merely the inbox dispatch step. The Core
 provider-call Port is crossed immediately before each such request, so a
 missing or denied parent cannot fall through to the provider service. The
-currently available daemon and avatar tools still use their historical
-independent execution routes; they are not covered by this root-only Core
-slice. The future derived adapter has an explicit unconnected outcome:
-`derived_admission_port_unconnected` rejects before provider I/O rather than
-acting as a permissive placeholder. That outcome does not yet cover the
-historical daemon/avatar routes themselves. Before treating `puffo-v0` as a
-complete all-turn profile, the driver must provide host-mediated derived
-admission for each daemon/avatar provider call. Future child turns must carry
-verified ancestry from an admitted prompt, and the driver must decide at every
-actual provider call against then-current authority rather than reusing a
-turn-start grant.
+constrained POSIX profile, daemon/avatar composition uses the Driver-backed
+authority adapter. The Driver supplies a connected Unix socket endpoint as a
+controlled inherited fd; the fd number is only a locator. The adapter marks it
+close-on-exec, uses a bounded v1 framed exchange, and maps a missing, wrong,
+closed, malformed, or timed-out endpoint to structured indeterminacy before
+spawn/provider I/O. An approved root launch receives a different one-use child
+endpoint; Core carries its opaque lease, and only the precise POSIX spawn uses
+it in `pass_fds`. Do not set `LINGTAI_DRIVER_AUTHORITY_FD` manually: a marker
+only says a child requires authority and is never a grant. The Driver server
+must still provide verified ancestry and decide every actual provider call.
+This repository does not claim its identity/workdir binding, CAS consumption,
+or dynamic revoke is complete.
 This is an initiation boundary, not content provenance: non-ACP systems can
 still write state which a later authenticated prompt may cause the model to
 read. Existing minimal ACP permission projection does not alter launch inputs,

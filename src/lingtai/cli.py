@@ -145,6 +145,7 @@ def build_agent(
     _provider_call_admission_port=None,
     _derived_launch_admission_port=None,
     _requires_derived_launch_admission_port: bool = False,
+    _derived_provider_admission_parent=None,
 ) -> Agent:
     """Construct Agent from validated init data.
 
@@ -212,6 +213,10 @@ def build_agent(
     # established configured pass so its mandatory declared intrinsics boot
     # normally, and an early return cannot leave suppression armed.
     agent._from_init_boot = False
+    # A Driver adapter creates this opaque Core context from its connected
+    # derived endpoint.  It contains no fd or serialized authority and is only
+    # bound by the turn loop immediately before provider work.
+    agent._derived_provider_admission_parent = _derived_provider_admission_parent
 
     # Full setup from init.json (capabilities, addons, config, covenant, etc.)
     agent._setup_from_init()
@@ -383,7 +388,43 @@ def run(working_dir: Path) -> None:
         _derived_avatar_requires_admission(working_dir)
         or os.environ.get(DERIVED_AVATAR_EXECUTION_ENV) == "1"
     ):
+        from lingtai.adapters.acp.driver_authority import (
+            DriverAuthorityAdapter,
+            UnavailableDriverAuthorityAdapter,
+            authority_adapter_from_environment,
+        )
+        from lingtai.kernel.provider_admission import ProviderCallClass
+
+        authority = authority_adapter_from_environment(missing_returns_none=True)
+        authority_was_missing = authority is None
         build_options["_requires_derived_launch_admission_port"] = True
+        if authority is None:
+            # Keep the exact missing-port reason for nested launch while still
+            # installing a provider gate that cannot fall back to generic I/O.
+            authority = UnavailableDriverAuthorityAdapter()
+        build_options["_provider_call_admission_port"] = authority
+        build_options["_derived_launch_admission_port"] = (
+            None if authority_was_missing else authority
+        )
+        try:
+            if isinstance(authority, DriverAuthorityAdapter):
+                build_options["_derived_provider_admission_parent"] = (
+                    authority.derived_provider_parent()
+                )
+            else:
+                build_options["_derived_provider_admission_parent"] = (
+                    authority.derived_provider_parent(ProviderCallClass.AVATAR_CHILD)
+                )
+        except Exception:
+            # A wrong-role endpoint is no authority. Keep the provider gate
+            # installed and bind a derived-shaped parent so it returns the
+            # transport-unconnected reason rather than ever reaching I/O.
+            unavailable = UnavailableDriverAuthorityAdapter()
+            build_options["_provider_call_admission_port"] = unavailable
+            build_options["_derived_launch_admission_port"] = unavailable
+            build_options["_derived_provider_admission_parent"] = (
+                unavailable.derived_provider_parent(ProviderCallClass.AVATAR_CHILD)
+            )
     agent = build_agent(data, working_dir, **build_options)
     agent._venv_path = str(venv_dir)
     _install_signal_handlers(working_dir, agent)

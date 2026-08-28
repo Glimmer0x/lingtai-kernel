@@ -542,7 +542,7 @@ class AvatarManager:
                 "message": "Dry run — no process spawned, no files written.",
             }
 
-        self._authorize_derived_launch(peer_name)
+        launch_decision = self._authorize_derived_launch(peer_name)
 
         # Working dir: sibling of parent, named after the avatar. Defense-in-depth
         # scope check — resolve and assert the target's parent equals the network
@@ -644,7 +644,10 @@ class AvatarManager:
         # avatar capability returns "ok" the instant a child forks, even if the
         # child crashes 50ms later (e.g. invalid init.json), and the parent's
         # LLM has no idea anything went wrong.
-        proc, stderr_path = self._launch(avatar_working_dir)
+        proc, stderr_path = self._launch(
+            avatar_working_dir,
+            authority_lease=launch_decision.child_endpoint_lease,
+        )
         pid = proc.pid
 
         try:
@@ -897,7 +900,9 @@ class AvatarManager:
     _BOOT_WAIT_SECS = BOOT_WAIT_SECONDS
     _BOOT_POLL_INTERVAL = BOOT_POLL_INTERVAL_SECONDS
 
-    def _launch(self, working_dir: Path) -> tuple[AvatarLaunchReceipt, Path]:
+    def _launch(
+        self, working_dir: Path, *, authority_lease: object | None = None
+    ) -> tuple[AvatarLaunchReceipt, Path]:
         """Launch `lingtai-agent run <dir>` as a fully detached process.
 
         Captures stderr to ``logs/spawn.stderr`` so a child that exits before
@@ -932,11 +937,12 @@ class AvatarManager:
                 # during _spawn is authoritative for subsequent/restarted
                 # launches and never carries a grant or authority bearer.
                 environment={DERIVED_AVATAR_EXECUTION_ENV: "1"},
+                authority_lease=authority_lease,
             )
         )
         return receipt, stderr_path
 
-    def _authorize_derived_launch(self, peer_name: str) -> None:
+    def _authorize_derived_launch(self, peer_name: str) -> "DerivedLaunchDecision":
         """Reach the host decision seam before avatar filesystem/process effects."""
         from lingtai.kernel.provider_admission import (
             DerivedLaunchAdmissionError,
@@ -968,6 +974,7 @@ class AvatarManager:
         )
         if not decision.allowed:
             raise DerivedLaunchAdmissionError(decision)
+        return decision
 
     # ------------------------------------------------------------------
     # Ledger reading

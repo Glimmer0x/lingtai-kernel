@@ -125,9 +125,17 @@ class WindowsDaemonSupervisorAdapter(DaemonSupervisorPort):
     """
 
     def spawn_detached(
-        self, request: DaemonSupervisorRequest, *, capsule: dict | None = None
+        self,
+        request: DaemonSupervisorRequest,
+        *,
+        capsule: dict | None = None,
+        authority_lease: object | None = None,
     ) -> None:
         """Launch one owner and optionally hand it one-shot runtime values."""
+        if authority_lease is not None:
+            raise NotImplementedError(
+                "Windows daemon supervisor does not support Driver authority endpoints"
+            )
         payload = encode_request(request)
         run_dir = Path(request.manifest_path).resolve().parent
         self._launch_with_capsule(

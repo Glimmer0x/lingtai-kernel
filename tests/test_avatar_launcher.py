@@ -1,4 +1,5 @@
 """Focused Contract tests for the avatar-local launcher boundary."""
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,7 @@ from lingtai.tools.avatar._launcher import (
     legacy_derived_avatar_state_path,
     probe_derived_avatar_state,
 )
+from lingtai.adapters.acp.driver_authority import DriverChildEndpointLease
 from lingtai.adapters.posix.avatar_launcher import PosixAvatarLauncherAdapter
 
 
@@ -105,6 +107,30 @@ def test_unreadable_legacy_derived_marker_keeps_cli_boot_restrictive(
 
     assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.UNKNOWN
     assert cli._derived_avatar_requires_admission(tmp_path) is True
+
+
+def test_posix_launch_passes_only_the_one_shot_driver_child_endpoint(tmp_path):
+    """The child gets a lease endpoint, never an inherited root descriptor."""
+    process = MagicMock(pid=419, poll=MagicMock(return_value=None))
+    client, driver = socket.socketpair()
+    request = AvatarLaunchRequest(
+        ("python", "-m", "lingtai", "run", "/avatar"),
+        tmp_path / "logs" / "spawn.stderr",
+        authority_lease=DriverChildEndpointLease(client),
+    )
+    try:
+        with patch(
+            "lingtai.adapters.posix.avatar_launcher.subprocess.Popen",
+            return_value=process,
+        ) as popen:
+            PosixAvatarLauncherAdapter().launch(request)
+        kwargs = popen.call_args.kwargs
+        child_fd = kwargs["pass_fds"]
+        assert len(child_fd) == 1
+        assert kwargs["env"]["LINGTAI_DRIVER_AUTHORITY_FD"] == str(child_fd[0])
+        assert kwargs["close_fds"] is True
+    finally:
+        driver.close()
 
 
 def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):

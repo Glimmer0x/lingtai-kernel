@@ -401,9 +401,22 @@ Clause IDs are stable; each rule composes the linked normative source.
    derived-launch inventory uses `(file, enclosing qualified function,
    constructor)` keys, so unrelated line movement does not turn that specific
    tripwire into mechanical maintenance.
-   This adapter integration is not delivered by this Core type boundary alone.
-   The following are **constrained host-adapter requirements**, not current
-   Core-seam delivery claims:
+   The Core type boundary is protocol-neutral, but the constrained POSIX ACP
+   composition now supplies `DriverAuthorityAdapter` as both Ports. Its only
+   authority carrier is a Driver-created connected Unix-domain socket endpoint:
+   an inherited root endpoint is close-on-exec, while an allowed root launch
+   receives a separate, opaque, one-use child-endpoint lease through `SCM_RIGHTS`.
+   Core carries that lease without parsing an fd, frame, registry entry, path,
+   depth, or lineage. Only the exact POSIX child launch adapter consumes it
+   into an allowlisted `pass_fds` handoff. A persisted derived child has a
+   restrictive marker that means *authority is required*, never that a grant
+   exists; an absent, closed, malformed, version-mismatched, or unavailable
+   endpoint is structured `INDETERMINATE` before spawn or provider I/O and can
+   never fall back to `legacy_default`. A derived endpoint cannot mint a second
+   child endpoint. This Core wiring deliberately does not claim that the
+   external Driver server, registry/identity binding, grant-CAS consumption, or
+   dynamic revoke is implemented here. The following remain **constrained host-
+   adapter requirements**, not claims made by this Core seam:
 
    1. `provision_ref` is a Driver-registry opaque lookup handle bound to the
       requested `launch_id` and `parent_launch_id`; it is non-transferable and
@@ -446,12 +459,11 @@ Clause IDs are stable; each rule composes the linked normative source.
       and rules out an empty assertion caused by a disconnected recorder.
 
    Dynamic revoke freshness and propagation remain explicitly undelivered;
-   these requirements reserve no claim that they are already implemented. A host that
-   binds a derived parent before its transport is connected receives explicit
-   `derived_admission_port_unconnected` indeterminacy and rejects before
-   provider I/O. Historical daemon/avatar routes do not yet bind that parent,
-   so they remain outside this gate until the separate driver-mediated adapter
-   is wired. The raw `LLMService` direct-construction inventory (including
+   these requirements reserve no claim that they are already implemented. A
+   constrained host that binds a derived parent before its Driver transport is
+   connected receives explicit `derived_admission_port_unconnected`
+   indeterminacy and rejects before provider I/O. The raw `LLMService`
+   direct-construction inventory (including
    imported aliases and attribute calls) is pinned by
    `tests/test_provider_admission.py`; adding a constructor requires an
    explicit classification rather than silently creating another route. The

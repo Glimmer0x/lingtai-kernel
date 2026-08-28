@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import textwrap
 import threading
@@ -37,6 +38,7 @@ from lingtai.kernel.daemon_supervisor.manifest import (
 )
 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
 from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+from lingtai.adapters.acp.driver_authority import DriverChildEndpointLease
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
 
 
@@ -218,6 +220,49 @@ def test_posix_adapter_spawns_real_detached_process(tmp_path):
 
     terminal_state = _poll_until(_terminal, timeout=10.0)
     assert terminal_state == "failed"
+
+
+def test_posix_supervisor_hands_only_one_driver_child_endpoint_to_its_child(
+    tmp_path, monkeypatch,
+):
+    """A Driver lease is consumed for this exact spawn and not retained by root."""
+    run_dir = _make_run_dir(tmp_path, task="authority handoff")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent),
+        run_dir=str(run_dir.path), task="authority handoff", tools=[],
+        max_turns=1, timeout_s=30, group_id=None,
+    )
+    write_manifest(run_dir.path, manifest)
+    request = DaemonSupervisorRequest(
+        run_id=run_dir.run_id,
+        manifest_path=str(manifest_path_for(run_dir.path)),
+        python_executable=sys.executable,
+    )
+    client, driver = socket.socketpair()
+    calls = []
+
+    def fake_popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_supervisor.subprocess.Popen", fake_popen
+    )
+    try:
+        PosixDaemonSupervisorAdapter().spawn_detached(
+            request, authority_lease=DriverChildEndpointLease(client)
+        )
+    finally:
+        driver.close()
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    child_fds = kwargs["pass_fds"]
+    assert len(child_fds) == 1
+    assert kwargs["env"]["LINGTAI_DRIVER_AUTHORITY_FD"] == str(child_fds[0])
+    assert kwargs["env"]["LINGTAI_DERIVED_DAEMON_EXECUTION"] == "1"
+    assert kwargs["close_fds"] is True
 
 
 def test_detached_lingtai_run_survives_agent_stop_shutdown_and_reaches_done(tmp_path):

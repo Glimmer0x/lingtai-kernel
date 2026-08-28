@@ -39,6 +39,12 @@ def main(argv: list[str]) -> int:
         raise SystemExit("usage: daemon_execution_child <manifest> <run_id> <mode> [generation]")
     manifest_path, run_id, mode = argv[:3]
     generation = argv[3] if len(argv) == 4 else None
+    raw_authority_fd = os.environ.get("LINGTAI_DRIVER_AUTHORITY_FD")
+    if raw_authority_fd is not None:
+        try:
+            os.set_inheritable(int(raw_authority_fd), False)
+        except (OSError, ValueError):
+            pass
     capsule = _read_capsule()
     from lingtai.kernel.daemon_supervisor.manifest import read_manifest
     from lingtai.tools.daemon.run_dir import DaemonRunDir

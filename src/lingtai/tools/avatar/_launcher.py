@@ -71,11 +71,17 @@ def probe_derived_avatar_state(working_dir: Path) -> DerivedAvatarState:
 
 @dataclass(frozen=True)
 class AvatarLaunchRequest:
-    """The complete launch input; cwd is inherited and env overrides are explicit."""
+    """The complete launch input; cwd is inherited and env overrides are explicit.
+
+    ``authority_lease`` is opaque adapter state. Avatar Core can carry it from
+    a typed decision to this Port but never sees a file descriptor or treats it
+    as authority itself.
+    """
 
     argv: tuple[str, ...]
     stderr_path: Path
     environment: Mapping[str, str] | None = None
+    authority_lease: object | None = None
 
 
 @dataclass(frozen=True)

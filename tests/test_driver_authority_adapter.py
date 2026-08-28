@@ -1,0 +1,275 @@
+"""Production-shaped tests for the POSIX Driver authority adapter."""
+from __future__ import annotations
+
+import array
+import json
+import os
+import socket
+import struct
+import threading
+import time
+
+import pytest
+
+from lingtai.adapters.acp.driver_authority import (
+    DriverAuthorityAdapter,
+    DriverAuthorityTransportError,
+    UnavailableDriverAuthorityAdapter,
+    authority_adapter_from_environment,
+    consume_posix_child_endpoint_lease,
+)
+from lingtai.kernel.provider_admission import (
+    DerivedLaunchCapability,
+    ProviderAdmissionState,
+    ProviderCallClass,
+    RootProviderAdmission,
+    begin_derived_provider_admission,
+    bind_provider_admission,
+    clear_provider_admission,
+    require_derived_launch_admission,
+)
+
+
+def _recv_frame(sock: socket.socket) -> dict:
+    header = sock.recv(4)
+    assert len(header) == 4
+    size = struct.unpack("!I", header)[0]
+    payload = bytearray()
+    while len(payload) < size:
+        payload.extend(sock.recv(size - len(payload)))
+    return json.loads(bytes(payload).decode("utf-8"))
+
+
+def _send_frame(sock: socket.socket, payload: dict, *, fd: int | None = None) -> None:
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    frame = struct.pack("!I", len(encoded)) + encoded
+    if fd is None:
+        sock.sendall(frame)
+        return
+    rights = array.array("i", [fd])
+    sent = sock.sendmsg([frame], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)])
+    if sent < len(frame):
+        sock.sendall(frame[sent:])
+
+
+def _server_thread(server: socket.socket, handler):
+    error: list[BaseException] = []
+
+    def run():
+        try:
+            handler(server)
+        except BaseException as exc:  # test server must surface failures
+            error.append(exc)
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, error
+
+
+def test_root_driver_adapter_receives_one_child_endpoint_lease_and_consumes_once():
+    client, server = socket.socketpair()
+    child_client, child_driver = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-1", "capability": None})
+        request = _recv_frame(sock)
+        assert request == {
+            "version": 1,
+            "op": "authorize_derived_launch",
+            "launch_id": "root-1",
+            "capability": "avatar",
+        }
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "state": "granted",
+                "reason_code": "allowed",
+                "audit_id": "audit-1",
+                "admission_id": "admission-1",
+            },
+            fd=child_client.fileno(),
+        )
+        child_client.close()
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    root = RootProviderAdmission("turn-1", "puffo-v0.full-tool-acp-ingress.v1")
+    token = bind_provider_admission(root)
+    try:
+        decision = require_derived_launch_admission(adapter, DerivedLaunchCapability.AVATAR)
+    finally:
+        clear_provider_admission(token)
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.GRANTED
+    assert decision.audit_id == "audit-1"
+    assert decision.admission_id == "admission-1"
+    assert decision.child_endpoint_lease is not None
+    inherited_fd = consume_posix_child_endpoint_lease(decision.child_endpoint_lease)
+    try:
+        assert os.get_inheritable(inherited_fd) is False
+        with pytest.raises(DriverAuthorityTransportError, match="already consumed"):
+            consume_posix_child_endpoint_lease(decision.child_endpoint_lease)
+    finally:
+        os.close(inherited_fd)
+        child_driver.close()
+
+
+def test_derived_endpoint_cannot_mint_a_second_child_even_if_it_has_a_socket():
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "role": "derived",
+                "launch_id": "child-1",
+                "capability": "daemon",
+            },
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    root = RootProviderAdmission("turn-1", "puffo-v0.full-tool-acp-ingress.v1")
+    child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
+    # The Core boundary rejects nested derived work before it asks the Driver.
+    token = bind_provider_admission(child)
+    try:
+        with pytest.raises(Exception, match="nested_derived_launch_denied"):
+            require_derived_launch_admission(adapter, DerivedLaunchCapability.DAEMON)
+    finally:
+        clear_provider_admission(token)
+    thread.join(timeout=2)
+    assert errors == []
+
+
+def test_derived_provider_call_uses_its_own_endpoint_and_driver_known_fields():
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "role": "derived",
+                "launch_id": "child-1",
+                "capability": "daemon",
+            },
+        )
+        request = _recv_frame(sock)
+        assert request["version"] == 1
+        assert request["op"] == "authorize_provider_call"
+        assert request["launch_id"] == "child-1"
+        assert request["provider"] == "llm"
+        assert request["capability"] == "daemon"
+        assert request["call_id"]
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "state": "granted",
+                "reason_code": "allowed",
+                "audit_id": "audit-provider-1",
+                "admission_id": "admission-provider-1",
+            },
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    parent = adapter.derived_provider_parent()
+    decision = adapter.authorize_provider_call(parent, ProviderCallClass.DAEMON)
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.GRANTED
+    assert decision.audit_id == "audit-provider-1"
+    assert decision.admission_id == "admission-provider-1"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"{not-json",
+        b'{"version":1,"state":"granted","reason_code":""}',
+    ],
+)
+def test_malformed_driver_provider_reply_fails_closed_before_provider_io(payload):
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-1", "capability": None})
+        _recv_frame(sock)
+        sock.sendall(struct.pack("!I", len(payload)) + payload)
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    parent = RootProviderAdmission("turn-1", "puffo-v0.full-tool-acp-ingress.v1")
+    token = bind_provider_admission(parent)
+    try:
+        decision = adapter.authorize_provider_call(parent, ProviderCallClass.ROOT)
+    finally:
+        clear_provider_admission(token)
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert decision.reason_code == "derived_admission_port_unconnected"
+
+
+@pytest.mark.parametrize("failure", ["closed", "truncated", "timeout"])
+def test_closed_truncated_or_timed_out_driver_reply_is_structured_indeterminate(failure):
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-1", "capability": None})
+        _recv_frame(sock)
+        if failure == "truncated":
+            sock.sendall(struct.pack("!I", 12) + b"{}")
+        elif failure == "timeout":
+            time.sleep(0.05)
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client, timeout=0.01)
+    parent = RootProviderAdmission("turn-1", "puffo-v0.full-tool-acp-ingress.v1")
+    decision = adapter.authorize_provider_call(parent, ProviderCallClass.ROOT)
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert decision.reason_code == "derived_admission_port_unconnected"
+
+
+def test_invalid_fd_locator_never_falls_back_to_a_legacy_adapter(monkeypatch):
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", "not-an-fd")
+    assert isinstance(authority_adapter_from_environment(), UnavailableDriverAuthorityAdapter)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"version": 2, "role": "root", "launch_id": "root-1", "capability": None},
+        {"version": 1, "role": "root", "launch_id": "", "capability": None},
+    ],
+)
+def test_bad_driver_handshake_is_not_an_adapter(response):
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        _recv_frame(sock)
+        _send_frame(sock, response)
+
+    thread, errors = _server_thread(server, handler)
+    with pytest.raises(DriverAuthorityTransportError):
+        DriverAuthorityAdapter(client)
+    thread.join(timeout=2)
+    assert errors == []

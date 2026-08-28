@@ -400,6 +400,7 @@ def test_profile_session_rejects_remote_workspace_and_mcp_inputs(tmp_path):
 
 def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp_path):
     import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp.driver_authority import UnavailableDriverAuthorityAdapter
     from lingtai.adapters.acp.puffo_v0 import DirectoryBinding, PuffoV0Runtime
 
     agent_dir = tmp_path / "identity"
@@ -424,8 +425,10 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     assert observed.get("forced_disable") is None
     assert observed["turn_origin_policy"] is RUNTIME_POLICY
     assert observed["requires_turn_origin_policy"] is True
-    assert observed["provider_call_admission_port"] is RUNTIME_POLICY
-    assert observed["derived_launch_admission_port"] is RUNTIME_POLICY
+    # No Driver-supplied fd means constrained composition is present but
+    # unavailable; it must not fall back to the Core-only policy as authority.
+    assert isinstance(observed["provider_call_admission_port"], UnavailableDriverAuthorityAdapter)
+    assert observed["derived_launch_admission_port"] is observed["provider_call_admission_port"]
     assert observed["requires_derived_launch_admission_port"] is True
     assert observed["puffo_runtime"] == runtime
 

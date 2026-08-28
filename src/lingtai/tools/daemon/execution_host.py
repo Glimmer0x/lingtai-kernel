@@ -86,12 +86,45 @@ class DetachedDaemonExecutionHost:
             Path(manifest["parent_working_dir"]),
             log_fn=lambda event, **fields: run_dir.append_event(event, **fields),
         )
-        # A detached child receives no derived authority today. Marking the
-        # requirement here preserves its full tool surface while making any
-        # nested daemon/avatar launch fail closed rather than use legacy allow.
-        # This boolean is deliberately not a bearer; later Driver wiring must
-        # inject the actual authority separately.
+        # A detached child retains the restrictive nested-launch requirement.
+        # The Driver-specific marker below only controls whether this child
+        # also owns a provider-call gate; generic LingTai detached runs retain
+        # their historical provider behavior.
         self._agent._requires_derived_launch_admission_port = True
+        self._agent._derived_launch_admission_port = None
+        self._agent._provider_call_admission_port = None
+        self._agent._derived_provider_admission_parent = None
+        if os.environ.get("LINGTAI_DERIVED_DAEMON_EXECUTION") == "1":
+            # The Driver-launched child accepts only a Driver-created endpoint
+            # inherited through the exact supervisor->execution-child spawn.
+            # Missing authority remains a required-port failure for nested
+            # launch; a bad endpoint installs an unavailable provider gate and
+            # cannot fall back to generic provider I/O.
+            from lingtai.adapters.acp.driver_authority import (
+                DriverAuthorityAdapter,
+                UnavailableDriverAuthorityAdapter,
+                authority_adapter_from_environment,
+            )
+            from lingtai.kernel.provider_admission import ProviderCallClass
+
+            authority = authority_adapter_from_environment(missing_returns_none=True)
+            if authority is None:
+                authority = UnavailableDriverAuthorityAdapter()
+                self._agent._derived_launch_admission_port = None
+            else:
+                self._agent._derived_launch_admission_port = authority
+            self._agent._provider_call_admission_port = authority
+            try:
+                if isinstance(authority, DriverAuthorityAdapter):
+                    parent = authority.derived_provider_parent()
+                else:
+                    parent = authority.derived_provider_parent(ProviderCallClass.DAEMON)
+            except Exception:
+                authority = UnavailableDriverAuthorityAdapter()
+                self._agent._provider_call_admission_port = authority
+                self._agent._derived_launch_admission_port = authority
+                parent = authority.derived_provider_parent(ProviderCallClass.DAEMON)
+            self._agent._derived_provider_admission_parent = parent
         self._agent._config.language = manifest.get("language", "en") or "en"
         self._agent.service = SimpleNamespace(
             model=(manifest.get("llm") or {}).get("model", "unknown"),
@@ -531,6 +564,18 @@ class DetachedDaemonExecutionHost:
         if backend == "lingtai":
             schemas, dispatch = self._build_lingtai_surface()
             preset_llm = self._manifest.get("preset_llm") or self._manifest.get("llm")
+            from lingtai.kernel.provider_admission import (
+                DerivedProviderAdmission,
+                bind_provider_admission,
+                clear_provider_admission,
+            )
+
+            parent = getattr(self._agent, "_derived_provider_admission_parent", None)
+            token = (
+                bind_provider_admission(parent)
+                if isinstance(parent, DerivedProviderAdmission)
+                else None
+            )
             try:
                 return self._manager_type._run_emanation(
                     self,
@@ -549,6 +594,8 @@ class DetachedDaemonExecutionHost:
                 )
             finally:
                 self._task_mcp_clients = []
+                if token is not None:
+                    clear_provider_admission(token)
 
         self._rehydrate_native_mcp_files()
         spec = _backend_spec(backend)
