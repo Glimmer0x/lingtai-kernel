@@ -124,6 +124,63 @@ def test_raw_provider_service_construction_inventory_is_explicit():
     }
 
 
+def test_derived_launch_constructor_inventory_is_explicit():
+    """Every direct derived-launch request constructor needs classification.
+
+    This is step 1 of the v0 derived-admission transition.  It intentionally
+    inventories the request constructors, rather than claiming that a green
+    static scan proves every possible launch route: dynamic factories,
+    registry lookup, and subclass/wrapper overrides remain Contract-declared
+    blind spots for focused review and production-path E2E.
+
+    Direct names, ``from … import … as`` aliases (including package
+    re-exports), and attribute calls are all matched.  A new direct request
+    constructor must be explicitly classified before it can land.
+    """
+    root = Path(__file__).resolve().parents[1]
+    targets = {"DaemonSupervisorRequest", "AvatarLaunchRequest"}
+    inventory: set[tuple[str, int, str]] = set()
+
+    for source in (root / "src" / "lingtai").rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        aliases = set(targets)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            for imported in node.names:
+                if imported.name in targets:
+                    aliases.add(imported.asname or imported.name)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id in aliases:
+                constructor = node.func.id
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in targets
+            ):
+                constructor = node.func.attr
+            else:
+                continue
+            inventory.add((str(source.relative_to(root)), node.lineno, constructor))
+
+    assert inventory == {
+        # Decode is not a launch, but it is the one wire re-construction point
+        # and therefore must stay visible beside the production constructors.
+        ("src/lingtai/kernel/daemon_supervisor/__init__.py", 97,
+         "DaemonSupervisorRequest"),
+        # LingTai-backend daemon launch and external-CLI daemon launch.
+        ("src/lingtai/tools/daemon/__init__.py", 3520,
+         "DaemonSupervisorRequest"),
+        ("src/lingtai/tools/daemon/__init__.py", 5876,
+         "DaemonSupervisorRequest"),
+        # Avatar detached-child launch.
+        ("src/lingtai/tools/avatar/__init__.py", 873,
+         "AvatarLaunchRequest"),
+    }
+
+
 def test_provider_dispatch_concurrency_inventory_is_explicit():
     """Concurrency creation points must be classified before they can land.
 
