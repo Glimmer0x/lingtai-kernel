@@ -394,7 +394,15 @@ Clause IDs are stable; each rule composes the linked normative source.
    daemon/avatar services remain outside this inventory until their separate
    driver-mediated adapter is wired. Adding another dispatch mechanism between
    an admitted parent and a wrapped provider call requires a propagation test
-   at that concrete boundary; no inferred coverage is sufficient.
+   at that concrete boundary; no inferred coverage is sufficient. The source
+   creation-point inventory in `tests/test_provider_admission.py` independently
+   enumerates direct `Thread`, executor, `to_thread`, and `run_in_executor`
+   calls under `src/lingtai/**`. It classifies the session timeout pool and
+   Soul worker as context-propagation boundaries, `APICallGate` as
+   post-admission dispatch, and every other current point as outside root
+   provider dispatch. A new direct creation point therefore fails until it is
+   classified; this structural tripwire is not a whole-program proof over
+   dynamic concurrency factories.
    A constrained composition MUST carry its origin policy at startup; a missing
    required policy rejects rather than falling back to the generic default. Its
    closed inbox surface is `MESSAGE_TYPES`: every canonical message other than

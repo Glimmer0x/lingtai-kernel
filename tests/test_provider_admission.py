@@ -124,6 +124,116 @@ def test_raw_provider_service_construction_inventory_is_explicit():
     }
 
 
+def test_provider_dispatch_concurrency_inventory_is_explicit():
+    """Concurrency creation points must be classified before they can land.
+
+    Provider admission is ambient state at the Core boundary.  A new thread or
+    executor can therefore become a previously-unseen propagation boundary.
+    This source inventory is deliberately broad: each entry is classified in
+    the provider-admission Contract as either a propagation boundary or a
+    non-provider worker.  Adding a creation point without updating that
+    classification must fail review.
+    """
+    root = Path(__file__).resolve().parents[1]
+    constructors = {
+        "Thread",
+        "ThreadPoolExecutor",
+        "ProcessPoolExecutor",
+        "to_thread",
+        "run_in_executor",
+    }
+    inventory: set[tuple[str, int, str]] = set()
+    for source in (root / "src" / "lingtai").rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id in constructors:
+                constructor = node.func.id
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in constructors
+            ):
+                constructor = node.func.attr
+            else:
+                continue
+            inventory.add((str(source.relative_to(root)), node.lineno, constructor))
+
+    provider_context_propagation = {
+        ("src/lingtai/kernel/session.py", 289, "ThreadPoolExecutor"),
+        ("src/lingtai/tools/soul/consultation.py", 67, "Thread"),
+    }
+    post_admission_provider_dispatch = {
+        ("src/lingtai/llm/api_gate.py", 42, "ThreadPoolExecutor"),
+        ("src/lingtai/llm/api_gate.py", 43, "Thread"),
+    }
+    outside_root_provider_dispatch = {
+        ("src/lingtai/adapters/acp/server.py", 277, "Thread"),
+        ("src/lingtai/adapters/acp/server.py", 304, "Thread"),
+        ("src/lingtai/adapters/acp/server.py", 726, "Thread"),
+        ("src/lingtai/adapters/browser_transport.py", 56, "Thread"),
+        ("src/lingtai/adapters/posix/daemon_manager.py", 283, "Thread"),
+        ("src/lingtai/adapters/posix/daemon_manager.py", 506, "Thread"),
+        ("src/lingtai/adapters/posix/mail.py", 282, "Thread"),
+        ("src/lingtai/kernel/base_agent/lifecycle.py", 444, "Thread"),
+        ("src/lingtai/kernel/base_agent/lifecycle.py", 623, "Thread"),
+        ("src/lingtai/kernel/base_agent/lifecycle.py", 799, "Thread"),
+        ("src/lingtai/kernel/llm_utils.py", 302, "ThreadPoolExecutor"),
+        ("src/lingtai/kernel/nudge/__init__.py", 230, "Thread"),
+        ("src/lingtai/kernel/nudge/kernel_version.py", 137, "Thread"),
+        ("src/lingtai/kernel/preset_connectivity.py", 211, "ThreadPoolExecutor"),
+        ("src/lingtai/kernel/session_stats/__init__.py", 461, "Thread"),
+        ("src/lingtai/kernel/tool_executor.py", 1625, "ThreadPoolExecutor"),
+        ("src/lingtai/llm/openai/codex_quota.py", 153, "Thread"),
+        ("src/lingtai/mcp_servers/cloud_mail/manager.py", 391, "Thread"),
+        ("src/lingtai/mcp_servers/cloud_mail/server.py", 173, "to_thread"),
+        ("src/lingtai/mcp_servers/feishu/account.py", 475, "Thread"),
+        ("src/lingtai/mcp_servers/feishu/server.py", 711, "to_thread"),
+        ("src/lingtai/mcp_servers/feishu/task_card.py", 323, "Thread"),
+        ("src/lingtai/mcp_servers/feishu/task_card.py", 404, "Thread"),
+        ("src/lingtai/mcp_servers/imap/account.py", 880, "Thread"),
+        ("src/lingtai/mcp_servers/imap/bridge.py", 62, "Thread"),
+        ("src/lingtai/mcp_servers/imap/server.py", 639, "to_thread"),
+        ("src/lingtai/mcp_servers/telegram/account.py", 285, "Thread"),
+        ("src/lingtai/mcp_servers/telegram/manager.py", 451, "Thread"),
+        ("src/lingtai/mcp_servers/telegram/manager.py", 2587, "Thread"),
+        ("src/lingtai/mcp_servers/telegram/manager.py", 3633, "Thread"),
+        ("src/lingtai/mcp_servers/telegram/manager.py", 3663, "Thread"),
+        ("src/lingtai/mcp_servers/telegram/server.py", 755, "to_thread"),
+        ("src/lingtai/mcp_servers/telegram/task_card/controller.py", 429, "Thread"),
+        ("src/lingtai/mcp_servers/wechat/manager.py", 223, "Thread"),
+        ("src/lingtai/mcp_servers/wechat/server.py", 937, "to_thread"),
+        ("src/lingtai/mcp_servers/whatsapp/client.py", 104, "Thread"),
+        ("src/lingtai/mcp_servers/whatsapp/client.py", 111, "Thread"),
+        ("src/lingtai/mcp_servers/whatsapp/server.py", 218, "to_thread"),
+        ("src/lingtai/services/mcp.py", 574, "Thread"),
+        ("src/lingtai/services/mcp.py", 967, "Thread"),
+        ("src/lingtai/services/mcp_inbox.py", 606, "Thread"),
+        ("src/lingtai/tools/bash/__init__.py", 1306, "Thread"),
+        ("src/lingtai/tools/bash/__init__.py", 1467, "Thread"),
+        ("src/lingtai/tools/bash/__init__.py", 1714, "Thread"),
+        ("src/lingtai/tools/daemon/__init__.py", 1764, "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/__init__.py", 6507, "Thread"),
+        ("src/lingtai/tools/daemon/__init__.py", 9111, "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/claude_interactive.py", 611, "Thread"),
+        ("src/lingtai/tools/daemon/execution_host.py", 610, "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/posix_process.py", 112, "Thread"),
+        ("src/lingtai/tools/daemon/runtime.py", 133, "Thread"),
+        ("src/lingtai/tools/daemon/runtime.py", 220, "Thread"),
+        ("src/lingtai/tools/daemon/supervisor_runtime.py", 284, "Thread"),
+        ("src/lingtai/tools/daemon/windows_process.py", 353, "Thread"),
+        ("src/lingtai/tools/email/manager.py", 321, "Thread"),
+        ("src/lingtai/tools/soul/__init__.py", 244, "Thread"),
+        ("src/lingtai/tools/soul/consultation.py", 594, "Thread"),
+        ("src/lingtai/tools/task_card/__init__.py", 652, "Thread"),
+    }
+    assert inventory == (
+        provider_context_propagation
+        | post_admission_provider_dispatch
+        | outside_root_provider_dispatch
+    )
+
+
 def test_every_session_send_and_generate_crosses_the_same_admission_port():
     inner = _InnerService()
     port = _RecordingAdmissionPort()
