@@ -177,7 +177,7 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
         return self._identity.launch_id
 
     def derived_provider_parent(
-        self, expected_call_class: ProviderCallClass | None = None
+        self, expected_call_class: ProviderCallClass
     ) -> DerivedProviderAdmission:
         """Return the local Core context for this Driver-bound child endpoint.
 
@@ -195,7 +195,9 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
             if capability is DerivedLaunchCapability.DAEMON
             else ProviderCallClass.AVATAR_CHILD
         )
-        if expected_call_class is not None and call_class is not expected_call_class:
+        if not isinstance(expected_call_class, ProviderCallClass):
+            raise TypeError("expected_call_class must be a ProviderCallClass")
+        if call_class is not expected_call_class:
             raise DriverAuthorityEndpointBindingMismatch(
                 "authority endpoint capability does not match local child mode"
             )

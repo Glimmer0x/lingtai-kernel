@@ -349,6 +349,31 @@ def test_local_child_mode_must_match_the_driver_endpoint_capability(
     assert errors == []
 
 
+def test_derived_provider_parent_requires_an_explicit_local_child_mode():
+    """A new composition cannot silently skip its endpoint-mode comparison."""
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "role": "derived",
+                "launch_id": "child-1",
+                "capability": "daemon",
+            },
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    with pytest.raises(TypeError, match="expected_call_class"):
+        adapter.derived_provider_parent()  # type: ignore[call-arg]
+    adapter.close()
+    thread.join(timeout=2)
+    assert errors == []
+
+
 @pytest.mark.parametrize(
     "call_class", [ProviderCallClass.DAEMON, ProviderCallClass.AVATAR_CHILD]
 )
@@ -419,7 +444,7 @@ def test_derived_provider_call_uses_its_own_endpoint_and_driver_known_fields():
 
     thread, errors = _server_thread(server, handler)
     adapter = DriverAuthorityAdapter(client)
-    parent = adapter.derived_provider_parent()
+    parent = adapter.derived_provider_parent(ProviderCallClass.DAEMON)
     decision = adapter.authorize_provider_call(parent, ProviderCallClass.DAEMON)
     thread.join(timeout=2)
 
@@ -459,7 +484,8 @@ def test_driver_reports_endpoint_binding_mismatch_as_a_distinct_denial():
     thread, errors = _server_thread(server, handler)
     adapter = DriverAuthorityAdapter(client)
     decision = adapter.authorize_provider_call(
-        adapter.derived_provider_parent(), ProviderCallClass.AVATAR_CHILD
+        adapter.derived_provider_parent(ProviderCallClass.AVATAR_CHILD),
+        ProviderCallClass.AVATAR_CHILD,
     )
     thread.join(timeout=2)
 

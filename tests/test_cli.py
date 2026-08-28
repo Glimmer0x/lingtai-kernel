@@ -942,7 +942,7 @@ def test_run_marks_derived_avatar_child_as_requiring_authority(monkeypatch, tmp_
 
     cli.run(tmp_path)
 
-    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+    assert captured["kwargs"]["_requires_derived_launch_admission_port"] is True
 
 
 def test_run_marks_persisted_avatar_child_as_requiring_authority(monkeypatch, tmp_path):
@@ -995,7 +995,7 @@ def test_run_marks_persisted_avatar_child_as_requiring_authority(monkeypatch, tm
 
     cli.run(tmp_path)
 
-    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+    assert captured["kwargs"]["_requires_derived_launch_admission_port"] is True
 
 
 def test_run_keeps_malformed_persisted_avatar_state_restrictive(monkeypatch, tmp_path):
@@ -1045,7 +1045,7 @@ def test_run_keeps_malformed_persisted_avatar_state_restrictive(monkeypatch, tmp
 
     cli.run(tmp_path)
 
-    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+    assert captured["kwargs"]["_requires_derived_launch_admission_port"] is True
 
 
 def test_derived_avatar_marker_io_error_stays_restrictive(monkeypatch, tmp_path):

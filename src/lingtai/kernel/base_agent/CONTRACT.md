@@ -418,7 +418,10 @@ Clause IDs are stable; each rule composes the linked normative source.
    supervisor manifest before child start. Env is redundant only. Losing the
    fd or env on a later restart
    therefore installs an unavailable provider gate and rejects before provider
-   I/O rather than restoring generic behavior. Core's local one-shot lease guard is resource management,
+   I/O rather than restoring generic behavior. Those persistent child-local
+   requirements prevent accidental launch and restart confusion; they do not
+   resist a same-OS-user child that can rewrite its own avatar directory or
+   daemon run manifest to remove/downgrade the requirement. Core's local one-shot lease guard is resource management,
    not the security claim: the Driver must atomically enforce
    `ISSUED -> CLAIMED` when the first v1 handshake succeeds, and must
    deny/audit every competing or later claimant. Any wire disagreement with
