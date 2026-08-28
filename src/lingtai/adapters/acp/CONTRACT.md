@@ -245,15 +245,19 @@ argv, environment, or MCP command from the remote caller.
     derived-launch Port. Its carrier is a Driver-created connected Unix-domain
     socket endpoint, not a token, path, environment value, or audit id. A root
     endpoint is inherited only by the ACP host and becomes close-on-exec; an
-    allowed one-hop launch receives a separate single-use child endpoint by
-    `SCM_RIGHTS`, consumed only by the exact POSIX `pass_fds` spawn. Core does
+    allowed one-hop launch receives a separate child endpoint by `SCM_RIGHTS`.
+    Core's local one-shot lease only manages its fd; the Driver server must
+    atomically claim `ISSUED -> CLAIMED` on the first successful v1 handshake
+    and deny/audit all later or competing claimants. The exact POSIX
+    `pass_fds` spawn is the only Core consumer. Core does
     not parse fd/frame/registry data. A derived endpoint is server-bound to
     `depth=1` and cannot mint another child. A persistent derived marker means
     authority is required, never granted: missing, closed, malformed, or
     unavailable transport is a structured indeterminate denial before any
     spawn/provider I/O and never a `legacy_default` fallback. This wiring does
     not itself establish the external Driver server, identity/workdir binding,
-    CAS grant consumption, or dynamic revoke, so it does not yet claim those
+    CAS grant consumption, replay protection, exactly-once I/O, or dynamic
+    revoke, so it does not yet claim those
     protections or complete all-turn coverage. This controls who may start a root
     turn, not what state a later admitted turn may read: non-ACP sources may
     still write state. The profile adds no `external_send` approval

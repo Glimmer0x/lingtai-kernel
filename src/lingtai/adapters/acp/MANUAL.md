@@ -149,9 +149,15 @@ authority adapter. The Driver supplies a connected Unix socket endpoint as a
 controlled inherited fd; the fd number is only a locator. The adapter marks it
 close-on-exec, uses a bounded v1 framed exchange, and maps a missing, wrong,
 closed, malformed, or timed-out endpoint to structured indeterminacy before
-spawn/provider I/O. An approved root launch receives a different one-use child
+spawn/provider I/O. An approved root launch receives a different child
 endpoint; Core carries its opaque lease, and only the precise POSIX spawn uses
-it in `pass_fds`. Do not set `LINGTAI_DRIVER_AUTHORITY_FD` manually: a marker
+it in `pass_fds`. Core's local one-shot check is only resource management: the
+Driver must atomically claim `ISSUED -> CLAIMED` at the first successful v1
+handshake and reject/audit later or competing claims. A wire mismatch with
+Driver-bound launch, capability, provider, role, or depth is `DENIED /
+endpoint_binding_mismatch`. Until Driver CAS work lands, each provider
+authorization is a decision, not replay protection or exactly-once
+consumption. Do not set `LINGTAI_DRIVER_AUTHORITY_FD` manually: a marker
 only says a child requires authority and is never a grant. The Driver server
 must still provide verified ancestry and decide every actual provider call.
 This repository does not claim its identity/workdir binding, CAS consumption,

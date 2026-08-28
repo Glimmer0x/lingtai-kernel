@@ -402,7 +402,7 @@ Clause IDs are stable; each rule composes the linked normative source.
    composition now supplies `DriverAuthorityAdapter` as both Ports. Its only
    authority carrier is a Driver-created connected Unix-domain socket endpoint:
    an inherited root endpoint is close-on-exec, while an allowed root launch
-   receives a separate, opaque, one-use child-endpoint lease through `SCM_RIGHTS`.
+   receives a separate, opaque child-endpoint lease through `SCM_RIGHTS`.
    Core carries that lease without parsing an fd, frame, registry entry, path,
    depth, or lineage. Only the exact POSIX child launch adapter consumes it
    into an allowlisted `pass_fds` handoff. A persisted derived child has a
@@ -410,7 +410,16 @@ Clause IDs are stable; each rule composes the linked normative source.
    exists; an absent, closed, malformed, version-mismatched, or unavailable
    endpoint is structured `INDETERMINATE` before spawn or provider I/O and can
    never fall back to `legacy_default`. A derived endpoint cannot mint a second
-   child endpoint. This Core wiring deliberately does not claim that the
+   child endpoint. Core's local one-shot lease guard is resource management,
+   not the security claim: the Driver must atomically enforce
+   `ISSUED -> CLAIMED` when the first v1 handshake succeeds, and must
+   deny/audit every competing or later claimant. Any wire disagreement with
+   the Driver-bound launch, capability, provider, role, or depth is the
+   distinct high-signal `DENIED / endpoint_binding_mismatch`, never an
+   ordinary business denial. Until the external #299 CAS work lands,
+   `authorize_provider_call` is a per-call decision only: it does not provide
+   replay protection, atomic consumption, or exactly-once provider I/O.
+   This Core wiring deliberately does not claim that the
    external Driver server, registry/identity binding, grant-CAS consumption, or
    dynamic revoke is implemented here. The following remain **constrained host-
    adapter requirements**, not claims made by this Core seam:

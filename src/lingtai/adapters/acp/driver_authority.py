@@ -50,12 +50,16 @@ class _EndpointIdentity:
 
 
 class DriverChildEndpointLease:
-    """Adapter-private, one-use ownership of a Driver-created child endpoint.
+    """Adapter-private ownership of a Driver-created child endpoint.
 
     Core may carry this object opaquely inside a ``DerivedLaunchDecision`` but
     cannot read its descriptor or reconstruct it from a string.  Only the
     POSIX launch adapters consume it to produce a narrowly allowlisted
-    ``pass_fds`` handoff for the immediate child process.
+    ``pass_fds`` handoff for the immediate child process. Its local one-shot
+    guard is resource management and an early-error aid only. The security
+    property belongs to the Driver: its server-side lease state machine must
+    atomically claim ``ISSUED -> CLAIMED`` during the first successful v1
+    handshake and reject/audit every competing or later claimant.
     """
 
     __slots__ = ("_socket", "_consumed")

@@ -194,6 +194,46 @@ def test_derived_provider_call_uses_its_own_endpoint_and_driver_known_fields():
     assert decision.admission_id == "admission-provider-1"
 
 
+def test_driver_reports_endpoint_binding_mismatch_as_a_distinct_denial():
+    """Core preserves the Driver's high-signal binding-mismatch decision."""
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "role": "derived",
+                "launch_id": "child-1",
+                "capability": "avatar",
+            },
+        )
+        request = _recv_frame(sock)
+        assert request["op"] == "authorize_provider_call"
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "state": "denied",
+                "reason_code": "endpoint_binding_mismatch",
+                "audit_id": "audit-binding-mismatch",
+            },
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    decision = adapter.authorize_provider_call(
+        adapter.derived_provider_parent(), ProviderCallClass.AVATAR_CHILD
+    )
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.DENIED
+    assert decision.reason_code == "endpoint_binding_mismatch"
+    assert decision.audit_id == "audit-binding-mismatch"
+
+
 @pytest.mark.parametrize(
     "payload",
     [
