@@ -269,6 +269,50 @@ def test_posix_supervisor_hands_only_one_driver_child_endpoint_to_its_child(
     assert read_manifest(manifest_path_for(run_dir.path))["derived_launch_admission_required"] is True
 
 
+def test_supervisor_reserve_endpoint_skips_resume_owner_and_reaches_execution_child(
+    tmp_path, monkeypatch,
+):
+    """Only the exact execution-child module may consume the held endpoint."""
+    from lingtai.adapters.posix import daemon_supervisor as supervisor_module
+
+    run_dir = _make_run_dir(tmp_path, task="authority module routing")
+    client, driver = socket.socketpair()
+    calls = []
+
+    def fake_popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(supervisor_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(client.fileno()))
+    supervisor_module.adopt_supervisor_authority_endpoint()
+    adapter = PosixDaemonSupervisorAdapter()
+    try:
+        adapter.spawn_resume_owner(
+            python_executable=sys.executable,
+            manifest_path=str(run_dir.path / "manifest.json"),
+            run_id=run_dir.run_id,
+            run_dir=run_dir.path,
+            generation="g1",
+        )
+        adapter.spawn_execution_child(
+            python_executable=sys.executable,
+            manifest_path=str(run_dir.path / "manifest.json"),
+            run_id=run_dir.run_id,
+            run_dir=run_dir.path,
+        )
+    finally:
+        driver.close()
+
+    assert len(calls) == 2
+    _resume_args, resume_kwargs = calls[0]
+    _execution_args, execution_kwargs = calls[1]
+    assert "LINGTAI_DRIVER_AUTHORITY_FD" not in resume_kwargs["env"]
+    assert resume_kwargs["pass_fds"] == ()
+    assert "LINGTAI_DRIVER_AUTHORITY_FD" in execution_kwargs["env"]
+    assert len(execution_kwargs["pass_fds"]) == 1
+
+
 def test_detached_lingtai_run_survives_agent_stop_shutdown_and_reaches_done(tmp_path):
     """Acceptance test 1: real detached LingTai run outlives shutdown_for_agent_stop."""
     from lingtai.tools import daemon as daemon_module
@@ -1254,6 +1298,102 @@ def test_persisted_daemon_child_without_fd_fails_before_provider_io(tmp_path, mo
     assert inner.session.calls == []
 
 
+def test_daemon_execution_composition_preserves_cross_mode_endpoint_binding_denial(
+    tmp_path, monkeypatch,
+):
+    """An avatar endpoint in the real daemon host keeps the mismatch reason."""
+    from lingtai.adapters.acp.driver_authority import (
+        DRIVER_AUTHORITY_FD_ENV,
+        EndpointBindingMismatchAuthorityAdapter,
+    )
+    from lingtai.kernel.daemon_supervisor.manifest import (
+        mark_manifest_requires_derived_launch_admission,
+        read_manifest,
+    )
+    from lingtai.kernel.provider_admission import (
+        ProviderAdmittedLLMService,
+        ProviderAdmissionError,
+        bind_provider_admission,
+        clear_provider_admission,
+    )
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    class _InnerSession:
+        def __init__(self):
+            self.calls = []
+            self.interface = object()
+            self.pre_request_hook = None
+
+        def send(self, message):
+            self.calls.append(message)
+            return message
+
+    class _InnerService:
+        def __init__(self):
+            self.session = _InnerSession()
+
+        def create_session(self, *_args, **_kwargs):
+            return self.session
+
+    monkeypatch.delenv("LINGTAI_DERIVED_DAEMON_EXECUTION", raising=False)
+    run_dir = _make_run_dir(tmp_path, task="daemon endpoint cross-mode")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="daemon endpoint cross-mode", tools=[], max_turns=1, timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+    write_manifest(run_dir.path, manifest)
+    mark_manifest_requires_derived_launch_admission(run_dir.path)
+    manifest = read_manifest(manifest_path_for(run_dir.path))
+    client, server = socket.socketpair()
+    server_errors = []
+
+    def driver_server():
+        try:
+            header = server.recv(4)
+            assert len(header) == 4
+            size = struct.unpack("!I", header)[0]
+            assert json.loads(server.recv(size).decode()) == {"version": 1, "op": "hello"}
+            payload = json.dumps(
+                {"version": 1, "role": "derived", "launch_id": "avatar-child", "capability": "avatar"},
+                separators=(",", ":"),
+            ).encode()
+            server.sendall(struct.pack("!I", len(payload)) + payload)
+        except BaseException as exc:
+            server_errors.append(exc)
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=driver_server)
+    thread.start()
+    monkeypatch.setenv(DRIVER_AUTHORITY_FD_ENV, str(client.fileno()))
+    try:
+        host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    finally:
+        try:
+            client.close()
+        except OSError:
+            pass
+    thread.join(timeout=2)
+
+    assert server_errors == []
+    port = host._agent._provider_call_admission_port
+    assert isinstance(port, EndpointBindingMismatchAuthorityAdapter)
+    inner = _InnerService()
+    service = ProviderAdmittedLLMService(inner, port)
+    token = bind_provider_admission(host._agent._derived_provider_admission_parent)
+    try:
+        with pytest.raises(ProviderAdmissionError, match="endpoint_binding_mismatch"):
+            service.create_session("system").send("must-not-reach-provider")
+    finally:
+        clear_provider_admission(token)
+    assert inner.session.calls == []
+
+
 def test_v3_daemon_manifest_missing_or_malformed_requirement_is_restrictive(tmp_path):
     """Only an explicit v3 false, or legacy v2, may retain generic behavior."""
     from lingtai.kernel.daemon_supervisor.manifest import (
@@ -1307,6 +1447,12 @@ def test_real_daemon_second_hop_loses_root_fd_but_keeps_the_adopted_endpoint(
     monkeypatch.setenv("PYTHONPATH", source_root + os.pathsep + str(Path(source_root) / "src"))
     monkeypatch.setenv("ROOT_AUTHORITY_FD", str(root_client.fileno()))
     monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(child_client.fileno()))
+    # The subprocess probe replaces the execution entrypoint solely to inspect
+    # its inherited descriptors.  The companion module-routing test exercises
+    # the production ``spawn_execution_child`` selection itself.
+    monkeypatch.setattr(
+        supervisor_module, "EXECUTION_CHILD_MODULE", "tests._daemon_authority_probe"
+    )
     supervisor_module.adopt_supervisor_authority_endpoint()
     assert "LINGTAI_DRIVER_AUTHORITY_FD" not in os.environ
     server = threading.Thread(target=driver_server)

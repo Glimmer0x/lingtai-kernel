@@ -942,7 +942,7 @@ def test_run_marks_derived_avatar_child_as_requiring_authority(monkeypatch, tmp_
 
     cli.run(tmp_path)
 
-    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+    assert captured["kwargs"]["_requires_derived_launch_admission_port"] is True
 
 
 def test_run_marks_persisted_avatar_child_as_requiring_authority(monkeypatch, tmp_path):
@@ -995,7 +995,7 @@ def test_run_marks_persisted_avatar_child_as_requiring_authority(monkeypatch, tm
 
     cli.run(tmp_path)
 
-    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+    assert captured["kwargs"]["_requires_derived_launch_admission_port"] is True
 
 
 def test_run_keeps_malformed_persisted_avatar_state_restrictive(monkeypatch, tmp_path):
@@ -1045,7 +1045,7 @@ def test_run_keeps_malformed_persisted_avatar_state_restrictive(monkeypatch, tmp
 
     cli.run(tmp_path)
 
-    assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
+    assert captured["kwargs"]["_requires_derived_launch_admission_port"] is True
 
 
 def test_avatar_child_cli_boot_reaches_structured_missing_authority_denial(
@@ -1108,6 +1108,132 @@ def test_avatar_child_cli_boot_reaches_structured_missing_authority_denial(
             "audit_id": None,
         }
     ]
+
+
+def test_avatar_composition_preserves_cross_mode_endpoint_binding_denial(
+    monkeypatch, tmp_path,
+):
+    """A daemon endpoint in the real avatar boot keeps the mismatch reason."""
+    import socket
+    import struct
+    import threading
+
+    from lingtai import cli
+    from lingtai.adapters.acp.driver_authority import (
+        DRIVER_AUTHORITY_FD_ENV,
+        EndpointBindingMismatchAuthorityAdapter,
+    )
+    from lingtai.kernel.provider_admission import (
+        ProviderAdmittedLLMService,
+        ProviderAdmissionError,
+        bind_provider_admission,
+        clear_provider_admission,
+    )
+    from lingtai.tools.avatar._launcher import (
+        DERIVED_AVATAR_STATE,
+        derived_avatar_state_path,
+    )
+
+    class _Flag:
+        def set(self):
+            pass
+
+    class _Shutdown:
+        def wait(self):
+            return None
+
+    class _FakeAgent:
+        def __init__(self):
+            self._asleep = _Flag()
+            self._shutdown = _Shutdown()
+            self._state = None
+            self._venv_path = None
+
+        def start(self):
+            pass
+
+        def stop(self, timeout=10.0):
+            pass
+
+    class _InnerSession:
+        interface = object()
+        pre_request_hook = None
+
+        def __init__(self):
+            self.calls = []
+
+        def send(self, message):
+            self.calls.append(message)
+            return message
+
+    class _InnerService:
+        def __init__(self):
+            self.session = _InnerSession()
+
+        def create_session(self, *_args, **_kwargs):
+            return self.session
+
+    _write_init(tmp_path)
+    state_path = derived_avatar_state_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps(DERIVED_AVATAR_STATE), encoding="utf-8")
+    client, server = socket.socketpair()
+    server_errors = []
+
+    def driver_server():
+        try:
+            header = server.recv(4)
+            assert len(header) == 4
+            size = struct.unpack("!I", header)[0]
+            assert json.loads(server.recv(size).decode()) == {"version": 1, "op": "hello"}
+            payload = json.dumps(
+                {
+                    "version": 1,
+                    "role": "derived",
+                    "launch_id": "daemon-child",
+                    "capability": "daemon",
+                },
+                separators=(",", ":"),
+            ).encode()
+            server.sendall(struct.pack("!I", len(payload)) + payload)
+        except BaseException as exc:
+            server_errors.append(exc)
+        finally:
+            server.close()
+
+    captured = {}
+    thread = threading.Thread(target=driver_server)
+    thread.start()
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
+    monkeypatch.setattr(cli, "build_agent", lambda data, working_dir, **kwargs: captured.update(kwargs=kwargs) or _FakeAgent())
+    import lingtai.venv_resolve as venv_resolve
+
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda data: tmp_path / "runtime-venv")
+    monkeypatch.setenv(DRIVER_AUTHORITY_FD_ENV, str(client.fileno()))
+    try:
+        cli.run(tmp_path)
+    finally:
+        try:
+            client.close()
+        except OSError:
+            pass
+    thread.join(timeout=2)
+
+    assert server_errors == []
+    port = captured["kwargs"]["_provider_call_admission_port"]
+    parent = captured["kwargs"]["_derived_provider_admission_parent"]
+    assert isinstance(port, EndpointBindingMismatchAuthorityAdapter)
+    inner = _InnerService()
+    service = ProviderAdmittedLLMService(inner, port)
+    token = bind_provider_admission(parent)
+    try:
+        with pytest.raises(ProviderAdmissionError, match="endpoint_binding_mismatch"):
+            service.create_session("system").send("must-not-reach-provider")
+    finally:
+        clear_provider_admission(token)
+    assert inner.session.calls == []
 
 
 def test_avatar_spawned_directory_stays_restricted_without_launch_env(

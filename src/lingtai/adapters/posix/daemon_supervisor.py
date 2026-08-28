@@ -72,10 +72,12 @@ def adopt_supervisor_authority_endpoint() -> None:
     _SUPERVISOR_AUTHORITY_ENDPOINT = endpoint
 
 
-def _take_supervisor_authority_fd() -> int | None:
-    """Detach the exact adopted endpoint for the one execution child only."""
+def _take_supervisor_authority_fd(module: str) -> int | None:
+    """Detach the exact endpoint only for the execution-child entrypoint."""
 
     global _SUPERVISOR_AUTHORITY_ENDPOINT
+    if module != EXECUTION_CHILD_MODULE:
+        return None
     endpoint = _SUPERVISOR_AUTHORITY_ENDPOINT
     _SUPERVISOR_AUTHORITY_ENDPOINT = None
     if endpoint is None:
@@ -260,7 +262,7 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
         parts = [str(source_root)]
         parts.extend(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)
         env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(parts))
-        authority_fd = _take_supervisor_authority_fd()
+        authority_fd = _take_supervisor_authority_fd(module)
         if authority_fd is not None:
             # The env value is just a locator for this exact object in the
             # execution child. The supervisor no longer retains either form.
