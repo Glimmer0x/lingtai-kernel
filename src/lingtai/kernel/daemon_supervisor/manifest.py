@@ -13,8 +13,10 @@ import shlex
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-MANIFEST_SCHEMA = "lingtai.daemon_supervisor_manifest.v2"
+MANIFEST_SCHEMA = "lingtai.daemon_supervisor_manifest.v3"
+_LEGACY_MANIFEST_SCHEMA = "lingtai.daemon_supervisor_manifest.v2"
 MANIFEST_FILENAME = "supervisor_manifest.json"
+DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD = "derived_launch_admission_required"
 _REQUIRED_FIELDS = (
     "schema", "run_id", "backend", "parent_working_dir", "run_dir", "task",
     "tools", "max_turns", "timeout_s", "group_id",
@@ -39,6 +41,20 @@ _SENSITIVE_CONTAINER_RE = re.compile(
 
 def manifest_path_for(run_dir: Path) -> Path:
     return Path(run_dir) / MANIFEST_FILENAME
+
+
+def manifest_requires_derived_launch_admission(manifest: dict) -> bool:
+    """Read the durable restrictive bit without letting malformed v3 widen.
+
+    v2 manifests predate this security property and keep their historical
+    generic behavior. Every v3 manifest is explicit at construction; a missing
+    or malformed value in v3 is deliberately restrictive instead of silently
+    restoring legacy provider I/O.
+    """
+
+    if manifest.get("schema") != MANIFEST_SCHEMA:
+        return False
+    return manifest.get(DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD) is not False
 
 
 def _is_reference_key(key: object) -> bool:
@@ -269,6 +285,7 @@ def build_manifest(
     """Build the supervisor input record without resolved credentials."""
     return {
         "schema": MANIFEST_SCHEMA,
+        DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD: False,
         "run_id": run_id,
         "backend": backend,
         "parent_working_dir": parent_working_dir,
@@ -302,13 +319,24 @@ def write_manifest(run_dir: Path, manifest: dict) -> Path:
     return path
 
 
+def mark_manifest_requires_derived_launch_admission(run_dir: Path) -> dict:
+    """Atomically persist the derived restriction before process handoff."""
+
+    path = manifest_path_for(run_dir)
+    manifest = read_manifest(path)
+    manifest["schema"] = MANIFEST_SCHEMA
+    manifest[DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD] = True
+    write_manifest(Path(run_dir), manifest)
+    return manifest
+
+
 def read_manifest(path: Path) -> dict:
     """Read and validate identity-bearing manifest fields."""
     path = Path(path).resolve()
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"daemon supervisor manifest at {path} is not a JSON object")
-    if data.get("schema") != MANIFEST_SCHEMA:
+    if data.get("schema") not in {MANIFEST_SCHEMA, _LEGACY_MANIFEST_SCHEMA}:
         raise ValueError(
             f"daemon supervisor manifest at {path} has unexpected schema "
             f"{data.get('schema')!r}, expected {MANIFEST_SCHEMA!r}"
@@ -345,7 +373,9 @@ def redact_durable_argv(argv: list[str] | None) -> list[str] | None:
 
 
 __all__ = [
-    "MANIFEST_SCHEMA", "MANIFEST_FILENAME", "manifest_path_for", "build_manifest",
-    "write_manifest", "read_manifest", "redact_durable_value", "redact_durable_argv",
+    "MANIFEST_SCHEMA", "MANIFEST_FILENAME", "DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD",
+    "manifest_path_for", "manifest_requires_derived_launch_admission", "build_manifest",
+    "write_manifest", "read_manifest", "mark_manifest_requires_derived_launch_admission",
+    "redact_durable_value", "redact_durable_argv",
     "redact_durable_event_fields", "secret_argv_values",
 ]

@@ -57,21 +57,6 @@ def _read_capsule() -> dict | None:
         return None
 
 
-def _mark_driver_authority_cloexec() -> None:
-    """Keep a child authority fd out of arbitrary supervisor descendants."""
-
-    raw_fd = os.environ.get("LINGTAI_DRIVER_AUTHORITY_FD")
-    if raw_fd is None:
-        return
-    try:
-        os.set_inheritable(int(raw_fd), False)
-    except (OSError, ValueError):
-        # Leave the locator in place. The eventual child composition translates
-        # an invalid descriptor to structured INDETERMINATE rather than a
-        # legacy grant.
-        pass
-
-
 def main(argv: list[str]) -> int:
     """Decode the single encoded-request argument and run the supervisor.
 
@@ -86,7 +71,8 @@ def main(argv: list[str]) -> int:
             "usage: python -m lingtai.adapters.posix.daemon_supervisor_entrypoint "
             "<encoded-request>"
         )
-    _mark_driver_authority_cloexec()
+    from .daemon_supervisor import adopt_supervisor_authority_endpoint
+    adopt_supervisor_authority_endpoint()
     request = decode_request(argv[0])
     run_supervisor(request, capsule=_read_capsule())
     return 0
