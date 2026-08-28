@@ -1255,6 +1255,171 @@ def test_avatar_composition_preserves_cross_mode_endpoint_binding_denial(
     assert inner.session.calls == []
 
 
+def test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches(
+    monkeypatch, tmp_path,
+):
+    """Step 3 refusal evidence; this is not complete 2b or a merge gate."""
+    import socket
+    import struct
+    import threading
+
+    from lingtai import cli
+    from lingtai.adapters.acp.driver_authority import DRIVER_AUTHORITY_FD_ENV
+    from lingtai.agent import Agent
+    from lingtai.kernel.provider_admission import (
+        ProviderCallClass,
+        bind_provider_admission,
+        clear_provider_admission,
+    )
+    from lingtai.tools.avatar._launcher import (
+        DERIVED_AVATAR_STATE,
+        derived_avatar_state_path,
+    )
+
+    _write_init(
+        tmp_path,
+        {"manifest": {"capabilities": {"daemon": {}, "avatar": {}}}},
+    )
+    state_path = derived_avatar_state_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps(DERIVED_AVATAR_STATE), encoding="utf-8")
+    client, server = socket.socketpair()
+    server_errors = []
+
+    def driver_server():
+        try:
+            def receive_frame():
+                header = server.recv(4)
+                assert len(header) == 4
+                size = struct.unpack("!I", header)[0]
+                return json.loads(server.recv(size).decode())
+
+            def send_frame(payload):
+                encoded = json.dumps(payload, separators=(",", ":")).encode()
+                server.sendall(struct.pack("!I", len(encoded)) + encoded)
+
+            assert receive_frame() == {"version": 1, "op": "hello"}
+            send_frame(
+                {
+                    "version": 1,
+                    "role": "derived",
+                    "launch_id": "avatar-child",
+                    "capability": "avatar",
+                }
+            )
+            request = receive_frame()
+            assert {
+                key: request[key]
+                for key in ("version", "op", "launch_id", "provider", "capability")
+            } == {
+                "version": 1,
+                "op": "authorize_provider_call",
+                "launch_id": "avatar-child",
+                "provider": "llm",
+                "capability": "avatar_child",
+            }
+            assert isinstance(request["call_id"], str) and request["call_id"]
+            send_frame(
+                {
+                    "version": 1,
+                    "state": "granted",
+                    "reason_code": "ordinary_provider_allowed",
+                    "audit_id": "audit-ordinary-provider",
+                    "admission_id": "admission-ordinary-provider",
+                }
+            )
+        except BaseException as exc:
+            server_errors.append(exc)
+        finally:
+            server.close()
+
+    captured = []
+    real_build_agent = cli.build_agent
+
+    def capture_build_agent(data, working_dir, **kwargs):
+        agent = real_build_agent(data, working_dir, **kwargs)
+        captured.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
+    monkeypatch.setattr(cli, "build_agent", capture_build_agent)
+    monkeypatch.setattr(Agent, "start", lambda self: self._shutdown.set())
+    monkeypatch.setattr(Agent, "stop", lambda self, timeout=10.0: None)
+    monkeypatch.delenv("LINGTAI_DERIVED_AVATAR_EXECUTION", raising=False)
+    thread = threading.Thread(target=driver_server)
+    thread.start()
+    # The adapter takes ownership of the inherited descriptor.  Detach it so
+    # this test's original socket object cannot later close a reused fd.
+    client_fd = client.detach()
+    monkeypatch.setenv(DRIVER_AUTHORITY_FD_ENV, str(client_fd))
+
+    cli.run(tmp_path)
+    child = captured.pop()
+    manager = child.get_capability("daemon")
+    schemas, dispatch = manager._build_tool_surface(["daemon", "avatar"])
+    assert {"daemon", "avatar"} <= {schema.name for schema in schemas}
+    assert {"daemon", "avatar"} <= set(dispatch)
+
+    provider_calls = []
+
+    def recording_provider(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        return "ordinary-provider-result"
+
+    monkeypatch.setattr(child.service._inner, "generate", recording_provider)
+    daemon_audit = []
+    monkeypatch.setattr(
+        child,
+        "_log",
+        lambda event_type, **fields: daemon_audit.append((event_type, fields)),
+    )
+    parent = child._derived_provider_admission_parent
+    assert parent.call_class is ProviderCallClass.AVATAR_CHILD
+    token = bind_provider_admission(parent)
+    try:
+        assert child.service.generate("ordinary provider positive control") == "ordinary-provider-result"
+        assert provider_calls == [(("ordinary provider positive control",), {})]
+        provider_calls.clear()
+
+        def forbidden_provider(*args, **kwargs):
+            provider_calls.append((args, kwargs))
+            raise AssertionError("nested launch must not reach provider I/O")
+
+        monkeypatch.setattr(child.service._inner, "create_session", forbidden_provider)
+        monkeypatch.setattr(child.service._inner, "generate", forbidden_provider)
+        avatar_result = dispatch["avatar"](
+            {"action": "spawn", "input": {"name": "nested-avatar", "confirm": True}}
+        )
+        daemon_result = dispatch["daemon"](
+            {"action": "emanate", "input": {"tasks": [{"task": "nested", "tools": []}]}}
+        )
+    finally:
+        clear_provider_admission(token)
+
+    thread.join(timeout=2)
+    assert server_errors == []
+
+    assert avatar_result["reason_code"] == "nested_derived_launch_denied"
+    assert daemon_result == {
+        "status": "error",
+        "message": "derived launch was not admitted: nested_derived_launch_denied",
+    }
+    assert daemon_audit == [
+        (
+            "derived_launch_admission_decision",
+            {
+                "capability": "daemon",
+                "state": "denied",
+                "reason_code": "nested_derived_launch_denied",
+                "audit_id": None,
+            },
+        )
+    ]
+    assert provider_calls == []
+
+
 def test_avatar_spawned_directory_stays_restricted_without_launch_env(
     monkeypatch, tmp_path,
 ):

@@ -338,10 +338,20 @@ class _ReadOnlyDaemonView:
 
     def __init__(self, agent: _CliDaemonAgent) -> None:
         from lingtai.tools.daemon import DaemonManager
-        from lingtai.adapters.tool_plugin_host import AgentWorkdirAdapter, daemon_runtime_for_agent
+        from lingtai.adapters.tool_plugin_host import (
+            AgentWorkdirAdapter,
+            daemon_runtime_for_agent,
+            persistent_derived_tool_surface_open,
+        )
 
         self._agent = agent
-        self._runtime = daemon_runtime_for_agent(agent, {})
+        self._runtime = daemon_runtime_for_agent(
+            agent,
+            {},
+            read_derived_launch_tool_surface_open=lambda: (
+                persistent_derived_tool_surface_open(agent._working_dir)
+            ),
+        )
         self._workdir = AgentWorkdirAdapter(lambda: agent._working_dir)
         self._emanations: dict = {}
         self._manager_pool_size = 100

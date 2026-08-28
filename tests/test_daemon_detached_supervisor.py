@@ -1770,6 +1770,131 @@ def test_detached_lingtai_file_surface_executes_against_parent_workdir(tmp_path)
     assert read_result["content"] == "1\tdetached file handler works\n"
 
 
+@pytest.mark.parametrize(
+    ("persisted_derived", "expected_derived_tools"),
+    [(False, set()), (True, {"daemon", "avatar"})],
+)
+def test_detached_execution_host_uses_its_manifest_for_the_dynamic_emanation_blacklist(
+    tmp_path, persisted_derived, expected_derived_tools,
+):
+    """Only a persistently derived detached child opens the typed tool paths."""
+    from lingtai.tools.daemon import EMANATION_BLACKLIST
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from lingtai.kernel.daemon_supervisor.manifest import (
+        mark_manifest_requires_derived_launch_admission,
+        read_manifest,
+    )
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="detached dynamic blacklist")
+    manifest = build_manifest(
+        run_id=run_dir.run_id,
+        backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent),
+        run_dir=str(run_dir.path),
+        task="detached dynamic blacklist",
+        tools=["file", "daemon", "avatar"],
+        max_turns=1,
+        timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+
+    write_manifest(run_dir.path, manifest)
+    if persisted_derived:
+        mark_manifest_requires_derived_launch_admission(run_dir.path)
+    manifest = read_manifest(manifest_path_for(run_dir.path))
+
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    expected_blacklist = set(EMANATION_BLACKLIST)
+    expected_blacklist -= expected_derived_tools
+    assert host._emanation_blacklist() == frozenset(expected_blacklist)
+    schemas, dispatch = host._build_lingtai_surface()
+    surface = {schema.name for schema in schemas}
+    assert "file" in surface
+    assert ({"daemon", "avatar"} & surface) == expected_derived_tools
+    assert ({"daemon", "avatar"} & set(dispatch)) == expected_derived_tools
+
+
+def test_persisted_detached_child_opens_both_tools_and_reaches_nested_denial(
+    tmp_path, monkeypatch,
+):
+    """The durable manifest, not the universal required bit, opens this surface."""
+    from lingtai.adapters.acp.driver_authority import DRIVER_AUTHORITY_FD_ENV
+    from lingtai.kernel.daemon_supervisor.manifest import (
+        mark_manifest_requires_derived_launch_admission,
+        read_manifest,
+    )
+    from lingtai.kernel.provider_admission import (
+        DerivedLaunchAdmissionError,
+        ProviderCallClass,
+        bind_provider_admission,
+        clear_provider_admission,
+    )
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="persisted detached nested denial")
+    manifest = build_manifest(
+        run_id=run_dir.run_id,
+        backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent),
+        run_dir=str(run_dir.path),
+        task="persisted detached nested denial",
+        tools=["file", "daemon", "avatar"],
+        max_turns=1,
+        timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+    write_manifest(run_dir.path, manifest)
+    mark_manifest_requires_derived_launch_admission(run_dir.path)
+    manifest = read_manifest(manifest_path_for(run_dir.path))
+
+    client, server = socket.socketpair()
+    server_errors = []
+
+    def driver_server():
+        try:
+            header = server.recv(4)
+            assert len(header) == 4
+            size = struct.unpack("!I", header)[0]
+            assert json.loads(server.recv(size).decode()) == {"version": 1, "op": "hello"}
+            payload = json.dumps(
+                {"version": 1, "role": "derived", "launch_id": "daemon-child", "capability": "daemon"},
+                separators=(",", ":"),
+            ).encode()
+            server.sendall(struct.pack("!I", len(payload)) + payload)
+        except BaseException as exc:
+            server_errors.append(exc)
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=driver_server)
+    thread.start()
+    monkeypatch.setenv(DRIVER_AUTHORITY_FD_ENV, str(client.detach()))
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    schemas, dispatch = host._build_lingtai_surface()
+    assert {"daemon", "avatar"} <= {schema.name for schema in schemas}
+    assert {"daemon", "avatar"} <= set(dispatch)
+
+    parent = host._agent._derived_provider_admission_parent
+    assert parent.call_class is ProviderCallClass.DAEMON
+    token = bind_provider_admission(parent)
+    try:
+        with pytest.raises(DerivedLaunchAdmissionError) as raised:
+            host._manager_type._authorize_derived_launch(host, "daemon")
+    finally:
+        clear_provider_admission(token)
+        host._agent._derived_launch_admission_port.close()
+    thread.join(timeout=2)
+
+    assert server_errors == []
+    assert raised.value.decision.reason_code == "nested_derived_launch_denied"
+
+
 def test_detached_file_manifest_injects_file_io(tmp_path):
     """A manifest requesting ``file`` gets a usable FileIOService.
 

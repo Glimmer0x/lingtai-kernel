@@ -225,7 +225,13 @@ class DetachedDaemonExecutionHost:
             AgentWorkdirAdapter,
             daemon_runtime_for_agent,
         )
-        self._runtime = daemon_runtime_for_agent(self._agent, {})
+        self._runtime = daemon_runtime_for_agent(
+            self._agent,
+            {},
+            read_derived_launch_tool_surface_open=lambda: (
+                manifest_requires_derived_launch_admission(self._manifest)
+            ),
+        )
         self._workdir = AgentWorkdirAdapter(lambda: self._agent._working_dir)
 
         # The manager methods are used as unbound production units below.  A
@@ -295,6 +301,16 @@ class DetachedDaemonExecutionHost:
     # preventing this host from becoming a second backend implementation.
     def _expand_requested_tools(self, requested):
         return self._manager_type._expand_requested_tools(self, requested)
+
+    def _emanation_blacklist(self):
+        """Read the same durable manifest fact as this host's runtime port."""
+        from lingtai.tools.daemon import emanation_blacklist
+
+        return emanation_blacklist(
+            derived_launch_tool_surface_open=(
+                manifest_requires_derived_launch_admission(self._manifest)
+            )
+        )
 
     def _parent_mcp_tool_names(self):
         return self._manager_type._parent_mcp_tool_names(self)

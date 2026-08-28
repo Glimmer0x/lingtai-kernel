@@ -215,6 +215,9 @@ class DerivedLaunchAdmissionError(PermissionError):
 _current_parent: ContextVar[ProviderAdmissionParent | None] = ContextVar(
     "lingtai_current_provider_admission", default=None
 )
+_current_provider_call_audit_id: ContextVar[str | None] = ContextVar(
+    "lingtai_current_provider_call_audit_id", default=None
+)
 
 
 def bind_provider_admission(parent: ProviderAdmissionParent) -> Token:
@@ -247,6 +250,18 @@ def current_provider_admission() -> ProviderAdmissionParent | None:
     """Return the current Core-private parent, if provider work is admitted."""
 
     return _current_parent.get()
+
+
+def current_provider_call_audit_id() -> str | None:
+    """Return the scoped audit trace for the provider I/O now in progress.
+
+    This is observability only. It contains the already-validated Driver
+    ``audit_id`` string, never a decision, admission object, endpoint, or
+    reusable grant. Provider recorders may use it to correlate an actual I/O
+    event with the Driver adjudication that immediately preceded it.
+    """
+
+    return _current_provider_call_audit_id.get()
 
 
 def current_provider_call_class() -> ProviderCallClass:
@@ -324,7 +339,7 @@ def require_derived_launch_admission(
     return decision
 
 
-def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
+def require_provider_admission(port: ProviderCallAdmissionPort | None) -> str | None:
     """Cross the one structural provider boundary or fail before provider I/O.
 
     ``None`` retains generic LingTai behavior.  A constrained profile injects a
@@ -333,7 +348,7 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
     """
 
     if port is None:
-        return
+        return None
     parent = current_provider_admission()
     if parent is None:
         raise ProviderAdmissionError("missing_provider_admission")
@@ -370,6 +385,7 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
             else ProviderAdmissionState.INDETERMINATE
         )
         raise ProviderAdmissionError(reason, state)
+    return decision.audit_id
 
 
 class ProviderAdmittedChatSession:
@@ -407,12 +423,20 @@ class ProviderAdmittedChatSession:
             reset(inner)
 
     def send(self, message):
-        require_provider_admission(self._port)
-        return self._inner.send(message)
+        audit_id = require_provider_admission(self._port)
+        token = _current_provider_call_audit_id.set(audit_id)
+        try:
+            return self._inner.send(message)
+        finally:
+            _current_provider_call_audit_id.reset(token)
 
     def send_stream(self, message, on_chunk=None):
-        require_provider_admission(self._port)
-        return self._inner.send_stream(message, on_chunk=on_chunk)
+        audit_id = require_provider_admission(self._port)
+        token = _current_provider_call_audit_id.set(audit_id)
+        try:
+            return self._inner.send_stream(message, on_chunk=on_chunk)
+        finally:
+            _current_provider_call_audit_id.reset(token)
 
 
 class ProviderAdmittedLLMService:
@@ -441,8 +465,12 @@ class ProviderAdmittedLLMService:
         )
 
     def generate(self, *args, **kwargs):
-        require_provider_admission(self._port)
-        return self._inner.generate(*args, **kwargs)
+        audit_id = require_provider_admission(self._port)
+        token = _current_provider_call_audit_id.set(audit_id)
+        try:
+            return self._inner.generate(*args, **kwargs)
+        finally:
+            _current_provider_call_audit_id.reset(token)
 
 
 __all__ = [
@@ -465,6 +493,7 @@ __all__ = [
     "clear_provider_admission",
     "clear_current_provider_admission",
     "current_provider_admission",
+    "current_provider_call_audit_id",
     "require_derived_launch_admission",
     "require_provider_admission",
 ]

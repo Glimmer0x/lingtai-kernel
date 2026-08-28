@@ -575,6 +575,21 @@ EMANATION_BLACKLIST = {
     "knowledge",
 }
 
+_DERIVED_LAUNCH_CAPABILITIES = frozenset({"daemon", "avatar"})
+
+
+def emanation_blacklist(*, derived_launch_tool_surface_open: bool) -> frozenset[str]:
+    """Return the explicit product filter for one daemon tool surface.
+
+    The caller must choose the surface policy from its durable derived identity.
+    It deliberately has no default: confusing the universal admission
+    requirement with the narrower surface-opening fact must fail at composition
+    time, rather than silently changing a generic child's tool surface.
+    """
+    if derived_launch_tool_surface_open:
+        return frozenset(set(EMANATION_BLACKLIST) - _DERIVED_LAUNCH_CAPABILITIES)
+    return frozenset(EMANATION_BLACKLIST)
+
 
 def _parent_host_tool_floor() -> frozenset[str]:
     """The always-on host tools a preset emanation may borrow from the parent.
@@ -1682,10 +1697,17 @@ class DaemonManager:
             from lingtai.adapters.tool_plugin_host import (
                 AgentWorkdirAdapter,
                 daemon_runtime_for_agent,
+                persistent_derived_tool_surface_open,
             )
 
             agent = runtime
-            runtime = daemon_runtime_for_agent(agent, {})
+            runtime = daemon_runtime_for_agent(
+                agent,
+                {},
+                read_derived_launch_tool_surface_open=lambda: (
+                    persistent_derived_tool_surface_open(agent._working_dir)
+                ),
+            )
             workdir = AgentWorkdirAdapter(
                 lambda: getattr(agent, "_working_dir")
                 if hasattr(agent, "_working_dir") else agent.working_dir
@@ -3315,10 +3337,23 @@ class DaemonManager:
         tool_names: set[str] = set()
         for name in requested:
             name = canonical_capability_name(name)
-            if name in EMANATION_BLACKLIST:
+            if name in self._emanation_blacklist():
                 continue
             tool_names.add(name)
         return tool_names
+
+    def _emanation_blacklist(self) -> frozenset[str]:
+        """Keep generic recursion closed; let constrained children reach auth.
+
+        The universal detached ``authority required`` bit intentionally does
+        not decide this surface.  Only the runtime's independently supplied,
+        durable derived identity may open daemon/avatar to the typed seam.
+        """
+        return emanation_blacklist(
+            derived_launch_tool_surface_open=(
+                self._runtime.derived_launch_tool_surface_open
+            )
+        )
 
     def _instantiate_preset_capabilities(
         self,
@@ -3362,7 +3397,7 @@ class DaemonManager:
         required = required_tools
         for name, kwargs in expanded.items():
             name = canonical_capability_name(name)
-            if name in EMANATION_BLACKLIST:
+            if name in self._emanation_blacklist():
                 continue
             # Tolerate non-capability names (intrinsics like 'psyche',
             # 'system', 'soul' — kernel always-on, not composable). The TUI
@@ -9734,10 +9769,17 @@ def setup(agent: "Agent",
     if isinstance(agent, BaseAgent):
         from lingtai.adapters.tool_plugin_host import (
             daemon_runtime_for_agent,
+            persistent_derived_tool_surface_open,
             register_agent_tool_plugins,
         )
 
-        runtime = daemon_runtime_for_agent(agent, options)
+        runtime = daemon_runtime_for_agent(
+            agent,
+            options,
+            read_derived_launch_tool_surface_open=lambda: (
+                persistent_derived_tool_surface_open(agent._working_dir)
+            ),
+        )
         register_agent_tool_plugins(
             agent,
             [DECLARATION],
