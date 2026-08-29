@@ -175,8 +175,7 @@ The cache-miss total accumulates **since last molt and survives a refresh** —
 refreshing does not reset it. Its System-owned budget resolves from live valid
 `LINGTAI_CACHE_MISS_BUDGET`, then the v1/v2 `settings/system.json` budget,
 then the fixed `2,000,000` default; inspect it through
-`system(action="settings", input={})`. Legacy
-`manifest.cache_miss_budget` is ignored.
+`system(action="settings", input={})`. Legacy `manifest.cache_miss_budget` is ignored.
 
 ### Step 6 — Newly introduced environment variables (trigger: the change adds an env read)
 

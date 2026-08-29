@@ -47,6 +47,7 @@ _CACHE_MISS_BUDGET_COMMENT = "system-manual#cache-miss-budget"
 _INIT_COMMENT = "system-manual/reference/settings-inventory#root-and-manifest-inputs"
 _LLM_COMMENT = "system-manual/reference/settings-inventory#llm-and-provider-inputs"
 _ENV_COMMENT = "system-manual/reference/settings-inventory#kernel-environment-controls"
+_RUNTIME_POLICY_COMMENT = "system-manual#runtime-policy-v2"
 _MISSING = object()
 
 
@@ -94,13 +95,7 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
     _init("agent_name", "/manifest/agent_name", None, configurable=False),
     _init("language", "/manifest/language", "en"),
     _init("disable", "/manifest/disable", []),
-    _init("context_limit", "/manifest/context_limit", 272_000),
-    _init("snapshot_interval", "/manifest/snapshot_interval", None),
-    _init("max_rpm", "/manifest/max_rpm", 60),
-    _init("max_aed_attempts", "/manifest/max_aed_attempts", 3),
-    _init("aed_timeout", "/manifest/aed_timeout", 360.0),
     _init("admin", "/manifest/admin", {}, sensitive=True),
-    _init("streaming", "/manifest/streaming", False),
     _init("time_awareness", "/manifest/time_awareness", True),
     _init("timezone_awareness", "/manifest/timezone_awareness", True),
     _init("preset.active", "/manifest/preset/active", None, sensitive=True),
@@ -140,7 +135,7 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
         None,
         comment=_LLM_COMMENT,
     ),
-    _init("llm.wire_api", "/manifest/llm/wire_api", "auto", comment=_LLM_COMMENT),
+    _init("llm.wire_api", "/manifest/llm/wire_api", None, comment=_LLM_COMMENT),
     _init(
         "llm.inject_reasoning_fallback",
         "/manifest/llm/inject_reasoning_fallback",
@@ -212,6 +207,10 @@ SYSTEM_INIT_CONCRETE_TOOL_EXCLUSIONS = frozenset(
     {
         "/addons",
         "/mcp",
+        # Psyche owns the live Pad prompt inputs. Its later owner change may
+        # expose them, fully redacted; System must not stack duplicate rows.
+        "/pad",
+        "/pad_file",
         "/lingtai",
         "/lingtai_file",
         "/manifest/capabilities",
@@ -224,8 +223,6 @@ SYSTEM_INIT_CONCRETE_TOOL_EXCLUSIONS = frozenset(
 )
 SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
     {
-        "/pad",
-        "/pad_file",
         "/soul",
         "/soul_file",
         "/principle",
@@ -237,6 +234,12 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/brief",
         "/brief_file",
         "/manifest/activeness",
+        "/manifest/aed_timeout",
+        "/manifest/context_limit",
+        "/manifest/max_aed_attempts",
+        "/manifest/max_rpm",
+        "/manifest/snapshot_interval",
+        "/manifest/streaming",
         "/manifest/context_rebuild_every_n_idles",
         "/manifest/context_serialization_enabled",
         "/manifest/max_turns",
@@ -249,6 +252,24 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/manifest/llm/context_limit",
     }
 )
+
+
+CONTEXT_LIMIT_ENV = "LINGTAI_CONTEXT_LIMIT"
+MAX_RPM_ENV = "LINGTAI_MAX_RPM"
+STREAMING_ENV = "LINGTAI_STREAMING"
+AED_TIMEOUT_ENV = "LINGTAI_AED_TIMEOUT"
+MAX_AED_ATTEMPTS_ENV = "LINGTAI_MAX_AED_ATTEMPTS"
+SNAPSHOT_INTERVAL_ENV = "LINGTAI_SNAPSHOT_INTERVAL"
+ACTIVENESS_ENV = "LINGTAI_ACTIVENESS"
+RUNTIME_POLICY_ENV = {
+    "context_limit": CONTEXT_LIMIT_ENV,
+    "max_rpm": MAX_RPM_ENV,
+    "streaming": STREAMING_ENV,
+    "aed_timeout": AED_TIMEOUT_ENV,
+    "max_aed_attempts": MAX_AED_ATTEMPTS_ENV,
+    "snapshot_interval": SNAPSHOT_INTERVAL_ENV,
+    "activeness": ACTIVENESS_ENV,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,9 +349,15 @@ SYSTEM_ENVIRONMENT_SETTING_SPECS: tuple[_EnvironmentSettingSpec, ...] = (
         "console_debug",
     ),
     _EnvironmentSettingSpec(
+        "runtime.tool_batch_memory_relief",
+        ("LINGTAI_DAEMON_MEMORY_RELIEF",),
+        False,
+        "tool_batch_memory_relief",
+    ),
+    _EnvironmentSettingSpec(
         "llm.codex_tui_dir",
         ("LINGTAI_TUI_DIR",),
-        str(Path("~/.lingtai-tui").expanduser()),
+        "~/.lingtai-tui",
         "codex_tui_dir",
         sensitive=True,
     ),
@@ -372,6 +399,9 @@ SYSTEM_ENVIRONMENT_SETTING_OWNERS = {
     for spec in SYSTEM_ENVIRONMENT_SETTING_SPECS
     for name in spec.names
 }
+SYSTEM_ENVIRONMENT_SETTING_OWNERS.update(
+    {environment: key for key, environment in RUNTIME_POLICY_ENV.items()}
+)
 SYSTEM_ENVIRONMENT_SETTING_OWNERS[CACHE_MISS_BUDGET_ENV] = "cache_miss_budget"
 SYSTEM_ENVIRONMENT_SETTING_OWNERS["LINGTAI_INJECT_REASONING_FALLBACK"] = (
     "llm.inject_reasoning_fallback"
@@ -387,6 +417,7 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_CLAUDE_INTERACTIVE_FIFO",
             "LINGTAI_CLAUDE_MANAGED_ROOT",
             "LINGTAI_CLOUD_MAIL_CONFIG",
+            "LINGTAI_DAEMON_MANAGER_POOL_SIZE",
             "LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS",
             "LINGTAI_FEISHU_CONFIG",
             "LINGTAI_FILE_IO_BACKEND",
@@ -411,7 +442,9 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_DAEMON_CAPSULE_FD",
             "LINGTAI_DAEMON_CAPSULE_HANDLE",
             "LINGTAI_DAEMON_COMPLETION_FILE",
+            "LINGTAI_DAEMON_MANAGER_TOKEN",
             "LINGTAI_DAEMON_RUN_ID",
+            "LINGTAI_DAEMON_RUN_DIR",
             "LINGTAI_MCP_NAME",
             "LINGTAI_REFRESH_ENV_OVERWRITE",
             "LINGTAI_RUNTIME_PYTHON",
@@ -435,16 +468,6 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_RUN_LIVE_KIMI_CODE",
             "LINGTAI_TEST_CONFIG",
             "LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD",
-        }
-    ),
-    # These production literals are found in source but are not yet rows in
-    # the root registry; Daemon owns them, so System must not claim them.
-    "unregistered_concrete_tool": frozenset(
-        {
-            "LINGTAI_DAEMON_MANAGER_POOL_SIZE",
-            "LINGTAI_DAEMON_MANAGER_TOKEN",
-            "LINGTAI_DAEMON_MEMORY_RELIEF",
-            "LINGTAI_DAEMON_RUN_DIR",
         }
     ),
 }
@@ -472,22 +495,6 @@ ORDINARY_POLICY_FIELDS = (
     "snapshot_interval",
     "activeness",
 )
-CONTEXT_LIMIT_ENV = "LINGTAI_CONTEXT_LIMIT"
-MAX_RPM_ENV = "LINGTAI_MAX_RPM"
-STREAMING_ENV = "LINGTAI_STREAMING"
-AED_TIMEOUT_ENV = "LINGTAI_AED_TIMEOUT"
-MAX_AED_ATTEMPTS_ENV = "LINGTAI_MAX_AED_ATTEMPTS"
-SNAPSHOT_INTERVAL_ENV = "LINGTAI_SNAPSHOT_INTERVAL"
-ACTIVENESS_ENV = "LINGTAI_ACTIVENESS"
-RUNTIME_POLICY_ENV = {
-    "context_limit": CONTEXT_LIMIT_ENV,
-    "max_rpm": MAX_RPM_ENV,
-    "streaming": STREAMING_ENV,
-    "aed_timeout": AED_TIMEOUT_ENV,
-    "max_aed_attempts": MAX_AED_ATTEMPTS_ENV,
-    "snapshot_interval": SNAPSHOT_INTERVAL_ENV,
-    "activeness": ACTIVENESS_ENV,
-}
 # Environment spelling that turns snapshots off explicitly (case-insensitive).
 SNAPSHOT_INTERVAL_OFF = "off"
 # Legacy default for agents whose manifest predates ``max_rpm``; matches
@@ -879,73 +886,105 @@ def _custom_adapter_default(parameter: str) -> Any:
 
 
 @dataclass(frozen=True, slots=True)
-class _NullableLLMRoute:
+class _SelectedLLMRoute:
     factory: str
     api_compat: Any = None
 
 
-# This narrow classifier covers only the three nullable generic axes; it reads
-# the actual registered factory identities and never constructs an adapter or
+# This narrow classifier covers only selected-factory LLM axes; it reads the
+# actual registered factory identities and never constructs an adapter or
 # reads credentials. That naturally keeps every alias bound to _custom/_codex
 # on the same route without maintaining a second alias registry here.
-_NULLABLE_LLM_SETTING_KEYS = frozenset(
+_SELECTED_FACTORY_LLM_SETTING_KEYS = frozenset(
     {
         "llm.compact_threshold",
+        "llm.wire_api",
+        "llm.inject_reasoning_fallback",
         "llm.reasoning_effort_vocab",
+        "llm.prompt_cache_namespace",
+        "llm.service_tier",
         "llm.api_compat",
     }
 )
 
 
-def _nullable_llm_route(llm: Mapping[str, Any]) -> _NullableLLMRoute:
-    """Classify the selected factory route for the three nullable generic axes."""
+def _normalized_selected_provider_defaults(
+    data: Mapping[str, Any], root: Path, *, max_rpm: int
+) -> Mapping[str, Any]:
+    """Apply the runtime's canonical manifest-to-provider normalization once."""
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    manifest = data["manifest"]
+    llm = manifest["llm"]
+    provider = str(llm["provider"]).lower()
+    normalized = build_provider_defaults_from_manifest_llm(
+        dict(llm),
+        max_rpm=max_rpm,
+        working_dir=root,
+    )
+    if normalized is None:
+        return {}
+    selected = normalized.get(provider, {})
+    if not isinstance(selected, Mapping):
+        raise RuntimeError("selected provider defaults are malformed")
+    return selected
+
+
+def _selected_llm_route(
+    llm: Mapping[str, Any], normalized: Mapping[str, Any]
+) -> _SelectedLLMRoute:
+    """Classify the selected registered factory without constructing a client."""
     from lingtai.llm.service import LLMService
 
     provider = str(llm.get("provider") or "").lower()
     factories = LLMService._adapter_registry
     selected = factories.get(provider)
     if selected is None:
-        return _NullableLLMRoute("ignored")
+        raise RuntimeError("selected LLM provider has no registered factory")
     if selected is factories.get("openai"):
-        return _NullableLLMRoute("openai")
+        return _SelectedLLMRoute("openai")
     if selected is factories.get("custom"):
-        compat_authored = "api_compat" in llm
-        compat = llm.get("api_compat")
-        effective_compat = (
-            _custom_adapter_default("api_compat") if compat is None else compat
+        # Runtime drops authored api_compat=null before _custom. Omitted/null
+        # therefore both take its OpenAI default and forward preserved compact
+        # null plus any authored non-null reasoning vocabulary.
+        effective_compat = normalized.get(
+            "api_compat", _custom_adapter_default("api_compat")
         )
-        if not compat_authored or compat == "openai":
-            # _register._custom treats omission as "openai" and forwards any
-            # authored generic axes only on this exact route.
-            return _NullableLLMRoute("custom_openai", effective_compat)
-        if compat == "anthropic" or compat == "gemini":
-            return _NullableLLMRoute("custom_other", effective_compat)
+        if effective_compat == "openai":
+            return _SelectedLLMRoute("custom_openai", effective_compat)
+        if effective_compat == "anthropic" or effective_compat == "gemini":
+            return _SelectedLLMRoute("custom_other", effective_compat)
         # create_custom_adapter sends every other admitted value (including
-        # explicit null) to OpenAIAdapter, but _register._custom does not
-        # forward compact/reasoning axes because compat != exact "openai".
-        return _NullableLLMRoute("custom_openai_fallback", effective_compat)
+        # non-lowercase/structured values) to OpenAIAdapter, but _register's
+        # _custom does not forward compact/reasoning axes unless compat is the
+        # exact lowercase string "openai".
+        return _SelectedLLMRoute("custom_openai_fallback", "openai")
     if selected is factories.get("deepseek"):
-        return _NullableLLMRoute("deepseek")
+        return _SelectedLLMRoute("deepseek")
     if selected is factories.get("codex"):
-        return _NullableLLMRoute("codex")
-    return _NullableLLMRoute("ignored")
+        return _SelectedLLMRoute("codex")
+    if selected is factories.get("mimo"):
+        return _SelectedLLMRoute("mimo")
+    return _SelectedLLMRoute("ignored")
 
 
 def _effective_nullable_llm_values(
-    key: str, llm: Mapping[str, Any]
+    key: str,
+    llm: Mapping[str, Any],
+    normalized: Mapping[str, Any],
 ) -> tuple[Any, Any]:
     """Return selected-route ``(current, default)`` without constructing clients."""
-    route = _nullable_llm_route(llm)
+    route = _selected_llm_route(llm, normalized)
 
     if key == "llm.compact_threshold":
         if route.factory == "deepseek":
             # _register._deepseek consumes a positive authored value and
             # otherwise pins the generic OpenAI adapter to disabled/null.
-            return llm.get("compact_threshold"), None
+            return normalized.get("compact_threshold"), None
         if route.factory in {"openai", "custom_openai"}:
             default = _openai_adapter_default("compact_threshold")
             # _register preserves explicit None on these two forwarding routes.
-            current = llm.get("compact_threshold", default)
+            current = normalized.get("compact_threshold", default)
             return current, default
         if route.factory == "custom_openai_fallback":
             default = _openai_adapter_default("compact_threshold")
@@ -955,13 +994,41 @@ def _effective_nullable_llm_values(
     if key == "llm.reasoning_effort_vocab":
         if route.factory in {"openai", "custom_openai"}:
             default = _openai_adapter_default("reasoning_effort_vocab")
-            value = llm.get("reasoning_effort_vocab")
-            return (default if value is None else value), default
+            return normalized.get("reasoning_effort_vocab", default), default
         if route.factory == "custom_openai_fallback":
             default = _openai_adapter_default("reasoning_effort_vocab")
             return default, default
         # DeepSeek installs a provider-owned reasoning policy; every other
         # non-OpenAI factory ignores this generic vocabulary setting.
+        return None, None
+
+    if key == "llm.inject_reasoning_fallback":
+        default = True
+        if route.factory in {
+            "openai",
+            "custom_openai",
+            "custom_openai_fallback",
+        }:
+            if route.factory != "custom_openai_fallback":
+                authored = normalized.get("inject_reasoning_fallback", _MISSING)
+                if authored is not _MISSING:
+                    return authored, default
+            from lingtai.llm.openai.adapter import _env_bool
+
+            return (
+                _env_bool("LINGTAI_INJECT_REASONING_FALLBACK", default=default),
+                default,
+            )
+        if route.factory == "deepseek":
+            return normalized.get("inject_reasoning_fallback", default), default
+        return None, None
+
+    if key == "llm.prompt_cache_namespace":
+        if route.factory in {"openai", "custom_openai"}:
+            default = _openai_adapter_default("prompt_cache_namespace")
+            return normalized.get("prompt_cache_namespace", default), default
+        if route.factory == "deepseek":
+            return normalized.get("prompt_cache_namespace", "deepseek"), "deepseek"
         return None, None
 
     if key == "llm.api_compat":
@@ -978,6 +1045,56 @@ def _effective_nullable_llm_values(
     raise RuntimeError("unknown nullable LLM setting")
 
 
+def _effective_wire_api_values(
+    llm: Mapping[str, Any],
+    normalized: Mapping[str, Any],
+) -> tuple[Any, Any]:
+    """Return the selected factory's effective selector and omitted default."""
+    route = _selected_llm_route(llm, normalized)
+    authored = normalized.get("wire_api", _MISSING)
+
+    # The Codex factory ignores the generic selector and forces Responses.
+    if route.factory == "codex":
+        return "responses", "responses"
+    # MiMo changes OpenAIAdapter's omitted selector to Responses but forwards
+    # an explicit value, including ``auto``, unchanged.
+    if route.factory == "mimo":
+        default = "responses"
+        return (default if authored is _MISSING else authored), default
+    # These factories forward an explicit selector. With omission, their real
+    # runtime construction has no legacy Responses preference and therefore
+    # selects Chat Completions.
+    if route.factory in {
+        "openai",
+        "custom_openai",
+        "custom_openai_fallback",
+        "deepseek",
+    }:
+        default = "chat_completions"
+        return (default if authored is _MISSING else authored), default
+    return None, None
+
+
+def _effective_service_tier_values(
+    llm: Mapping[str, Any],
+    normalized: Mapping[str, Any],
+) -> tuple[Any, Any]:
+    """Return the Codex-only public tier after its canonical validation."""
+    route = _selected_llm_route(llm, normalized)
+    if route.factory != "codex":
+        return None, None
+
+    raw = normalized.get("service_tier")
+    from lingtai.llm._register import _normalize_service_tier
+
+    wire_value = _normalize_service_tier(raw)
+    if wire_value is None:
+        return None, None
+    # The public setting is the authored vocabulary (``fast``); ``priority``
+    # is the private wire normalization owned by the Codex factory.
+    return str(raw).strip(), None
+
+
 def _init_current(spec: _InitSettingSpec, data: dict[str, Any], root: Path) -> Any:
     manifest = data["manifest"]
     llm = manifest["llm"]
@@ -986,21 +1103,8 @@ def _init_current(spec: _InitSettingSpec, data: dict[str, Any], root: Path) -> A
         value = _resolved_prompt_value(data, spec.key)
         return spec.default if value is None else value
 
-    if spec.key == "context_limit":
-        from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
-
-        value = manifest.get("context_limit")
-        return (
-            value
-            if type(value) is int and value > 0
-            else CONSERVATIVE_CONTEXT_WINDOW
-        )
-
     if spec.key in {
         "language",
-        "snapshot_interval",
-        "max_aed_attempts",
-        "aed_timeout",
         "time_awareness",
         "timezone_awareness",
         "llm.thinking",
@@ -1013,21 +1117,14 @@ def _init_current(spec: _InitSettingSpec, data: dict[str, Any], root: Path) -> A
         return getattr(hydrated, attribute)
 
     if spec.key == "llm.api_key":
-        from lingtai.kernel.config_resolve import resolve_env
+        from lingtai.kernel.config_resolve import resolve_env_checked
 
-        value = resolve_env(llm.get("api_key"), llm.get("api_key_env"))
-        if value is not None:
-            return value
-        provider = str(llm.get("provider") or "")
-        return os.environ.get(f"{provider.upper()}_API_KEY")
-
-    if spec.key == "llm.inject_reasoning_fallback":
-        value = llm.get("inject_reasoning_fallback")
-        if isinstance(value, bool):
-            return value
-        from lingtai.llm.openai.adapter import _env_bool
-
-        return _env_bool("LINGTAI_INJECT_REASONING_FALLBACK", default=True)
+        return resolve_env_checked(
+            llm.get("api_key"),
+            llm.get("api_key_env"),
+            context="manifest.llm.api_key_env",
+            warn=lambda _message: None,
+        )
 
     if spec.key == "llm.codex_session_anchor":
         configured = llm.get("codex_session_anchor")
@@ -1046,11 +1143,35 @@ def _init_current(spec: _InitSettingSpec, data: dict[str, Any], root: Path) -> A
 
 
 def _init_values(
-    spec: _InitSettingSpec, data: dict[str, Any], root: Path
+    spec: _InitSettingSpec,
+    data: dict[str, Any],
+    root: Path,
+    normalized_llm: Mapping[str, Any],
 ) -> tuple[Any, Any]:
     """Project selected-route current/default values for one init-backed row."""
-    if spec.key in _NULLABLE_LLM_SETTING_KEYS:
-        return _effective_nullable_llm_values(spec.key, data["manifest"]["llm"])
+    if spec.key in _SELECTED_FACTORY_LLM_SETTING_KEYS:
+        if spec.key == "llm.wire_api":
+            return _effective_wire_api_values(
+                data["manifest"]["llm"], normalized_llm
+            )
+        if spec.key == "llm.service_tier":
+            return _effective_service_tier_values(
+                data["manifest"]["llm"], normalized_llm
+            )
+        return _effective_nullable_llm_values(
+            spec.key, data["manifest"]["llm"], normalized_llm
+        )
+    if spec.key == "llm.thinking":
+        from lingtai.agent import build_agent_config
+
+        manifest = data["manifest"]
+        llm_without_thinking = dict(manifest["llm"])
+        llm_without_thinking.pop("thinking", None)
+        default_manifest = {**manifest, "llm": llm_without_thinking}
+        default = build_agent_config(
+            default_manifest, max_rpm=manifest.get("max_rpm", 60)
+        ).thinking
+        return _init_current(spec, data, root), default
     return _init_current(spec, data, root), spec.default
 
 
@@ -1101,6 +1222,10 @@ def _environment_current(resolver: str, root: Path) -> Any:
         return load_gate_config(root) is not None
     if resolver == "console_debug":
         return os.environ.get("LINGTAI_VERBOSE") == "1"
+    if resolver == "tool_batch_memory_relief":
+        from lingtai.kernel.malloc_relief import enabled
+
+        return enabled()
     if resolver == "codex_tui_dir":
         from lingtai.auth.codex_pool import resolve_codex_tui_dir
 
@@ -1132,11 +1257,45 @@ def _environment_current(resolver: str, root: Path) -> Any:
     raise RuntimeError("unknown System environment setting resolver")
 
 
+_RUNTIME_POLICY_INVENTORY_ORDER = (
+    "context_limit",
+    "snapshot_interval",
+    "max_rpm",
+    "max_aed_attempts",
+    "aed_timeout",
+    "streaming",
+    "activeness",
+)
+_RUNTIME_POLICY_INSERT_INDEX = next(
+    index + 1
+    for index, spec in enumerate(SYSTEM_INIT_SETTING_SPECS)
+    if spec.key == "disable"
+)
 SYSTEM_SETTING_KEYS = (
     "cache_miss_budget",
-    *(spec.key for spec in SYSTEM_INIT_SETTING_SPECS),
+    *(spec.key for spec in SYSTEM_INIT_SETTING_SPECS[:_RUNTIME_POLICY_INSERT_INDEX]),
+    *_RUNTIME_POLICY_INVENTORY_ORDER,
+    *(spec.key for spec in SYSTEM_INIT_SETTING_SPECS[_RUNTIME_POLICY_INSERT_INDEX:]),
     *(spec.key for spec in SYSTEM_ENVIRONMENT_SETTING_SPECS),
 )
+
+
+def _runtime_policy_inventory_values(
+    key: str,
+    runtime_policy: ResolvedRuntimePolicy,
+    policy_defaults: Mapping[str, Any],
+) -> tuple[Any, Any]:
+    """Project effective SHOW values without changing runtime-policy semantics."""
+    current = getattr(runtime_policy, key)
+    default = policy_defaults[key]
+    if key == "context_limit":
+        from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
+
+        # ``None`` means no configured cap; LLMService then uses its conservative
+        # effective window. SHOW reports that effective truth, not the sentinel.
+        current = CONSERVATIVE_CONTEXT_WINDOW if current is None else current
+        default = CONSERVATIVE_CONTEXT_WINDOW
+    return current, default
 
 
 def _resolve_inventory_cache_miss_budget(root: Path) -> int:
@@ -1152,9 +1311,12 @@ def _resolve_inventory_cache_miss_budget(root: Path) -> int:
     except (OSError, UnicodeError) as exc:
         raise RuntimeError("System settings current value is unavailable") from exc
     current = _parse_settings(text)
-    if current is None:
+    if current is not None:
+        return current
+    fields = _parse_runtime_policy_v2(text)
+    if fields is None:
         raise ValueError("System settings current value is unavailable")
-    return current
+    return fields.get("cache_miss_budget", DEFAULT_CACHE_MISS_BUDGET)
 
 
 def system_settings_provider(workdir: Path | None) -> SettingsProvider:
@@ -1175,9 +1337,28 @@ def system_settings_provider(workdir: Path | None) -> SettingsProvider:
             )
         ]
 
+        runtime_policy = resolve_runtime_policy(root)
+        policy_defaults = _policy_defaults()
         data = _effective_init(root)
+        normalized_llm = _normalized_selected_provider_defaults(
+            data, root, max_rpm=runtime_policy.max_rpm
+        )
+        for key in _RUNTIME_POLICY_INVENTORY_ORDER:
+            current, default = _runtime_policy_inventory_values(
+                key, runtime_policy, policy_defaults
+            )
+            rows.append(
+                SettingRow(
+                    key=key,
+                    current=current,
+                    default=default,
+                    configurable=True,
+                    comment=_RUNTIME_POLICY_COMMENT,
+                )
+            )
+
         for spec in SYSTEM_INIT_SETTING_SPECS:
-            current, default = _init_values(spec, data, root)
+            current, default = _init_values(spec, data, root, normalized_llm)
             rows.append(
                 SettingRow(
                     key=spec.key,
@@ -1201,8 +1382,10 @@ def system_settings_provider(workdir: Path | None) -> SettingsProvider:
                 )
             )
 
-        if tuple(row.key for row in rows) != SYSTEM_SETTING_KEYS:
-            raise RuntimeError("System settings inventory order is inconsistent")
+        rows_by_key = {row.key: row for row in rows}
+        if len(rows_by_key) != len(rows):
+            raise RuntimeError("System settings inventory contains duplicate keys")
+        rows = [rows_by_key[key] for key in SYSTEM_SETTING_KEYS]
         if len(SYSTEM_SETTING_KEYS) != len(set(SYSTEM_SETTING_KEYS)):
             raise RuntimeError("System settings inventory contains duplicate keys")
         return tuple(rows)

@@ -13,6 +13,7 @@ The watchdog protects against two real-world failure modes documented in
 Both cases used to be invisible to the heartbeat-only liveness check.
 """
 import json
+import math
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 import time
 from unittest.mock import MagicMock
@@ -34,6 +35,18 @@ class _RecordingEventJournal:
 
     def close(self):
         return None
+
+
+def test_active_stuck_threshold_non_finite_values_use_documented_default(
+    monkeypatch,
+):
+    from lingtai.kernel.base_agent.lifecycle import _active_stuck_threshold_s
+
+    for value in ("nan", "inf", "+inf", "-inf", "Infinity", "-Infinity"):
+        monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", value)
+        threshold = _active_stuck_threshold_s()
+        assert math.isfinite(threshold)
+        assert threshold == 600.0
 
 
 class TestProgressBookkeeping:

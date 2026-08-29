@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from lingtai.kernel.config import (
     THINKING_LEVELS,
@@ -202,6 +203,30 @@ LLM_KNOWN: set[str] = (
 )
 
 
+def _is_json_finite(value: object) -> bool:
+    """Check finite floats with an iterative, cycle-safe canonical-container walk."""
+    pending = [value]
+    seen_containers: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if isinstance(current, float) and not math.isfinite(current):
+            return False
+        if type(current) is dict:
+            identity = id(current)
+            if identity in seen_containers:
+                continue
+            seen_containers.add(identity)
+            for key, item in current.items():
+                pending.extend((key, item))
+        elif type(current) in (list, tuple):
+            identity = id(current)
+            if identity in seen_containers:
+                continue
+            seen_containers.add(identity)
+            pending.extend(current)
+    return True
+
+
 def strip_deprecated(data: dict) -> list[str]:
     """Remove deprecated top-level fields from *data* in-place.
 
@@ -283,6 +308,15 @@ def validate_init(data: dict) -> list[str]:
     manifest = data["manifest"]
     _require_keys(manifest, MANIFEST_REQUIRED, prefix="manifest")
     _optional_keys(manifest, MANIFEST_OPTIONAL, prefix="manifest")
+
+    disable = manifest.get("disable")
+    if isinstance(disable, list):
+        for index, entry in enumerate(disable):
+            if not isinstance(entry, str):
+                raise ValueError(
+                    f"manifest.disable[{index}]: expected str, "
+                    f"got {type(entry).__name__}"
+                )
 
     # Validate manifest.preset umbrella if present.
     #
@@ -374,6 +408,10 @@ def validate_init(data: dict) -> list[str]:
     llm = manifest["llm"]
     _require_keys(llm, LLM_REQUIRED, prefix="manifest.llm")
     _optional_keys(llm, LLM_OPTIONAL, prefix="manifest.llm")
+    if "api_compat" in llm and not _is_json_finite(llm["api_compat"]):
+        raise ValueError(
+            "manifest.llm.api_compat: expected recursively JSON-finite value"
+        )
     if "compact_threshold" in llm:
         compact_threshold = llm["compact_threshold"]
         if isinstance(compact_threshold, int) and compact_threshold <= 0:

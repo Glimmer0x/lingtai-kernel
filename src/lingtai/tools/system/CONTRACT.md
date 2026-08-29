@@ -19,6 +19,8 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/kernel/malloc_relief.py
+  - src/lingtai/kernel/tool_executor.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
   - tests/test_tool_family_system_migration.py
@@ -105,37 +107,37 @@ manual path.
 `settings.py` supplies the complete, stable, unique read-only inventory for
 genuine kernel settings that have no other concrete ToolPlugin owner. Each row
 projects exactly `key`, `current`, `default`, `configurable`, and `comment`.
-The inventory includes the cache-miss budget, effective root/manifest inputs,
-all effective `manifest.llm` axes because no LLM ToolPlugin exists, and the
-System-owned Nudge, lifecycle, prompt-pressure, session-statistics, logging,
-risky-action, Codex auth-directory/transport/trace, and LLM timeout environment
-controls.
+The inventory includes the cache-miss budget, the seven ordinary
+runtime-policy values resolved as environment > closed-v2 System file > fixed
+default, effective non-policy root/manifest inputs, all effective `manifest.llm`
+axes because no LLM ToolPlugin exists, and the System-owned Nudge, lifecycle,
+prompt-pressure, session-statistics, logging, risky-action, Codex
+auth-directory/transport/trace, and LLM timeout environment controls. Legacy
+init/preset copies of ordinary runtime-policy fields remain compatibility data
+and never become SHOW current values.
 Compatibility aliases are folded into their canonical setting rather than
 emitted as duplicate rows.
 
 Every current and default value comes from the runtime's canonical reader,
-resolver, constant, or selected factory/adapter route. SHOW fresh-reads
+resolver, constant, or selected registered-factory route. SHOW fresh-reads
 effective init/preset inputs and per-use environment resolvers where the runtime
 does; process-start constants are reported as the current effective process
-state. One read-only registered-factory classifier owns both fields for the
-nullable LLM rows. Official OpenAI and the OpenAI-compatible `_custom` route
-(`custom`, `grok`, `qwen`, and `kimi`) default compact/reasoning to `100000` /
-`openai`; explicit compact null remains disabled. Every `_custom` route reports
-its effective `api_compat`, whose factory default is `openai`; an authored
-non-OpenAI compatibility route ignores the two generic axes but retains
-`api_compat` current while its default remains `openai`. DeepSeek reports an
-authored compact value or null and ignores generic reasoning/API compatibility.
-Gemini, other ignoring factories, and the shared native `codex`/`codex-pool`/
-`codex_pool` factory report current/default null for all three generic axes;
-native Codex compaction is separately owned by `codex_compact_token_limit`.
-Omission and explicit null remain distinct only where the selected route
-preserves that distinction; no global default is fabricated. Prompt text,
-credentials, headers, authorization material, tokens,
-and sensitive paths—including the Codex TUI directory—are fully redacted. If
-a present owner document, effective init, preset, referenced prompt file, or
-other canonical current source cannot be read safely, the provider raises and
-the generic action returns its fixed whole-inventory failure with no partial
-row or exception detail.
+state. Canonical provider-default normalization runs before the narrow
+registered-factory classifier projects each LLM row. A selected factory's row
+reports the effective value and default that factory actually consumes; an axis
+the factory ignores reports null current/default. Effective adapter selectors
+report the selected public route rather than malformed authored syntax, and an
+unknown selected provider fails the complete action loudly. Projection may
+inspect registry/factory identity, canonical constants, and signatures only; it
+never constructs a client, reads credentials, or performs network I/O.
+
+Prompt text, credentials, headers, authorization material, tokens, and sensitive
+paths are fully redacted. Canonically invalid or non-JSON-finite public values,
+an unreadable current owner source, and any unsafe/malformed projected row fail
+the whole inventory with no partial row or exception detail. The exact evolving
+provider/alias matrix, omission/null/authored distinctions, source precedence,
+accepted values, timing, and authorized operator procedures live only in the
+[`settings-inventory` manual](../../intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md#llm-and-provider-inputs).
 
 The cache row retains its current owner-resolved value, default `2_000_000`,
 and pointer `system-manual#cache-miss-budget`. Missing System JSON selects the
@@ -159,8 +161,15 @@ Shell, Daemon, Notification, Email, File, Vision, Web, Task Card,
 Plugin/Psyche, MCP, and curated-addon ToolPlugins. In particular,
 `manifest.pseudo_agent_subscriptions` is Email-owned and is reserved for a
 future Email owner-local row that fully redacts its path lists; System does not
-project it. The classification also excludes the inert `pad` pair,
-`manifest.activeness`, `manifest.llm.codex_thread_salt`, max-turn/context-
+project it. Psyche owns the live root `pad` / `pad_file` prompt inputs, so they
+are concrete-owner exclusions rather than inert compatibility fields. Daemon's
+manager-pool variable is a registered concrete-owner setting; its manager token
+and run directory are registered injected/handoff values. The historically
+named `LINGTAI_DAEMON_MEMORY_RELIEF` instead controls the global `ToolExecutor`
+finally path used by ordinary main-agent and daemon batches, so System exposes
+it once as `runtime.tool_batch_memory_relief` using the canonical
+`malloc_relief.enabled()` resolver. The classification also excludes `manifest.activeness`,
+`manifest.llm.codex_thread_salt`, max-turn/context-
 serialization and other retired compatibility inputs, plus build/test-only
 environment controls and pure injected identity/handoff descriptors. The
 environment partition lives as one owner-local structured authority in

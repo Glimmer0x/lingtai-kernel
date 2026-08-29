@@ -157,6 +157,17 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
 9. `manifest.cache_miss_budget` is schema-unknown legacy input: it is reported
    and ignored without writeback, never hydrated, and cannot override the
    System-owned effective setting.
+10. Legacy `manifest.context_limit`, `manifest.snapshot_interval`,
+    `manifest.max_rpm`, `manifest.max_aed_attempts`, `manifest.aed_timeout`,
+    `manifest.streaming`, and `manifest.activeness` are schema-known
+    compatibility data only: the canonical reader reports and ignores them,
+    never validates or hydrates them, and preset materialization does not revive
+    them. Their live owner is valid environment > valid closed-v2
+    `settings/system.json` field > fixed default.
+11. `manifest.disable` is a `list[str]`; the validator never stringifies or
+    drops malformed entries. `manifest.llm.api_compat` remains deliberately
+    value-tolerant for adapter fallback, but every nested float in its canonical
+    JSON containers must be finite before the effective mapping is accepted.
 
 ## Contract tests
 
@@ -178,8 +189,9 @@ dismissal/repeat semantics for a capped finding.
 `tests/test_init_schema.py`, `tests/test_presets.py`,
 `tests/test_agent_config_hydration.py`, and
 `tests/test_preset_materialization.py` prove the accepted custom Responses
-scope, rejected out-of-scope values, and the distinct custom/Codex omission
-defaults through real config and session materialization.
+scope, rejected out-of-scope values, finite canonical-number boundaries,
+`disable` element typing, and the distinct custom/Codex omission defaults
+through real config and session materialization.
 
 ## Maintenance
 

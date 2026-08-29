@@ -1,6 +1,6 @@
 ---
 name: system-behavior-tests
-behavior_version: 3
+behavior_version: 4
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -8,6 +8,8 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/settings.py
+  - src/lingtai/kernel/malloc_relief.py
+  - src/lingtai/kernel/tool_executor.py
   - src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_karma.py
@@ -18,8 +20,9 @@ related_files:
   - tests/_notification_store_helpers.py
   - tests/_agent_presence_helpers.py
 maintenance: |
-  Written by the karma-lifecycle audit (2026-08); version 3 adds the
-  agent-observable read-only System settings catch-all. Keep in sync with
+  Written by the karma-lifecycle audit (2026-08); version 4 keeps the
+  agent-observable read-only System settings catch-all aligned with selected
+  LLM routes and global ToolExecutor memory-relief ownership. Keep in sync with
   CONTRACT.md clauses this file guards and ANATOMY.md entries for karma.py /
   name.py / preset.py; when CONTRACT.md or ANATOMY.md changes in a way that
   affects agent-observable lifecycle behavior, update the matching LABT here
@@ -267,7 +270,17 @@ Pass only when mounted and direct routes agree on refusal, force escape, receipt
 ### Expected evidence
 - [ ] The complete catalogue is returned with unique ordered keys and no partial success.
 - [ ] Nullable LLM `current` and `default` fields follow the selected registered
-      factory route; ignored generic axes are null rather than global defaults.
+      factory route after canonical provider-default normalization; ignored
+      generic axes are null rather than global defaults, and `llm.api_compat`
+      reports the effective adapter route rather than malformed authored syntax.
+- [ ] Wire API defaults follow the selected factory (MiMo/Codex Responses,
+      OpenAI/custom/DeepSeek Chat Completions), service tier is Codex-only, and
+      factories that ignore either axis report null rather than fake values.
+- [ ] Omitted thinking uses the selected route's canonical hydrated default,
+      and selected-provider credentials reflect only authored key/alias sources.
+- [ ] `runtime.tool_batch_memory_relief` matches the canonical live resolver for
+      the global post-`ToolExecutor`-batch hook, including ordinary main-agent
+      execution; no Daemon-only ownership or runtime gate is invented.
 - [ ] Sensitive current/default values are redacted and no sentinel appears in the response.
 - [ ] The non-empty input is rejected and neither SHOW call writes or resets an owner source.
 - [ ] Each `comment` resolves to a manual section covering source, accepted values, precedence, invalid behavior, redaction, timing, and authorized changes.

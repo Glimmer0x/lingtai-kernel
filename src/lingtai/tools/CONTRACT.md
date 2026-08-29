@@ -850,9 +850,13 @@ behind a weaker family posture" rule `avatar` established, applied to
 rejection rather than gating. Second, `sleep.force` was live and read by the
 handler before this migration but never advertised in the flat schema; a strict
 child `input` must declare every key its handler accepts, so declaring it
-surfaces existing behavior rather than adding a capability. The family-level
-owner document `settings/system.json` opts System into reserved read-only SHOW;
-it declares no per-action settings and authorizes no set/reset or mutation path.
+surfaces existing behavior rather than adding a capability. System opts into
+reserved read-only SHOW through `ToolPluginDeclaration(settings=True)` plus its
+bound provider. The optional family owner document `settings/system.json` is closed and
+versioned: v1 is exactly the cache-miss-budget source; v2 may carry the seven ordinary runtime-policy fields, the cache field, and Notification's file layer.
+Its absence leaves SHOW available with fixed defaults, and file presence never
+opts a family into SHOW. System declares no per-action settings and authorizes
+no set/reset or mutation path.
 
 `daemon` (`emanate | list | ask | check | reclaim | manual`) is the twelfth
 family migrated to this contract, and the one with the largest retained engine.
