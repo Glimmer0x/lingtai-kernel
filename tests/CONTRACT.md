@@ -185,21 +185,43 @@ give that phase a distinct, empty `PYTHONPYCACHEPREFIX`. `python -B` and
 prevent writing new bytecode, not reading an existing cache that still matches
 Python's timestamp check.
 
-Put the isolation in the copied command, not merely in accompanying prose. For
-example, run this once per phase, with a new temporary directory each time:
+Put the isolation and runtime provenance in the copied command, not merely in
+accompanying prose. Run this once per phase, with a new temporary directory
+each time. Replace `<module>`, `<code-object-on-tested-path>`, and `<target>`
+with the module, code object, and pytest target exercised by the regression:
 
 ```bash
 phase_pyc_cache="$(mktemp -d)"
 PYTHONPYCACHEPREFIX="$phase_pyc_cache" \
   PYTHONDONTWRITEBYTECODE=1 \
-  python -B -m pytest <target>
+  python -B - <<'PY'
+import hashlib
+import importlib
+import inspect
+from pathlib import Path
+import sys
+
+# Match this repository's pytest source root before importing the evidence
+# module; the resulting pytest.main call stays in this same process.
+sys.path.insert(0, str(Path("src").resolve()))
+module = importlib.import_module("<module>")
+selected = module
+for part in "<code-object-on-tested-path>".split("."):
+    selected = getattr(selected, part)
+code_object = inspect.unwrap(selected).__code__
+print(f"loaded_module={Path(module.__file__).resolve()}")
+print(f"co_code_sha256={hashlib.sha256(code_object.co_code).hexdigest()}")
+
+import pytest
+raise SystemExit(pytest.main(["<target>"]))
+PY
 ```
 
 Do not use `PYTHONPATH=<other-worktree>` to select a mutation tree for
 `pytest`. This repository's pytest configuration injects its own `src/` path,
 which can take precedence and silently run the clean checkout instead. Mutate
 the source in the same worktree that invokes pytest, unless a deliberately
-different import configuration is used and the test records the runtime
+different import configuration is used and the command records the runtime
 `module.__file__` (or equivalent loaded-path evidence).
 
 Python's normal timestamp validation accepts an unchanged `(mtime, size)`
