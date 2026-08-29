@@ -39,19 +39,22 @@ shadow-only presence decision for one agent directory.
   `src/lingtai/kernel/agent_guardian/__init__.py:477`,
   `src/lingtai/kernel/agent_guardian/__init__.py:655`); the complete matrix is
   [G001](BEHAVIORS.md#behavior-g001).
-- `FilesystemLifecycleLedgerAdapter` owns locked/fsync JSONL; the local host
-  adapter owns read-only OS/process/lease evidence and the guardian lock, using
-  the existing Windows helper's narrow tri-state observation
-  (`src/lingtai/adapters/agent_guardian.py:49`,
-  `src/lingtai/adapters/agent_guardian.py:473`,
+- `observe_guardian_manifest` bounds guardian `.agent.json` setup/loop evidence;
+  `FilesystemLifecycleLedgerAdapter` owns locked/fsync JSONL, including parent-
+  link fsync under the shared lock; the local host adapter owns read-only OS/
+  process/lease/Agent-Record evidence and the guardian lock, using the existing
+  Windows helper's narrow tri-state observation
+  (`src/lingtai/adapters/agent_guardian.py:51`,
+  `src/lingtai/adapters/agent_guardian.py:79`,
+  `src/lingtai/adapters/agent_guardian.py:508`,
   `src/lingtai/adapters/windows/_win32.py:109`).
 - `run_guardian_cli` owns singleton sampling, confirmation, coalescing, JSON,
-  and loop cadence (`src/lingtai/cli_guardian.py:110`).
+  and loop cadence (`src/lingtai/cli_guardian.py:111`).
 - Existing boot, suspend, and CPR owners append their lifecycle facts before
-  the relevant runtime action; ordinary boot's early read, construction,
-  cleanup, and locked append live at `src/lingtai/cli.py:325`,
-  `src/lingtai/cli.py:354`, `src/lingtai/cli.py:358`, and
-  `src/lingtai/cli.py:362` (`src/lingtai/cli.py:226`,
+  the relevant runtime action; ordinary boot's early marker/intent read,
+  construction, preserve-suspend cleanup/recheck, and locked append live at
+  `src/lingtai/cli.py:352`, `src/lingtai/cli.py:390`, and
+  `src/lingtai/cli.py:396` (`src/lingtai/cli.py:252`,
   `src/lingtai/tools/system/karma.py:264`,
   `src/lingtai/tools/system/karma.py:295`, `src/lingtai/agent.py:1386`).
 

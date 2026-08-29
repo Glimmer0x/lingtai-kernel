@@ -25,6 +25,7 @@ import lingtai.adapters.agent_guardian as guardian_adapter
 from lingtai.adapters.agent_guardian import (
     FilesystemLifecycleLedgerAdapter,
     LocalAgentGuardianHostAdapter,
+    observe_guardian_manifest,
 )
 from lingtai.cli_guardian import (
     EXIT_ALREADY_RUNNING,
@@ -120,12 +121,14 @@ def test_ledger_stable_fsync_and_creation_directory_fsync(tmp_path, monkeypatch)
     calls.clear()
     ledger.append_event(first)  # exact retry re-fsyncs but does not change bytes
     assert ledger.path.read_bytes() == first_bytes
-    assert [kind for kind, _ in calls] == ["file", "directory"]
-    assert calls[1] == ("directory", ledger.path.parent)
+    assert [kind for kind, _ in calls] == ["directory", "file", "directory"]
+    assert calls[0] == ("directory", ledger.agent_dir)
+    assert calls[2] == ("directory", ledger.path.parent)
 
     calls.clear()
     ledger.append_event(_boot_event(tmp_path, 2))
-    assert [kind for kind, _ in calls] == ["file"]
+    assert [kind for kind, _ in calls] == ["directory", "file"]
+    assert calls[0] == ("directory", ledger.agent_dir)
     assert ledger.path.read_bytes().endswith(b"\n")
 
 
@@ -143,8 +146,9 @@ def test_first_event_in_preexisting_logs_fsyncs_file_then_logs(tmp_path, monkeyp
 
     ledger.append_event(_boot_event(tmp_path))
 
-    assert [kind for kind, _ in calls] == ["file", "directory"]
-    assert calls[1] == ("directory", logs)
+    assert [kind for kind, _ in calls] == ["directory", "file", "directory"]
+    assert calls[0] == ("directory", ledger.agent_dir)
+    assert calls[2] == ("directory", logs)
 
 
 def test_duplicate_retry_repairs_failed_first_event_directory_fsync(
@@ -156,8 +160,9 @@ def test_duplicate_retry_repairs_failed_first_event_directory_fsync(
     event = _boot_event(tmp_path)
 
     def fail_logs(directory):
-        assert directory == logs
-        raise OSError("directory fsync failed")
+        if directory == logs:
+            raise OSError("directory fsync failed")
+        assert directory == ledger.agent_dir
 
     monkeypatch.setattr(ledger, "_fsync_directory", fail_logs)
     with pytest.raises(LifecycleLedgerError) as raised:
@@ -170,7 +175,30 @@ def test_duplicate_retry_repairs_failed_first_event_directory_fsync(
     assert ledger.append_event(event) == event
 
     assert ledger.path.read_bytes() == written
-    assert calls == [logs]
+    assert calls == [ledger.agent_dir, logs]
+
+
+def test_retry_repairs_failed_fresh_logs_parent_fsync(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+    event = _boot_event(tmp_path)
+    calls: list[Path] = []
+
+    def fail_first_parent_sync(directory):
+        calls.append(directory)
+        if directory == ledger.agent_dir and calls.count(directory) == 1:
+            raise OSError("agent-dir fsync failed")
+
+    monkeypatch.setattr(ledger, "_fsync_directory", fail_first_parent_sync)
+
+    with pytest.raises(LifecycleLedgerError) as raised:
+        ledger.append_event(event)
+    assert raised.value.code == "ledger_io_error"
+    assert ledger.path.parent.is_dir()
+    assert not ledger.path.exists()
+
+    assert ledger.append_event(event) == event
+    assert calls == [ledger.agent_dir, ledger.agent_dir, ledger.path.parent]
+    assert ledger.read_snapshot().records == (event,)
 
 
 def test_read_only_missing_ledger_does_not_create_logs_or_agent_root(tmp_path):
@@ -188,14 +216,25 @@ def test_read_only_missing_ledger_does_not_create_logs_or_agent_root(tmp_path):
     assert not missing.agent_dir.exists()
 
 
-def test_ledger_concurrent_appends_are_complete_and_serialized(tmp_path):
+def test_ledger_concurrent_appends_are_complete_and_parent_sync_is_locked(
+    tmp_path, monkeypatch,
+):
     ledger = FilesystemLifecycleLedgerAdapter(tmp_path)
     events = [_boot_event(tmp_path, i) for i in range(1, 17)]
+    root_syncs: list[Path] = []
+
+    def assert_locked_sync(directory):
+        if directory == ledger.agent_dir:
+            assert ledger._lock.is_locked
+            root_syncs.append(directory)
+
+    monkeypatch.setattr(ledger, "_fsync_directory", assert_locked_sync)
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(ledger.append_event, events))
     snapshot = ledger.read_snapshot()
     assert len(snapshot.records) == len(events)
     assert len(ledger.path.read_bytes().splitlines()) == len(events)
+    assert root_syncs == [ledger.agent_dir] * len(events)
 
 
 def test_active_intent_survives_marker_deletion_and_clears_only_matching_explicit_actions(tmp_path):
@@ -1484,7 +1523,7 @@ def test_guardian_cli_adversarial_ledger_json_is_mechanical(
     assert host.released
 
 
-def test_guardian_deep_initial_manifest_is_one_mechanical_error(tmp_path):
+def test_guardian_deep_initial_manifest_is_typed_unknown_evidence(tmp_path):
     (tmp_path / ".agent.json").write_text(
         "[" * 2000 + "0" + "]" * 2000,
         encoding="utf-8",
@@ -1498,11 +1537,44 @@ def test_guardian_deep_initial_manifest_is_one_mechanical_error(tmp_path):
         stderr=stderr,
     )
 
-    assert code == EXIT_LEDGER_UNSAFE
-    assert stdout.getvalue() == ""
-    assert json.loads(stderr.getvalue()) == {
-        "error": {"code": "guardian_setup_unavailable"}
-    }
+    output = json.loads(stdout.getvalue())
+    assert code == EXIT_AMBIGUOUS
+    assert stderr.getvalue() == ""
+    assert output["verdict"] == "unknown"
+    assert output["evidence"]["agent_manifest"] == "malformed"
+    assert "agent_manifest_malformed" in output["evidence"]["issues"]
+
+
+def test_guardian_oversized_manifest_is_descriptor_bounded_unknown_evidence(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / ".agent.json").write_bytes(b"{" + b"x" * (1024 * 1024))
+    monkeypatch.setattr(
+        guardian_adapter.os,
+        "fstat",
+        lambda descriptor: SimpleNamespace(st_size=0),
+    )
+
+    observation = observe_guardian_manifest(tmp_path)
+    host = LocalAgentGuardianHostAdapter(tmp_path)
+    sample = host.sample(None)
+
+    assert observation.kind.value == "malformed"
+    assert sample.agent_manifest == "malformed"
+    assert "agent_manifest_malformed" in sample.issues
+
+
+def test_guardian_manifest_memory_error_is_typed_malformed(tmp_path, monkeypatch):
+    (tmp_path / ".agent.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        guardian_adapter,
+        "json",
+        SimpleNamespace(
+            loads=lambda raw: (_ for _ in ()).throw(MemoryError("allocation")),
+        ),
+    )
+
+    assert observe_guardian_manifest(tmp_path).kind.value == "malformed"
 
 
 def test_guardian_deep_agent_record_becomes_unknown_evidence(tmp_path, monkeypatch):
@@ -1785,6 +1857,72 @@ def test_cli_run_refuses_active_intent_before_agent_construction_and_preserves_m
     assert not agent_record_path(tmp_path).exists()
 
 
+def test_cli_run_refuses_legacy_suspend_without_ledger_and_preserves_marker(
+    tmp_path, monkeypatch, capsys,
+):
+    from lingtai import cli
+
+    marker = tmp_path / ".suspend"
+    marker.write_text("legacy-only", encoding="utf-8")
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(
+        cli,
+        "build_agent",
+        lambda data, working_dir: (_ for _ in ()).throw(
+            AssertionError("Agent/providers/MCP constructed")
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["lingtai-agent", "run", str(tmp_path)])
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main()
+
+    assert raised.value.code == 1
+    assert capsys.readouterr().err == '{"error":{"code":"explicit_suspend_active"}}\n'
+    assert marker.read_text(encoding="utf-8") == "legacy-only"
+    assert not (tmp_path / "logs").exists()
+
+
+def test_cli_run_rechecks_legacy_suspend_after_construction(tmp_path, monkeypatch):
+    from lingtai import cli
+
+    marker = tmp_path / ".suspend"
+
+    class FakeAgent:
+        def __init__(self):
+            self.stop_calls: list[float] = []
+
+        def stop(self, timeout=10.0):
+            self.stop_calls.append(timeout)
+
+    agent = FakeAgent()
+
+    def suspend_during_cleanup(working_dir, **kwargs):
+        assert kwargs == {"preserve_suspend": True}
+        marker.write_text("arrived-during-construction", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr("lingtai.kernel.logging.setup_logging", lambda **kwargs: None)
+    monkeypatch.setattr(cli, "load_init", lambda working_dir: {})
+    monkeypatch.setattr("lingtai.venv_resolve.resolve_venv", lambda data: tmp_path / "venv")
+    monkeypatch.setattr(cli, "build_agent", lambda data, working_dir: agent)
+    monkeypatch.setattr(cli, "_clean_signal_files", suspend_during_cleanup)
+    monkeypatch.setattr(
+        cli,
+        "_register_agent_boot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("boot registered after legacy suspend")
+        ),
+    )
+
+    with pytest.raises(LifecycleLedgerError, match="explicit_suspend_active"):
+        cli.run(tmp_path)
+
+    assert agent.stop_calls == [10.0]
+    assert marker.read_text(encoding="utf-8") == "arrived-during-construction"
+    assert FilesystemLifecycleLedgerAdapter(tmp_path).read_snapshot().latest_boot is None
+
+
 def test_cli_run_ledger_setup_failure_is_structured_before_agent_construction(
     tmp_path, monkeypatch, capsys,
 ):
@@ -1837,8 +1975,8 @@ def test_cli_run_real_suspend_wins_after_construction_and_stops_agent(
     original_clean = cli._clean_signal_files
     errors: list[BaseException] = []
 
-    def pause_after_cleanup(working_dir):
-        original_clean(working_dir)
+    def pause_after_cleanup(working_dir, **kwargs):
+        original_clean(working_dir, **kwargs)
         cleaned.set()
         assert resume_boot.wait(5)
 
@@ -1970,12 +2108,12 @@ def test_cli_run_boot_append_wins_before_real_suspend_and_timeline_stays_valid(
     assert marker.read_text(encoding="utf-8") == "system-suspend"
 
 
-def test_cli_clean_boot_cleans_stale_sleep_suspend_and_refresh_before_registration(
+def test_cli_clean_boot_cleans_stale_sleep_and_refresh_before_registration(
     tmp_path, monkeypatch,
 ):
     from lingtai import cli
 
-    signals = [tmp_path / name for name in (".suspend", ".sleep", ".refresh")]
+    signals = [tmp_path / name for name in (".sleep", ".refresh")]
     for path in signals:
         path.write_text("stale", encoding="utf-8")
     taken = tmp_path / ".refresh.taken"

@@ -120,14 +120,20 @@ maintenance: |
   exits 0.
 - [ ] Tests cover physical duplicate-row count preflight, strict boot/verdict
   semantics, bound-address/workdir refusal, same-descriptor byte preflight,
-  parent-link/file/child-directory fsync order, two-token incarnation stability,
-  strict Core sample closure, and typed setup/lease errors in addition to stale
-  two-sample and ledger-first failures.
+  parent-link fsync under the shared lock plus failed-first-sync retry,
+  file/child-directory fsync order, two-token incarnation stability, strict Core
+  sample closure, and typed setup/lease errors in addition to stale two-sample
+  and ledger-first failures.
 - [ ] `--once` emits one mechanical JSON object and audits one verdict; corrupt
   or ownership-ambiguous truth exits nonzero.
-- [ ] Early active intent prevents construction and preserves the marker; the
-  real late race stops the constructed Agent before start with no boot row, and
-  the opposite lock order records boot then suspend without corruption.
+- [ ] Either a legacy `.suspend` marker or early active intent prevents
+  construction and preserves the marker; a legacy marker visible at the
+  post-construction recheck and a durable-intent late race both stop the
+  constructed Agent before start with no boot row, while the opposite lock order
+  records boot then suspend without corruption.
+- [ ] Guardian setup and loop sampling bound `.agent.json` and Agent Record to
+  1 MiB from one binary descriptor; oversized/deep/invalid/allocation-failing
+  inputs become conservative typed evidence rather than raw failures.
 - [ ] No test observes a delivered/nonzero signal, process launch, Agent/provider/
   MCP construction, service install, or guardian mutation of heartbeat,
   manifest, signal, or agent-lease state. The macOS signal-zero existence probe

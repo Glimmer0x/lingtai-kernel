@@ -11,6 +11,7 @@ from typing import TextIO
 from lingtai.adapters.agent_guardian import (
     FilesystemLifecycleLedgerAdapter,
     LocalAgentGuardianHostAdapter,
+    observe_guardian_manifest,
 )
 from lingtai.kernel.agent_guardian import (
     GUARDIAN_CHECKPOINT_SECONDS,
@@ -125,13 +126,7 @@ def run_guardian_cli(
     if not agent_dir.is_dir():
         _error(stderr, "agent_dir_invalid")
         return EXIT_INVALID
-    from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
-
-    try:
-        manifest = PosixAgentPresenceStoreAdapter(agent_dir).observe_manifest()
-    except (OSError, OverflowError, TypeError, ValueError, RecursionError, UnicodeError):
-        _error(stderr, "guardian_setup_unavailable")
-        return EXIT_LEDGER_UNSAFE
+    manifest = observe_guardian_manifest(agent_dir)
     if not is_agent(manifest):
         _error(stderr, "agent_dir_not_agent")
         return EXIT_INVALID
@@ -206,6 +201,7 @@ def run_guardian_cli(
                 ValueError,
                 RecursionError,
                 UnicodeError,
+                MemoryError,
             ):
                 terminal_error = "guardian_observation_unavailable"
                 exit_code = EXIT_LEDGER_UNSAFE
@@ -224,6 +220,7 @@ def run_guardian_cli(
                 ValueError,
                 RecursionError,
                 UnicodeError,
+                MemoryError,
             ):
                 terminal_error = "guardian_observation_unavailable"
                 exit_code = EXIT_LEDGER_UNSAFE

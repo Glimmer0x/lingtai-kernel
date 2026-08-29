@@ -56,11 +56,13 @@ address `agent_dir.name`; copied or mixed foreign-address history fails with
 `FilesystemLifecycleLedgerAdapter` serializes on
 `logs/.agent_lifecycle.lock`, appends one compact UTF-8 line, flushes and
 file-fsyncs it, and directory-fsyncs first creation where the platform exposes
-directory descriptors. A fresh `logs/` link is first fsynced through the
-already-existing agent directory; the first event then fsyncs its file and
-`logs/`. Reads use one binary descriptor, descriptor metadata, and a cumulative
-raw-byte bound; appends read, preflight, append, and fsync one descriptor under
-the lock. Windows file fsync and OS byte-range locks remain in force, but Python
+directory descriptors. After acquiring that shared lock, every mutation fsyncs
+the already-existing agent directory so a fresh `logs/` link is durable and a
+retry repairs an earlier post-`mkdir` parent-fsync failure; a new event then
+fsyncs its file and `logs/`. Reads use one binary descriptor, descriptor
+metadata, and a cumulative raw-byte bound; appends read, preflight, append, and
+fsync one descriptor under the lock. Windows file fsync and OS byte-range locks
+remain in force, but Python
 cannot directory-fsync there. `LocalAgentGuardianHostAdapter`
 uses OS-native observation without subprocesses or delivered signals and owns
 only the separate `system/.agent_guardian.lock`; unavailable safe evidence
@@ -122,12 +124,12 @@ raw filesystem exceptions.
    and an event that cannot encode is `invalid_event_encoding` before a write.
 4. Boot records after Agent construction acquired the workdir lease and before
    `start()` publishes heartbeat/Agent Record. Registration failure stops the
-   unstarted Agent and emits one mechanical error. A locked preflight preserves
-   stale delivery markers when durable intent is already active; ordinary stale
-   `.suspend`, `.sleep`, and `.refresh` cleanup then precedes the decisive locked
-   registration, which repeats the active-intent check in the append transaction.
-   Suspend and CPR ledger writes precede their existing signal cleanup/action
-   and fail closed.
+   unstarted Agent and emits one mechanical error. Either a legacy `.suspend`
+   marker or durable intent refuses boot before construction; ordinary cleanup
+   removes only stale `.sleep`/`.refresh`, preserves `.suspend`, and rechecks that
+   marker immediately before the decisive locked registration. The append
+   transaction separately repeats the durable active-intent check. Suspend and
+   CPR ledger writes precede their existing signal cleanup/action and fail closed.
 5. Guardian freshness is `<=120s`; stale/uncertain evidence takes a second
    independently read sample after 2s. Only identical ownership conclusions
    can confirm `dead` or stale `frozen`. Stale heartbeat alone is never dead.
@@ -146,7 +148,12 @@ raw filesystem exceptions.
    runtime incarnation, coherent exact identity/command/workdir, valid manifest,
    and coherent heartbeat category/age; malformed combinations fail with
    `invalid_presence_sample` and the guardian renders that typed failure.
-   Active intent changes only the plan to `hold_explicit_suspend`. These values
+   Guardian setup reads `.agent.json`; each sample rereads that manifest and
+   Agent Record. Each individual read uses one binary descriptor with a 1 MiB
+   bound; descriptor growth, oversized/deep JSON, invalid encoding, and
+   allocation failure become conservative `malformed`/`unreadable` evidence
+   rather than a raw traceback. Active intent
+   changes only the plan to `hold_explicit_suspend`. These values
    are data only. A future actuator requires its own recovery lease and durable
    crash-loop budget/backoff.
 

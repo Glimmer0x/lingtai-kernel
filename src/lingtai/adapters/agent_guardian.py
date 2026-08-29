@@ -35,6 +35,7 @@ from lingtai.kernel.agent_guardian import (
     utc_timestamp,
     validate_lifecycle_event,
 )
+from lingtai.kernel.agent_presence import ManifestObservation
 from lingtai.kernel.process_match import match_agent_run
 from lingtai.kernel.session_stats import AGENT_RECORD_SCHEMA, AGENT_RECORD_VERSION, agent_record_path
 
@@ -43,7 +44,36 @@ LEDGER_RELATIVE_PATH = Path("logs/agent_lifecycle.jsonl")
 LEDGER_LOCK_RELATIVE_PATH = Path("logs/.agent_lifecycle.lock")
 GUARDIAN_LOCK_RELATIVE_PATH = Path("system/.agent_guardian.lock")
 _LEDGER_LOCK_TIMEOUT_SECONDS = 10.0
+_MAX_GUARDIAN_JSON_BYTES = 1024 * 1024
 _RETURN_APPENDED_EVENT = object()
+
+
+def observe_guardian_manifest(agent_dir: str | Path) -> ManifestObservation:
+    """Read `.agent.json` once; any bounded read/parse uncertainty is malformed."""
+    try:
+        path = Path(agent_dir) / ".agent.json"
+        with path.open("rb") as handle:
+            if os.fstat(handle.fileno()).st_size > _MAX_GUARDIAN_JSON_BYTES:
+                return ManifestObservation.malformed()
+            raw = handle.read(_MAX_GUARDIAN_JSON_BYTES + 1)
+        if len(raw) > _MAX_GUARDIAN_JSON_BYTES:
+            return ManifestObservation.malformed()
+        data = json.loads(raw.decode("utf-8"))
+    except FileNotFoundError:
+        return ManifestObservation.absent()
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        OverflowError,
+        RecursionError,
+        MemoryError,
+    ):
+        return ManifestObservation.malformed()
+    if not isinstance(data, dict):
+        return ManifestObservation.malformed()
+    return ManifestObservation.valid(data)
 
 
 class FilesystemLifecycleLedgerAdapter:
@@ -96,7 +126,6 @@ class FilesystemLifecycleLedgerAdapter:
             except OSError as exc:
                 raise LifecycleLedgerError("ledger_io_error") from exc
             return False
-        self._fsync_directory(self.agent_dir)
         return True
 
     def _locked(self, operation, *, create_parent: bool = True):
@@ -106,6 +135,12 @@ class FilesystemLifecycleLedgerAdapter:
             else:
                 self._require_agent_dir()
             with self._lock.acquire(timeout=_LEDGER_LOCK_TIMEOUT_SECONDS):
+                if create_parent:
+                    # The lock file itself lives below logs/, so mkdir must win
+                    # first. Fsync the agent root only after acquiring the shared
+                    # ledger lock, and repeat it on every mutation so a retry can
+                    # repair a prior post-mkdir fsync failure.
+                    self._fsync_directory(self.agent_dir)
                 return operation()
         except Timeout as exc:
             raise LifecycleLedgerError("ledger_lock_timeout") from exc
@@ -488,9 +523,6 @@ class LocalAgentGuardianHostAdapter:
         self._sleeper = sleeper
         self._guardian_lock = FileLock(str(self.agent_dir / GUARDIAN_LOCK_RELATIVE_PATH))
         self._guardian_proxy = None
-        from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
-
-        self._agent_presence = PosixAgentPresenceStoreAdapter(self.agent_dir)
 
     def acquire_guardian_lease(self) -> None:
         try:
@@ -737,19 +769,22 @@ class LocalAgentGuardianHostAdapter:
             return "unavailable", identity, command_match, executable_match, ("exact_process_state_or_command_unavailable",)
         return ("exact_stopped" if state in {"T", "t"} else "exact_running"), identity, True, True, ()
 
+    def _manifest_observation(self) -> str:
+        return observe_guardian_manifest(self.agent_dir).kind.value
+
     def _heartbeat_observation(self, now: float) -> tuple[str, float | None, str | None, tuple[str, ...]]:
         path = agent_record_path(self.agent_dir)
         try:
             with path.open("rb") as handle:
-                if os.fstat(handle.fileno()).st_size > 1024 * 1024:
+                if os.fstat(handle.fileno()).st_size > _MAX_GUARDIAN_JSON_BYTES:
                     return "unreadable", None, None, ("agent_record_oversized",)
-                raw = handle.read(1024 * 1024 + 1)
-            if len(raw) > 1024 * 1024:
+                raw = handle.read(_MAX_GUARDIAN_JSON_BYTES + 1)
+            if len(raw) > _MAX_GUARDIAN_JSON_BYTES:
                 return "unreadable", None, None, ("agent_record_oversized",)
             record = json.loads(raw.decode("utf-8"))
         except FileNotFoundError:
             return "missing", None, None, ()
-        except (OSError, UnicodeError, ValueError, RecursionError):
+        except (OSError, UnicodeError, ValueError, RecursionError, MemoryError):
             return "unreadable", None, None, ("agent_record_unreadable",)
         if not isinstance(record, dict) or record.get("schema") != AGENT_RECORD_SCHEMA or record.get("schema_version") != AGENT_RECORD_VERSION:
             return "unreadable", None, None, ("agent_record_schema_invalid",)
@@ -774,10 +809,7 @@ class LocalAgentGuardianHostAdapter:
     def sample(self, boot_record: dict | None) -> PresenceSample:
         now = self.wall_time()
         lease = self._observe_agent_lease()
-        try:
-            manifest = self._agent_presence.observe_manifest().kind.value
-        except (OSError, UnicodeError, ValueError, TypeError, RecursionError):
-            manifest = "malformed"
+        manifest = self._manifest_observation()
         heartbeat, age, record_state, heartbeat_issues = self._heartbeat_observation(now)
         manifest_issues = () if manifest == "valid" else (f"agent_manifest_{manifest}",)
         if boot_record is None:

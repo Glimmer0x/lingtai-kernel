@@ -229,9 +229,18 @@ def build_agent(
     return agent
 
 
-def _clean_signal_files(working_dir: Path) -> None:
-    """Remove stale .suspend / .sleep files left over from a previous run."""
-    for name in (".suspend", ".sleep", ".refresh"):
+def _clean_signal_files(
+    working_dir: Path,
+    *,
+    preserve_suspend: bool = False,
+) -> None:
+    """Remove stale boot files, optionally preserving explicit suspend intent."""
+    names = (".sleep", ".refresh") if preserve_suspend else (
+        ".suspend",
+        ".sleep",
+        ".refresh",
+    )
+    for name in names:
         f = working_dir / name
         if f.is_file():
             try:
@@ -336,11 +345,16 @@ def run(working_dir: Path) -> None:
     from lingtai.adapters.agent_guardian import FilesystemLifecycleLedgerAdapter
     from lingtai.kernel.agent_guardian import LifecycleLedgerError
 
-    # Refuse an already-suspended agent before constructing providers, MCP
-    # clients, or ToolPlugins. register_boot repeats this check under the
-    # ledger lock after Agent construction, closing a concurrent-suspend race.
+    # Refuse either the legacy marker or durable ledger intent before
+    # constructing providers, MCP clients, or ToolPlugins. register_boot repeats
+    # the ledger check under its lock after construction; the marker is also
+    # rechecked immediately before that append and is never silently cleaned.
+    suspend_marker = working_dir / ".suspend"
     ledger = FilesystemLifecycleLedgerAdapter(working_dir)
-    if ledger.read_snapshot().active_intent_id is not None:
+    if (
+        suspend_marker.is_file()
+        or ledger.read_snapshot().active_intent_id is not None
+    ):
         raise LifecycleLedgerError("explicit_suspend_active")
 
     # Durable file logging for daemonized agents: stderr alone is DEVNULL for
@@ -370,12 +384,15 @@ def run(working_dir: Path) -> None:
 
     agent = build_agent(data, working_dir)
     try:
-        # register_boot repeats the durable intent check under the append lock
-        # after cleanup, so a concurrent suspend cannot race into a started boot.
-        _clean_signal_files(working_dir)
+        # Preserve legacy suspend while cleaning unrelated stale boot files.
+        # Recheck the marker after Agent construction so a legacy suspend that
+        # arrived during construction also prevents registration and start.
+        _clean_signal_files(working_dir, preserve_suspend=True)
+        if suspend_marker.is_file():
+            raise LifecycleLedgerError("explicit_suspend_active")
         # Agent construction owns the workdir lease; start() has not yet
-        # published a heartbeat or Agent Record. Ledger failure therefore
-        # releases the agent and prevents an unregistered runtime from starting.
+        # published a heartbeat or Agent Record. The locked ledger append repeats
+        # the durable-intent check and prevents an unregistered runtime start.
         _register_agent_boot(agent, working_dir, ledger=ledger)
     except BaseException:
         try:
