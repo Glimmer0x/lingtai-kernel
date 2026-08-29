@@ -209,12 +209,22 @@ def main(lingtai_src: Path, puffo_src: Path) -> None:
                 if r.operation == "authorize_derived_launch"
                 and r.reason_code == "nested_derived_launch_denied"
             ]
-            events = run_dir.events_path.read_text(encoding="utf-8")
+            event_rows = [
+                json.loads(line)
+                for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            daemon_decisions = [
+                event for event in event_rows
+                if event.get("event") == "derived_launch_admission_decision"
+                and event.get("capability") == "daemon"
+            ]
             print(f"provider_calls={provider.provider_calls}")
             print(f"provider_audits={[r.audit_id for r in provider_records]}")
             print(f"nested_audits={[r.audit_id for r in nested_records]}")
             print(f"avatar_result={avatar}")
-            print(f"daemon_events={events}")
+            print(f"daemon_result={daemon}")
+            print(f"daemon_decisions={daemon_decisions}")
 
             assert provider.provider_calls == [provider_records[0].audit_id]
             assert provider.provider_calls == provider_before_nested
@@ -223,7 +233,17 @@ def main(lingtai_src: Path, puffo_src: Path) -> None:
             assert avatar["reason_code"] == "nested_derived_launch_denied"
             assert isinstance(avatar["audit_id"], str) and avatar["audit_id"]
             assert avatar["audit_id"] in [r.audit_id for r in nested_records]
-            assert "nested_derived_launch_denied" in events
+            assert daemon == {
+                "status": "error",
+                "message": "derived launch was not admitted: nested_derived_launch_denied",
+            }
+            assert len(daemon_decisions) == 1
+            daemon_decision = daemon_decisions[0]
+            assert daemon_decision["state"] == "denied"
+            assert daemon_decision["reason_code"] == "nested_derived_launch_denied"
+            assert isinstance(daemon_decision["audit_id"], str) and daemon_decision["audit_id"]
+            assert daemon_decision["audit_id"] in [r.audit_id for r in nested_records]
+            assert daemon_decision["audit_id"] != avatar["audit_id"]
             assert all(isinstance(r.audit_id, str) and r.audit_id for r in nested_records)
     finally:
         if host is not None:
