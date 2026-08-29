@@ -141,6 +141,16 @@ class _RecordingDerivedLaunchPort:
         )
 
 
+class _CloseTrackingLease:
+    """Opaque lease stand-in used to prove Core disposes rejected grants."""
+
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
 def test_raw_provider_service_construction_inventory_is_explicit():
     """A new raw service constructor must be classified before it can land.
 
@@ -785,6 +795,39 @@ def test_derived_launch_reports_a_child_request_to_the_port_then_denies_it():
 
     assert raised.value.decision.state is ProviderAdmissionState.DENIED
     assert port.calls == [(child, DerivedLaunchCapability.AVATAR)]
+
+
+def test_nested_driver_grant_is_denied_and_its_opaque_lease_is_closed():
+    """A buggy Driver grant cannot create a child or strand its endpoint."""
+
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
+    lease = _CloseTrackingLease()
+
+    class IncorrectlyGrantingPort:
+        def authorize_derived_launch(self, parent, capability):
+            assert parent is child
+            assert capability is DerivedLaunchCapability.AVATAR
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "incorrect_driver_grant",
+                audit_id="audit-incorrect-grant",
+                child_endpoint_lease=lease,
+            )
+
+    token = bind_provider_admission(child)
+    try:
+        with pytest.raises(
+            DerivedLaunchAdmissionError, match="nested_derived_launch_denied"
+        ) as raised:
+            require_derived_launch_admission(
+                IncorrectlyGrantingPort(), DerivedLaunchCapability.AVATAR
+            )
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.decision.audit_id == "audit-incorrect-grant"
+    assert lease.close_calls == 1
 
 
 def test_derived_launch_port_is_fail_closed_when_unconnected_or_indeterminate():

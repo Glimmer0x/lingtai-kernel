@@ -273,6 +273,26 @@ def current_provider_call_class() -> ProviderCallClass:
     return ProviderCallClass.ROOT
 
 
+def _discard_child_endpoint_lease(lease: object | None) -> None:
+    """Best-effort dispose an opaque handoff Core will not pass to spawn.
+
+    Core deliberately does not know the adapter's lease type or its file
+    descriptor.  It may nevertheless reject a malformed decision, or keep its
+    one-hop structural backstop after a faulty Driver grant.  In both cases
+    retaining the opaque handoff would strand the authority endpoint.  Adapter
+    leases expose a no-argument ``close`` method; unknown opaque values remain
+    harmlessly non-closable so Core stays transport-neutral.
+    """
+
+    close = getattr(lease, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            # A cleanup failure must never turn a Driver denial into a launch.
+            pass
+
+
 def require_derived_launch_admission(
     port: DerivedLaunchAdmissionPort | None,
     capability: DerivedLaunchCapability,
@@ -337,7 +357,16 @@ def require_derived_launch_admission(
             decision.state is ProviderAdmissionState.GRANTED
             and decision.child_endpoint_lease is None
         )
+        or (
+            decision.state is not ProviderAdmissionState.GRANTED
+            and decision.child_endpoint_lease is not None
+        )
     ):
+        _discard_child_endpoint_lease(
+            decision.child_endpoint_lease
+            if isinstance(decision, DerivedLaunchDecision)
+            else None
+        )
         decision = DerivedLaunchDecision(
             ProviderAdmissionState.INDETERMINATE,
             "malformed_derived_launch_admission_decision",
@@ -346,6 +375,7 @@ def require_derived_launch_admission(
     # record its own denial.  Core remains a second, structural one-hop
     # backstop: an erroneous Driver grant can never create a second child.
     if isinstance(parent, DerivedProviderAdmission) and decision.allowed:
+        _discard_child_endpoint_lease(decision.child_endpoint_lease)
         decision = DerivedLaunchDecision(
             ProviderAdmissionState.DENIED,
             "nested_derived_launch_denied",
