@@ -15,6 +15,7 @@ provider-call adjudication are all real.
 from __future__ import annotations
 
 import argparse
+from importlib.metadata import PackageNotFoundError, version
 import os
 import sys
 import tempfile
@@ -22,7 +23,26 @@ import time
 from pathlib import Path
 
 
+def _require_e2e_environment() -> None:
+    """Fail before product setup when the required MCP server API is absent."""
+
+    try:
+        from mcp.server import ServerRequestContext  # noqa: F401
+    except (ImportError, ModuleNotFoundError) as exc:
+        try:
+            installed = version("mcp")
+        except PackageNotFoundError:
+            installed = "not installed"
+        raise RuntimeError(
+            "E2E_ENVIRONMENT_INVALID: the selected mcp "
+            f"({installed}) does not provide mcp.server.ServerRequestContext; "
+            "recreate this exact checkout with `uv sync --locked` before "
+            "interpreting the Driver lifecycle verdict"
+        ) from exc
+
+
 def _load(lingtai_src: Path, puffo_src: Path):
+    _require_e2e_environment()
     lingtai_src = lingtai_src.resolve(strict=True)
     puffo_src = puffo_src.resolve(strict=True)
     tests_dir = lingtai_src.parent / "tests"
