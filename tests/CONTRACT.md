@@ -209,8 +209,13 @@ import sys
 # Let pytest choose its own import path first. Inspect the module it actually
 # loaded afterwards; pre-importing it here would alter that observation.
 evidence_module = "<module>"
-if evidence_module in sys.modules:
-    print("INVALID: evidence module was loaded before pytest")
+root_package = evidence_module.split(".")[0]
+preloaded = sorted(
+    name for name in sys.modules
+    if name == root_package or name.startswith(root_package + ".")
+)
+if preloaded:
+    print(f"INVALID: {root_package} was imported before pytest: {preloaded[:3]}")
     raise SystemExit(2)
 
 import pytest
