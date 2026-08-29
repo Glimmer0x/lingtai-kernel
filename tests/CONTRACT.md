@@ -198,11 +198,17 @@ PYTHONPYCACHEPREFIX="$phase_pyc_cache" \
 Python's normal timestamp validation accepts an unchanged `(mtime, size)`
 pair: a same-second, same-length edit can therefore make a restored source run
 the mutated bytecode or make a mutation run the old bytecode. Before trusting
-each phase's result, verify the pin, import/load path, and either the relevant
-source hash or a mutation sentinel. Record the cache-isolation method and the
-three outcomes — `clean-pass → mutation-must-red → restored-clean-pass` — with
-the mutation command. A result without that provenance is not evidence that
-the assertion did—or did not—carry the regression.
+each phase's result, verify the pin, import/load path, and runtime evidence
+that that phase's own code executed: a sentinel emitted by the mutated code
+path at run time, or an equivalent fingerprint of the loaded code object. A
+source hash or source-level `grep` proves only the file's current state; it
+does not prove which bytes ran and cannot satisfy this requirement. The
+mutation phase must show the runtime sentinel and the restored phase must show
+its absence. Record the cache-isolation method and the three outcomes —
+`clean-pass → mutation-must-red → restored-clean-pass` — with the mutation
+command. A phase without this provenance is **invalid**, not pass or fail; a
+result without it is not evidence that the assertion did—or did not—carry the
+regression.
 
 ## Maintenance
 
