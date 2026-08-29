@@ -385,8 +385,8 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
     assert data["manifest"]["llm"]["provider"] == "p1"
 
 
-def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeypatch):
-    """A legacy preset layout works in memory without rewriting the preset.
+def test_materialize_discards_context_limit_from_legacy_layout(tmp_path, monkeypatch):
+    """A legacy preset value stays out of the effective init manifest.
 
     Production preset reads are migration-free. The materializer interprets the
     legacy root field in memory and leaves the authored preset bytes untouched.
@@ -412,20 +412,18 @@ def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeyp
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data is not None
-    assert data["manifest"]["context_limit"] == 16384
+    assert "context_limit" not in data["manifest"]
     # The real reader/materializer is read-only over the authored preset.
     on_disk = json.loads((plib / "narrow.json").read_text())
     assert on_disk["manifest"]["context_limit"] == 16384
     assert "context_limit" not in on_disk["manifest"]["llm"]
 
 
-def test_materialize_picks_up_context_limit_from_llm_block(tmp_path, monkeypatch):
+def test_materialize_discards_context_limit_from_llm_block(tmp_path, monkeypatch):
     """Canonical layout: context_limit lives inside manifest.llm in the preset.
 
-    The materializer must lift it out of llm and write it to manifest root
-    in init.json (the runtime contract — init.json schema is unchanged).
-    The materialized llm block must NOT carry context_limit forward, since
-    init.json's llm block doesn't have that field.
+    The materializer discards it: presets may use it for their own context-fit
+    guard, but it must never become an init.json runtime input.
     """
     plib = _make_preset_lib(tmp_path, {
         "narrow": {
@@ -446,8 +444,7 @@ def test_materialize_picks_up_context_limit_from_llm_block(tmp_path, monkeypatch
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data is not None
-    assert data["manifest"]["context_limit"] == 16384
-    # llm block in init.json schema does not carry context_limit
+    assert "context_limit" not in data["manifest"]
     assert "context_limit" not in data["manifest"]["llm"]
 
 

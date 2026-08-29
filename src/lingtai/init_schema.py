@@ -87,38 +87,12 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "capabilities": dict,
     "disable": list,
     "soul": dict,
-    "context_limit": (int, type(None)),
-    # activeness is hydrated into AgentConfig.activeness by
-    # agent.build_agent_config (str | None; default "balanced"). It is a
-    # legacy responsiveness posture value — prompt.py no longer injects text
-    # from it — but the hydrator still overlays it, so it must be
-    # schema-known and type-checked to avoid an "unknown field" warning on
-    # valid configs (issue #736).
-    "activeness": (str, type(None)),
-    # snapshot_interval (seconds between git snapshots; None = off) is
-    # hydrated into AgentConfig.snapshot_interval by agent.build_agent_config
-    # and consumed by the lifecycle snapshot loop; accepts integer or float
-    # seconds. The range check (reject bool and <= 0) is enforced explicitly
-    # in validate_init below.
-    "snapshot_interval": (int, float, type(None)),
     # NOTE: molt_notice / molt_pressure / molt_urgency / molt_prompt are
     # deliberately NOT here. They were retired as agent-configurable fields —
     # molt thresholds are kernel-fixed runtime constants (see config.py
     # MOLT_*_THRESHOLD) and the context.molt message is now hardcoded in
     # meta_block.build_molt_context. See MANIFEST_LEGACY_IGNORED below.
-    "max_rpm": int,
-    # Max AED (agent-environment-defibrillation) retry attempts per inbox
-    # message turn (see turn.py). Hydrated into AgentConfig.max_aed_attempts by
-    # agent.build_agent_config; AgentConfig clamps it to >= 1 (issue #654), so
-    # the (int) type here only rejects non-int types like str/float.
-    "max_aed_attempts": int,
-    # Max seconds an agent may remain STUCK before the AED subsystem
-    # transitions it to ASLEEP (see lifecycle.py). Hydrated into
-    # AgentConfig.aed_timeout by agent.build_agent_config (default 360.0);
-    # accepts integer or float seconds.
-    "aed_timeout": (int, float),
     "admin": dict,
-    "streaming": bool,
     "time_awareness": bool,
     "timezone_awareness": bool,
     "pseudo_agent_subscriptions": list,
@@ -162,6 +136,11 @@ MANIFEST_LEGACY_IGNORED: set[str] = {
     # init.json values stay warning-free without being advertised as a live
     # typed knob (issue #736).
     "max_turns",
+    # Ordinary runtime policy is owned only by environment and the closed v2
+    # System document.  Existing init.json keys stay readable without a
+    # schema/type failure, but no boot, refresh, or preset path reads them.
+    "context_limit", "max_rpm", "streaming", "aed_timeout",
+    "max_aed_attempts", "snapshot_interval", "activeness",
 }
 
 MANIFEST_KNOWN: set[str] = (
@@ -383,47 +362,6 @@ def validate_init(data: dict) -> list[str]:
         if summarize_threshold < 0:
             raise ValueError(
                 "manifest.summarize_notification_threshold: expected non-negative int"
-            )
-
-    if "aed_timeout" in manifest:
-        aed_timeout = manifest["aed_timeout"]
-        # bool is an int subclass — reject it explicitly, then require > 0.
-        # (_optional_keys already rejected non-number types like str/None.)
-        if isinstance(aed_timeout, bool):
-            raise ValueError(
-                "manifest.aed_timeout: expected positive number, got bool"
-            )
-        if aed_timeout <= 0:
-            raise ValueError(
-                "manifest.aed_timeout: expected positive number (> 0)"
-            )
-
-    if "snapshot_interval" in manifest and manifest["snapshot_interval"] is not None:
-        snapshot_interval = manifest["snapshot_interval"]
-        # None means "off"; any numeric value must be a positive number of
-        # seconds. bool must be rejected explicitly: it is not covered by the
-        # _optional_keys bool guard because the schema type here is
-        # (int, float, type(None)).
-        if isinstance(snapshot_interval, bool):
-            raise ValueError(
-                "manifest.snapshot_interval: expected positive number or null, got bool"
-            )
-        if snapshot_interval <= 0:
-            raise ValueError(
-                "manifest.snapshot_interval: expected positive number (> 0)"
-            )
-
-    if "max_aed_attempts" in manifest:
-        max_aed_attempts = manifest["max_aed_attempts"]
-        # Mirrors the AgentConfig.__post_init__ clamp (>= 1) but fails loudly
-        # at validation time instead of silently clamping a bad value.
-        if isinstance(max_aed_attempts, bool):
-            raise ValueError(
-                "manifest.max_aed_attempts: expected int >= 1, got bool"
-            )
-        if max_aed_attempts < 1:
-            raise ValueError(
-                "manifest.max_aed_attempts: expected int >= 1"
             )
 
     soul = manifest.get("soul")

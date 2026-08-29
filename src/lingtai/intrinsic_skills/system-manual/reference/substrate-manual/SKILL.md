@@ -349,16 +349,17 @@ Top-level prompt/env/venv/addons/MCP/manifest field groups follow the same raw
 For the exact fields, validation, and per-field lifecycle detail, read
 `init_schema.py`, `kernel/presets.py`, and `agent.py` directly (`_read_init`,
 `_activate_preset`, `_reload_prompt_sections`) rather than expecting this
-manual to restate a full field table. `context_limit` ownership is split by
-document type: an authored *preset* stores it inside `manifest.llm.context_limit`
-(m001 relocates preset documents only), while agent `init.json` and the
-materialized effective manifest keep it at `manifest.context_limit` — runtime
-hydration reads the root, and a stray nested `manifest.llm.context_limit` on an
-init.json is diagnosed by the init reader as a compatibility path (nested raw →
-root effective). Some runtime gaps (`streaming`,
-`pseudo_agent_subscriptions`, exact MCP
-reload/venv/prompt persistence detail) are open implementation questions, not
-resolved by this reference — do not infer a guarantee from a name alone.
+manual to restate a full field table. An authored *preset* may retain
+`manifest.llm.context_limit` for its preset-local context-fit guard, but runtime
+policy does not read it. Agent `init.json` likewise does not own
+`context_limit`, `max_rpm`, `streaming`, `aed_timeout`, `max_aed_attempts`,
+`snapshot_interval`, or `activeness`: old root keys are compatibility-known and
+ignored, while valid environment and `settings/system.json` v2 values override
+fixed defaults. Materialization and preset activation discard a preset context
+limit instead of handing it into init. Some runtime gaps
+(`pseudo_agent_subscriptions`, exact MCP reload/venv/prompt persistence detail)
+are open implementation questions, not resolved by this reference — do not
+infer a guarantee from a name alone.
 
 ### Preset identity and the two catalogs
 

@@ -143,28 +143,10 @@
     // Lifecycle limits
     // -------------------------------------------------------
 
-    // Max context window tokens. null/missing/invalid = use the conservative
-    // 272,000-token fallback; valid configured values are preserved exactly.
-    // Set this to cap memory usage or force earlier molt.
-    // Canonical home for agent init.json / effective manifest is this root
-    // field. Authored presets keep their own manifest.llm.context_limit, which
-    // materialization lifts onto this root; a stray nested
-    // manifest.llm.context_limit on an init.json is diagnosed as a
-    // compatibility path by the init reader (nested raw -> root effective).
-    "context_limit": null,
-
     // Per-wake loop budget: max iterations of the LLM/tool-call loop per
     // wake cycle. Every tool call counts as a turn, not just LLM requests.
     // Safety limit — agent sleeps once the budget is exhausted.
     "max_turns": 500,
-
-    // Max LLM API requests per minute, gated at the adapter layer.
-    // Shared across all agents in the same TUI process that use the same
-    // (provider, base_url) — so a network of N agents cooperatively shares
-    // this cap instead of each hitting the provider independently. Set to
-    // 0 to disable gating. Default 60 is conservative; bump for paid
-    // high-tier providers, lower for free tiers.
-    "max_rpm": 60,
 
     // Whether to serialize chat history into system/context.md mid-session.
     // When true (default), every Nth idle flush rebuilds context.md and
@@ -207,8 +189,6 @@
     // Avatars always get {} (no privileges) regardless of parent.
     "admin": { "karma": true, "nirvana": false },
 
-    // Whether to use streaming for LLM responses.
-    "streaming": false
   },
 
   // =============================================================

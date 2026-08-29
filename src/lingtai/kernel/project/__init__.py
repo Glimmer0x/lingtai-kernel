@@ -24,7 +24,6 @@ class ProjectCreateRequest:
     preset_ref: str
     llm: dict[str, object]
     capabilities: dict[str, object]
-    context_limit: int | None
     covenant: str
 
 
@@ -78,10 +77,6 @@ def _validate(request: ProjectCreateRequest) -> None:
         raise _error("invalid_preset", "preset reference must be supplied")
     if not isinstance(request.llm, dict) or not isinstance(request.capabilities, dict):
         raise _error("invalid_preset", "preset must provide LLM and capabilities objects")
-    if isinstance(request.context_limit, bool) or (
-        request.context_limit is not None and not isinstance(request.context_limit, int)
-    ):
-        raise _error("invalid_preset", "preset context limit must be an integer or null")
 
 
 def _seed(request: ProjectCreateRequest) -> ProjectSeed:
@@ -89,7 +84,6 @@ def _seed(request: ProjectCreateRequest) -> ProjectSeed:
         "agent_name": request.agent_name,
         "llm": dict(request.llm),
         "capabilities": dict(request.capabilities),
-        "context_limit": request.context_limit,
         "preset": {
             "active": request.preset_ref,
             "default": request.preset_ref,

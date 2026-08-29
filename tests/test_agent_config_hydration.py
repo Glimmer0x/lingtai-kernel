@@ -128,7 +128,7 @@ def test_hidden_idle_timeout_moves_idle_agent_to_asleep(tmp_path, monkeypatch):
     assert "session lasts" not in identity
 
 
-def test_build_agent_config_overlays_explicit_values_and_ignores_stale_molt():
+def test_build_agent_config_ignores_runtime_manifest_values_and_stale_molt():
     defaults = AgentConfig()
     manifest = _init_data({
         "stamina": 7200.0,
@@ -163,19 +163,19 @@ def test_build_agent_config_overlays_explicit_values_and_ignores_stale_molt():
 
     # Legacy manifest stamina is ignored by the runtime.
     assert cfg.stamina == defaults.stamina
-    assert cfg.max_aed_attempts == 5
+    assert cfg.max_aed_attempts == defaults.max_aed_attempts
     assert cfg.soul_delay == 7.0
     assert cfg.consultation_past_count == 2
     assert cfg.soul_voice == "custom"
     assert cfg.soul_voice_prompt == "speak plainly"
     assert cfg.thinking == "medium"
     assert cfg.language == "zh"
-    assert cfg.activeness == "quiet"
-    assert cfg.context_limit == 12345
-    assert cfg.snapshot_interval == 30.0
+    assert cfg.activeness == defaults.activeness
+    assert cfg.context_limit == defaults.context_limit
+    assert cfg.snapshot_interval == defaults.snapshot_interval
     assert cfg.time_awareness is False
     assert cfg.timezone_awareness is False
-    assert cfg.aed_timeout == 12.0
+    assert cfg.aed_timeout == defaults.aed_timeout
     assert cfg.max_rpm == 0
 
     assert cfg.max_turns == defaults.max_turns
@@ -292,7 +292,7 @@ def test_refresh_omitted_defaults_converge_after_explicit_values(tmp_path):
     )
     agent._setup_from_init()
     assert agent._config.stamina == 86400.0
-    assert agent._config.max_aed_attempts == 5
+    assert agent._config.max_aed_attempts == 3
     refreshed_init = json.loads((tmp_path / "init.json").read_text())
     # Reader compatibility is factual/read-only: the retired raw field remains
     # on disk, while AgentConfig ignores it and the outcome tells the Agent what

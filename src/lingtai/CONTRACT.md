@@ -58,15 +58,15 @@ stage, location when available, safe excerpt, behavior (`STOP` for boot and
 `KEEP_PREVIOUS_EFFECTIVE` for refresh), and a next repair step.
 Legacy `manifest.capabilities.bash` is mapped in memory to `shell`; equal dual
 input nudges, differing dual input blocks, and canonical-only input passes.
-`context_limit` ownership is split by document type: an authored *preset*
-stores it inside `manifest.llm.context_limit` (m001 relocates preset documents
-only), while agent `init.json` and the materialized effective manifest keep it
-at `manifest.context_limit` (runtime hydration reads the root). A stray nested
-`manifest.llm.context_limit` on an init.json is never a runtime source — it is
-reported as a compatibility path (`manifest.llm.context_limit` raw →
-`manifest.context_limit` effective) so the init-config Nudge points the Agent
-at the field that actually takes effect; the nested key remains an
-unknown-field warning under the init schema.
+The ordinary runtime fields `context_limit`, `max_rpm`, `streaming`,
+`aed_timeout`, `max_aed_attempts`, `snapshot_interval`, and `activeness` are
+not init schema fields.  Existing root keys (for example,
+`manifest.context_limit`) are recognized-and-ignored for
+read-only compatibility; they are neither type-checked nor hydrated.  A preset
+may retain `manifest.llm.context_limit` for preset-local context-fit checks,
+but activation and materialization never hand it into the effective init
+manifest.  Runtime values come only from valid environment variables, valid
+v2 System settings, or fixed defaults.
 
 Compatibility exists to keep older local files readable while agents/humans
 repair them. Retired prompt fields and ignored runtime knobs are never new-write

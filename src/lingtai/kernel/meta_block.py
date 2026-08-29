@@ -2937,7 +2937,9 @@ def _stub_persistent_record(record: dict) -> dict:
     return stub
 
 
-def _drop_notification_persistent_records(persistent: dict) -> dict:
+def _drop_notification_persistent_records(
+    persistent: dict, max_chars: int | None = None
+) -> dict:
     """Replace the oldest messages with id-only stubs until the envelope fits.
 
     Pathological last resort, reached only when every heavy field is already
@@ -2962,7 +2964,8 @@ def _drop_notification_persistent_records(persistent: dict) -> dict:
 
     cursors = [0] * len(lanes)
     progressed = True
-    max_chars = _notification_persistent_max_chars()
+    if max_chars is None:
+        max_chars = _notification_persistent_max_chars()
     while progressed:
         if _notification_persistent_envelope_chars(persistent) <= max_chars:
             return persistent
@@ -3017,19 +3020,39 @@ def _drop_notification_persistent_terminal(
     return {NOTIFICATION_PERSISTENT_OVERFLOW_KEY: compact_marker}
 
 
-def _notification_persistent_max_chars() -> int:
-    """Return the effective model-visible persistent notification cap.
+def _outer_notification_max_chars(agent) -> int | None:
+    """Return a positive int from the outer ``resolve_notification_max_chars`` hook.
 
-    Live-read ``LINGTAI_NOTIFICATION_MAX_CHARS`` at every payload build (no
-    restart needed, like the nudge env vars): a positive integer is used,
-    clamped to [``NOTIFICATION_PERSISTENT_MAX_CHARS_MIN`` (2048),
-    ``NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING`` (10,000)] so the context-size
-    fix cannot be silently disabled and the terminal record-stub recovery
-    envelope ALWAYS fits (the 2048 floor mirrors the attention lane's floor:
-    ONE shared bar means ONE shared floor).  Missing, blank, non-numeric, zero,
-    or negative values fall back to the default 10,000.  Kept as a function
-    rather than a module constant so an operator can tighten or relax the cap
-    per-process without a code change.
+    The outer Agent lazily projects the System-owned ``settings/system.json``
+    value through this narrow hook; Core knows no System file syntax, env
+    vocabulary, or path. A bare kernel stub, a missing or failing hook, or a
+    non-positive/non-int return yields ``None`` so the caller keeps its fixed
+    default.
+    """
+    if agent is None:
+        return None
+    try:
+        resolve = getattr(agent, "resolve_notification_max_chars", None)
+    except Exception:
+        return None
+    if not callable(resolve):
+        return None
+    try:
+        value = resolve()
+    except Exception:
+        return None
+    if type(value) is not int or value <= 0:
+        return None
+    return value
+
+
+def _notification_max_chars(agent, *, default: int, floor: int, ceiling: int) -> int:
+    """Shared resolver for both lanes: live env > outer System hook > default.
+
+    A positive configured value from either source is clamped to
+    [*floor*, *ceiling*]; missing, blank, non-numeric, zero, or negative env
+    values fall through to the outer hook, and an absent/invalid hook value
+    falls back to *default*.
     """
     raw = os.environ.get(NOTIFICATION_PERSISTENT_MAX_CHARS_ENV, "").strip()
     if raw:
@@ -3040,11 +3063,36 @@ def _notification_persistent_max_chars() -> int:
         # Env values are always str, so ``int(raw)`` never yields a ``bool``;
         # the guard is kept for symmetry with the other env int parsers.
         if not isinstance(value, bool) and value > 0:
-            return min(
-                max(value, NOTIFICATION_PERSISTENT_MAX_CHARS_MIN),
-                NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING,
-            )
-    return NOTIFICATION_PERSISTENT_MAX_CHARS
+            return min(max(value, floor), ceiling)
+    configured = _outer_notification_max_chars(agent)
+    if configured is not None:
+        return min(max(configured, floor), ceiling)
+    return default
+
+
+def _notification_persistent_max_chars(agent=None) -> int:
+    """Return the effective model-visible persistent notification cap.
+
+    Live-read ``LINGTAI_NOTIFICATION_MAX_CHARS`` at every payload build (no
+    restart needed, like the nudge env vars), then the outer Agent's
+    ``resolve_notification_max_chars()`` hook (the System-owned
+    ``settings/system.json`` v2 ``notification_max_chars`` field; ``None`` for
+    a bare kernel stub), then the default 10,000.  A positive value from
+    either source is clamped to [``NOTIFICATION_PERSISTENT_MAX_CHARS_MIN``
+    (2048), ``NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING`` (10,000)] so the
+    context-size fix cannot be silently disabled and the terminal record-stub
+    recovery envelope ALWAYS fits (the 2048 floor mirrors the attention lane's
+    floor: ONE shared bar means ONE shared floor).  Missing, blank,
+    non-numeric, zero, or negative env values fall through.  Kept as a
+    function rather than a module constant so an operator can tighten or relax
+    the cap per-process without a code change.
+    """
+    return _notification_max_chars(
+        agent,
+        default=NOTIFICATION_PERSISTENT_MAX_CHARS,
+        floor=NOTIFICATION_PERSISTENT_MAX_CHARS_MIN,
+        ceiling=NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING,
+    )
 
 
 def _cap_notification_persistent(agent, persistent: dict) -> dict:
@@ -3056,7 +3104,7 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
     the spill path, the original size, and truncated content.
     """
     full_chars = _notification_persistent_envelope_chars(persistent)
-    max_chars = _notification_persistent_max_chars()
+    max_chars = _notification_persistent_max_chars(agent)
     if full_chars <= max_chars:
         return persistent
 
@@ -3085,7 +3133,7 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
             <= max_chars
         ):
             return compacted
-    dropped = _drop_notification_persistent_records(compacted)
+    dropped = _drop_notification_persistent_records(compacted, max_chars)
     if _notification_persistent_envelope_chars(dropped) <= max_chars:
         return dropped
     return _drop_notification_persistent_terminal(dropped, marker, max_chars)
@@ -3113,33 +3161,28 @@ def _notification_attention_envelope_chars(attention: dict) -> int:
         return 0
 
 
-def _notification_attention_max_chars() -> int:
+def _notification_attention_max_chars(agent=None) -> int:
     """Return the effective model-visible attention notification cap.
 
-    Shares the ``LINGTAI_NOTIFICATION_MAX_CHARS`` env bar with the persistent
-    lane so one operator control enforces the upper limit across all
-    notification channels (Jason 2026-08-13).  A positive integer is used,
-    clamped to [``NOTIFICATION_ATTENTION_MAX_CHARS_MIN`` (2048),
-    ``NOTIFICATION_ATTENTION_MAX_CHARS_CEILING`` (10,000)]: configured values
-    below 2048 are clamped UP to 2048 so the terminal marker-only recovery
-    envelope (which carries an absolute spill path) ALWAYS fits, and values
-    above 10,000 clamp down so the context-size fix cannot be silently
+    Shares the ``LINGTAI_NOTIFICATION_MAX_CHARS`` env bar — and the outer
+    Agent's ``resolve_notification_max_chars()`` System-file hook behind it —
+    with the persistent lane so one operator control enforces the upper limit
+    across all notification channels (Jason 2026-08-13).  A positive value
+    from either source is clamped to [``NOTIFICATION_ATTENTION_MAX_CHARS_MIN``
+    (2048), ``NOTIFICATION_ATTENTION_MAX_CHARS_CEILING`` (10,000)]: configured
+    values below 2048 are clamped UP to 2048 so the terminal marker-only
+    recovery envelope (which carries an absolute spill path) ALWAYS fits, and
+    values above 10,000 clamp down so the context-size fix cannot be silently
     disabled.  The cap is still a strict upper bound on the model-visible
-    envelope.  Missing, blank, non-numeric, zero, or negative values fall back
-    to the default 10,000.
+    envelope.  Missing, blank, non-numeric, zero, or negative env values fall
+    through; with no valid hook value the default 10,000 applies.
     """
-    raw = os.environ.get(NOTIFICATION_ATTENTION_MAX_CHARS_ENV, "").strip()
-    if raw:
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            value = 0
-        if not isinstance(value, bool) and value > 0:
-            return min(
-                max(value, NOTIFICATION_ATTENTION_MAX_CHARS_MIN),
-                NOTIFICATION_ATTENTION_MAX_CHARS_CEILING,
-            )
-    return NOTIFICATION_ATTENTION_MAX_CHARS
+    return _notification_max_chars(
+        agent,
+        default=NOTIFICATION_ATTENTION_MAX_CHARS,
+        floor=NOTIFICATION_ATTENTION_MAX_CHARS_MIN,
+        ceiling=NOTIFICATION_ATTENTION_MAX_CHARS_CEILING,
+    )
 
 
 def _attention_spill_canonical_text(attention: dict) -> str:
@@ -3481,7 +3524,7 @@ def _cap_notification_attention(agent, attention: dict) -> dict:
     when the spill failed).
     """
     full_chars = _notification_attention_envelope_chars(attention)
-    max_chars = _notification_attention_max_chars()
+    max_chars = _notification_attention_max_chars(agent)
     if full_chars <= max_chars:
         return attention
 

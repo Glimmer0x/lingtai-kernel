@@ -346,8 +346,11 @@ class LocalCommandCore:
         init_llm = manifest.get("llm", {})
         current_model = meta_llm.get("model") or init_llm.get("model", "?")
         current_provider = meta_llm.get("provider") or init_llm.get("provider", "?")
-        context_limit = meta_llm.get("context_limit") or manifest.get(
-            "context_limit", 0
+        live_context_limit = meta_llm.get("context_limit")
+        context_limit = (
+            live_context_limit
+            if type(live_context_limit) is int and live_context_limit > 0
+            else 0
         )
         language = agent_meta.get("language") or manifest.get("language", "?")
         soul_delay = agent_meta.get("soul_delay") or manifest.get("soul", {}).get(

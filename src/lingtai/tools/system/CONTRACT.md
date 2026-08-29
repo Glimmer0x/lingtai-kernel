@@ -97,13 +97,39 @@ manual path.
 ### Cache-miss budget setting
 
 `settings.py` owns live `LINGTAI_CACHE_MISS_BUDGET` > closed-v1
-`settings/system.json` > fixed `2_000_000`. It only accepts positive integers,
-falls back safely, and never writes configuration. The outer Agent lazily exposes
-one scalar hook; kernel code never imports `lingtai.tools` and resolves that hook
-once per metadata snapshot for both telemetry and the soft Context reminder.
-Legacy `manifest.cache_miss_budget` is ignored and not hydrated. Threshold
-changes never reset since-last-molt counters or block a request. The System
-manual owns the operator details; focused System, meta, and init tests own proof.
+`settings/system.json` (or the v2 `cache_miss_budget` field) > fixed
+`2_000_000`. It only accepts positive integers, falls back safely, and never
+writes configuration. The valid-v1 parse is byte-for-byte unchanged and v1 is
+never widened. The outer Agent lazily exposes one scalar hook; kernel code never
+imports `lingtai.tools` and resolves that hook once per metadata snapshot for
+both telemetry and the soft Context reminder. Legacy
+`manifest.cache_miss_budget` is ignored and not hydrated. Threshold changes
+never reset since-last-molt counters or block a request. The System manual owns
+the operator details; focused System, meta, and init tests own proof.
+
+### Runtime-policy setting (v2)
+
+`settings.py::resolve_runtime_policy(working_dir)` resolves the
+ordinary fields `context_limit`, `max_rpm`, `streaming`, `aed_timeout`,
+`max_aed_attempts`, `snapshot_interval`, and `activeness` as valid
+`LINGTAI_<FIELD>` env > valid closed-v2 `settings/system.json` field > effective
+fixed default, returning the values with per-field provenance. `init.json` and
+its effective manifest are deliberately not resolver inputs: old root keys are
+recognized-and-ignored compatibility data and are never validated, hydrated,
+or materialized from presets. One invalid v2 key or
+value rejects the whole document; absent and explicit `null` are distinct. The
+`cli.build_llm_service`/`build_agent`
+and `Agent._setup_from_init` (through `Agent.resolve_runtime_policy`) apply the
+same resolved policy to the LLM service, `AgentConfig` (via
+`build_agent_config(..., runtime_policy=)`), and the `SessionManager.streaming`
+setter, so boot and refresh never disagree. Enabling `snapshot_interval` on a
+started agent initializes the snapshot port before the new config is published;
+on failure snapshots remain off and `snapshot_initialize_failed` is logged. The
+v2 `notification_max_chars` field is exposed only through
+`Agent.resolve_notification_max_chars()`; Core keeps the env-first read, the
+shared 2048/10000 clamp, and the 10,000 default. The kernel-fixed
+context-pressure thresholds and legacy `molt_*` fields are never System
+settings. `tests/test_system_runtime_policy.py` owns proof.
 
 ### Single sleep use case
 
