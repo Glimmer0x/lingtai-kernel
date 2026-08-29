@@ -221,28 +221,32 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 return ProviderCallDecision(ProviderAdmissionState.DENIED, "provider_parent_endpoint_mismatch")
         else:
             return ProviderCallDecision(ProviderAdmissionState.INDETERMINATE, "derived_admission_port_unconnected")
-        received_fd = None
-        try:
-            response, received_fd = self._exchange(
-                {
-                    "op": "authorize_provider_call",
-                    "call_id": str(uuid.uuid4()),
-                    "launch_id": self._identity.launch_id,
-                    "provider": "llm",
-                    "capability": call_class.value,
-                },
-                expect_fd=False,
-            )
-            if received_fd is not None:
-                os.close(received_fd)
-                raise DriverAuthorityTransportError("provider decision must not return an fd")
-            return self._provider_decision(response)
-        except DriverAuthorityTransportError:
-            self._invalidate_transport()
-            return ProviderCallDecision(
-                ProviderAdmissionState.INDETERMINATE,
-                "derived_admission_port_unconnected",
-            )
+        # A timeout makes the stream desynchronized.  Hold the same lock while
+        # parsing and invalidating it, so another caller cannot acquire the
+        # socket in between and consume this request's late response as its own.
+        with self._lock:
+            received_fd = None
+            try:
+                response, received_fd = self._exchange_locked(
+                    {
+                        "op": "authorize_provider_call",
+                        "call_id": str(uuid.uuid4()),
+                        "launch_id": self._identity.launch_id,
+                        "provider": "llm",
+                        "capability": call_class.value,
+                    },
+                    expect_fd=False,
+                )
+                if received_fd is not None:
+                    os.close(received_fd)
+                    raise DriverAuthorityTransportError("provider decision must not return an fd")
+                return self._provider_decision(response)
+            except DriverAuthorityTransportError:
+                self._invalidate_transport()
+                return ProviderCallDecision(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "derived_admission_port_unconnected",
+                )
 
     def authorize_derived_launch(
         self,
@@ -271,30 +275,40 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 ProviderAdmissionState.INDETERMINATE,
                 "derived_launch_admission_port_unconnected",
             )
-        received_fd = None
-        try:
-            response, received_fd = self._exchange(
-                {
-                    "op": "authorize_derived_launch",
-                    "launch_id": self._identity.launch_id,
-                    "capability": capability.value,
-                },
-                expect_fd=None,
-            )
-            decision = self._derived_decision(response, received_fd)
-            return decision
-        except DriverAuthorityTransportError:
-            # `_derived_decision` owns a received launch fd on every path: it
-            # transfers a valid grant into the opaque lease, or closes it
-            # before raising. Do not close it here a second time: fd numbers
-            # may already have been reused by another thread.
-            self._invalidate_transport()
-            return DerivedLaunchDecision(
-                ProviderAdmissionState.INDETERMINATE,
-                "derived_launch_admission_port_unconnected",
-            )
+        # Keep the failure cleanup inside the exchange lock for the same
+        # reason as provider calls: no concurrent launch may reuse a stream
+        # after a timed-out request has made response ownership unknowable.
+        with self._lock:
+            received_fd = None
+            try:
+                response, received_fd = self._exchange_locked(
+                    {
+                        "op": "authorize_derived_launch",
+                        "launch_id": self._identity.launch_id,
+                        "capability": capability.value,
+                    },
+                    expect_fd=None,
+                )
+                decision = self._derived_decision(response, received_fd)
+                return decision
+            except DriverAuthorityTransportError:
+                # `_derived_decision` owns a received launch fd on every path: it
+                # transfers a valid grant into the opaque lease, or closes it
+                # before raising. Do not close it here a second time: fd numbers
+                # may already have been reused by another thread.
+                self._invalidate_transport()
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "derived_launch_admission_port_unconnected",
+                )
 
     def close(self) -> None:
+        """Close only after any in-flight exchange has left the endpoint."""
+
+        with self._lock:
+            self._close_locked()
+
+    def _close_locked(self) -> None:
         self._buffer.clear()
         try:
             self._socket.close()
@@ -312,15 +326,13 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
         adapter deliberately has no reconnect path, so the loss lasts for the
         lifetime of this child composition; its owner must restart/recompose a
         child if fresh authority is required.
+
+        Callers hold ``_lock``.  This is deliberately separate from ``close``:
+        reacquiring a non-reentrant lock here would reintroduce a timeout path
+        that cannot atomically bar the next request.
         """
 
-        self.close()
-
-    def _exchange(
-        self, request: dict[str, Any], *, expect_fd: bool | None
-    ) -> tuple[dict[str, Any], int | None]:
-        with self._lock:
-            return self._exchange_locked(request, expect_fd=expect_fd)
+        self._close_locked()
 
     def _exchange_locked(
         self, request: dict[str, Any], *, expect_fd: bool | None
