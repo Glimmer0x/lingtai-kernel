@@ -546,10 +546,13 @@ Clause IDs are stable; each rule composes the linked normative source.
    additional admission lookup. `ProviderAdmittedLLMService.generate()` makes
    its Port decision synchronously before delegating to the adapter; no Core
    root-turn production caller currently invokes that one-shot API. Historical
-   daemon/avatar services remain outside this inventory until their separate
-   driver-mediated adapter is wired. Adding another dispatch mechanism between
-   an admitted parent and a wrapped provider call requires a propagation test
-   at that concrete boundary; no inferred coverage is sufficient. The source
+   daemon/avatar services remain outside this *root dispatch-propagation*
+   inventory: their separate Driver-mediated adapter is already wired in the
+   constrained detached-derived composition and is covered by its dedicated
+   first-hop and daemon/avatar lifecycle probes. Adding another dispatch
+   mechanism between an admitted parent and a wrapped provider call requires a
+   propagation test at that concrete boundary; no inferred coverage is
+   sufficient. The source
    creation-point inventory in `tests/test_provider_admission.py` independently
    enumerates direct `Thread`, executor, `to_thread`, and `run_in_executor`
    calls under `src/lingtai/**`. It classifies the session timeout pool and
