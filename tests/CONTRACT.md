@@ -174,6 +174,18 @@ pass. A faster run that quietly changed semantics is a regression, not a win. Do
 not lower a permanent interval/timeout to "go faster" when the real fix is to
 wake the wait; prove the cadence/interval is preserved.
 
+### 13. Mutation evidence must run without timestamp bytecode reuse
+
+Mutation runs are source-level evidence, so they must not execute a `.pyc`
+compiled from a previous mutation or restoration. Run every must-red mutation
+and its restored control with `python -B` or `PYTHONDONTWRITEBYTECODE=1` (or
+clear the affected `__pycache__` between each phase). Python's normal
+timestamp validation accepts an unchanged `(mtime, size)` pair: a same-second,
+same-length edit can therefore make a restored source run the mutated bytecode
+or make a mutation run the old bytecode. Record the bytecode mode alongside
+the mutation command. A mutation result without that provenance is not
+evidence that the assertion did—or did not—carry the regression.
+
 ## Maintenance
 
 This charter is prose guidance, not a governed interface, so it has no
