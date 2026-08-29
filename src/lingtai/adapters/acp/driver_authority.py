@@ -282,20 +282,12 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 expect_fd=None,
             )
             decision = self._derived_decision(response, received_fd)
-            if not decision.allowed and received_fd is not None:
-                os.close(received_fd)
-                received_fd = None
             return decision
         except DriverAuthorityTransportError:
-            # A malformed or mismatched decision can arrive with SCM_RIGHTS.
-            # Rejecting its JSON is not enough: close the received capability
-            # before invalidating the stream so a rejected reply cannot leak a
-            # live child endpoint through an error path.
-            if received_fd is not None:
-                try:
-                    os.close(received_fd)
-                except OSError:
-                    pass
+            # `_derived_decision` owns a received launch fd on every path: it
+            # transfers a valid grant into the opaque lease, or closes it
+            # before raising. Do not close it here a second time: fd numbers
+            # may already have been reused by another thread.
             self._invalidate_transport()
             return DerivedLaunchDecision(
                 ProviderAdmissionState.INDETERMINATE,

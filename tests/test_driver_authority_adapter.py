@@ -177,13 +177,23 @@ def test_denied_launch_reply_closes_an_unexpected_received_fd(tmp_path):
     assert leaked == set()
 
 
-def test_malformed_granted_launch_reply_closes_its_received_fd(tmp_path):
+def test_malformed_granted_launch_reply_closes_its_received_fd_once(monkeypatch, tmp_path):
     """A rejected grant frame must not leave its SCM_RIGHTS capability live."""
     client, server = socket.socketpair()
     payload_path = tmp_path / "received-malformed-fd-payload"
     payload_path.write_text("unique")
     sent_fd = os.open(payload_path, os.O_RDONLY)
     sent_identity = os.fstat(sent_fd)
+    from lingtai.adapters.acp import driver_authority as authority_module
+
+    close_calls = []
+    original_close = authority_module.os.close
+
+    def tracking_close(fd):
+        close_calls.append(fd)
+        original_close(fd)
+
+    monkeypatch.setattr(authority_module.os, "close", tracking_close)
 
     def handler(sock):
         assert _recv_frame(sock) == {"version": 1, "op": "hello"}
@@ -201,9 +211,12 @@ def test_malformed_granted_launch_reply_closes_its_received_fd(tmp_path):
     root = RootProviderAdmission("turn-malformed-fd", "puffo-v0.test")
     try:
         decision = adapter.authorize_derived_launch(root, DerivedLaunchCapability.AVATAR)
+        assert close_calls and len(close_calls) == 1
+        assert close_calls[0] != sent_fd
+        assert not _fd_is_open(close_calls[0])
     finally:
         adapter.close()
-        os.close(sent_fd)
+        original_close(sent_fd)
     thread.join(timeout=2)
     leaked = {
         fd
