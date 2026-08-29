@@ -142,7 +142,7 @@ class _RecordingDerivedLaunchPort:
 
 
 class _CloseTrackingLease:
-    """Opaque lease stand-in used to prove Core disposes rejected grants."""
+    """Opaque stand-in proving Core explicitly disposes rejected grants."""
 
     def __init__(self):
         self.close_calls = 0
@@ -767,8 +767,8 @@ def test_derived_launch_reports_a_child_request_to_the_port_then_denies_it():
     assert port.calls == [(child, DerivedLaunchCapability.AVATAR)]
 
 
-def test_nested_driver_grant_is_denied_and_its_opaque_lease_is_closed():
-    """A buggy Driver grant cannot create a child or strand its endpoint."""
+def test_nested_driver_grant_is_denied_and_its_opaque_lease_is_explicitly_closed():
+    """A buggy Driver grant cannot create a child and is not left to finalization."""
 
     root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
     child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
