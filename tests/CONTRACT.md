@@ -177,14 +177,32 @@ wake the wait; prove the cadence/interval is preserved.
 ### 13. Mutation evidence must run without timestamp bytecode reuse
 
 Mutation runs are source-level evidence, so they must not execute a `.pyc`
-compiled from a previous mutation or restoration. Run every must-red mutation
-and its restored control with `python -B` or `PYTHONDONTWRITEBYTECODE=1` (or
-clear the affected `__pycache__` between each phase). Python's normal
-timestamp validation accepts an unchanged `(mtime, size)` pair: a same-second,
-same-length edit can therefore make a restored source run the mutated bytecode
-or make a mutation run the old bytecode. Record the bytecode mode alongside
-the mutation command. A mutation result without that provenance is not
-evidence that the assertion did—or did not—carry the regression.
+compiled from a previous mutation or restoration. The clean baseline, the
+must-red mutation, and the restored control must each run in a separate fresh
+process. Before *each* phase, clear the affected package's `__pycache__`, or
+give that phase a distinct, empty `PYTHONPYCACHEPREFIX`. `python -B` and
+`PYTHONDONTWRITEBYTECODE=1` are useful supplements, but not substitutes: they
+prevent writing new bytecode, not reading an existing cache that still matches
+Python's timestamp check.
+
+Put the isolation in the copied command, not merely in accompanying prose. For
+example, run this once per phase, with a new temporary directory each time:
+
+```bash
+phase_pyc_cache="$(mktemp -d)"
+PYTHONPYCACHEPREFIX="$phase_pyc_cache" \
+  PYTHONDONTWRITEBYTECODE=1 \
+  python -B -m pytest <target>
+```
+
+Python's normal timestamp validation accepts an unchanged `(mtime, size)`
+pair: a same-second, same-length edit can therefore make a restored source run
+the mutated bytecode or make a mutation run the old bytecode. Before trusting
+each phase's result, verify the pin, import/load path, and either the relevant
+source hash or a mutation sentinel. Record the cache-isolation method and the
+three outcomes — `clean-pass → mutation-must-red → restored-clean-pass` — with
+the mutation command. A result without that provenance is not evidence that
+the assertion did—or did not—carry the regression.
 
 ## Maintenance
 
