@@ -308,7 +308,10 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
         request that timed out.  Keeping the socket would let that stale frame
         become a decision for the next provider or launch request.  Authority
         is therefore lost rather than guessed; callers receive the existing
-        structured INDETERMINATE result and cannot fall back to a grant.
+        structured INDETERMINATE result and cannot fall back to a grant. This
+        adapter deliberately has no reconnect path, so the loss lasts for the
+        lifetime of this child composition; its owner must restart/recompose a
+        child if fresh authority is required.
         """
 
         self.close()
