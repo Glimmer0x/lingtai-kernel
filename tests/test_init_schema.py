@@ -138,6 +138,44 @@ def test_ordinary_runtime_manifest_fields_are_legacy_ignored(field, value):
     assert not any(field in warning for warning in warnings)
 
 
+@pytest.mark.parametrize("value", [[], ["shell"], ["", "plugin", "web"]])
+def test_manifest_disable_accepts_only_string_lists(value):
+    data = _valid_init()
+    data["manifest"]["disable"] = value
+
+    assert validate_init(data) == []
+    assert data["manifest"]["disable"] is value
+
+
+@pytest.mark.parametrize("value", [None, "shell", {"shell": True}, ("shell",)])
+def test_manifest_disable_rejects_non_lists(value):
+    data = _valid_init()
+    data["manifest"]["disable"] = value
+
+    with pytest.raises(ValueError, match=r"^manifest\.disable: expected list"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize(
+    "value,index,type_name",
+    [
+        (["shell", 1], 1, "int"),
+        ([False], 0, "bool"),
+        (["web", None], 1, "NoneType"),
+        ([["nested"]], 0, "list"),
+    ],
+)
+def test_manifest_disable_rejects_every_non_string_entry(value, index, type_name):
+    data = _valid_init()
+    data["manifest"]["disable"] = value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^manifest\.disable\[{index}\]: expected str, got {type_name}$",
+    ):
+        validate_init(data)
+
+
 def test_compact_threshold_rejects_bool_via_check_type():
     data = _valid_init()
     data["manifest"]["llm"]["compact_threshold"] = True
@@ -254,6 +292,59 @@ def test_known_manifest_llm_pass_through_fields_do_not_warn(key, value):
     warnings = validate_init(data)
 
     assert all(f"unknown field in manifest.llm: {key}" != w for w in warnings)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "OPENAI",
+        7,
+        [],
+        {},
+        {1.5: [True, None, {"nested": (2.5, "finite")}]},
+    ],
+)
+def test_api_compat_preserves_finite_compatibility_values(value):
+    data = _valid_init()
+    data["manifest"]["llm"]["api_compat"] = value
+
+    assert validate_init(data) == []
+    assert data["manifest"]["llm"]["api_compat"] is value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(float("nan"), id="scalar-nan"),
+        pytest.param(float("inf"), id="scalar-positive-infinity"),
+        pytest.param(float("-inf"), id="scalar-negative-infinity"),
+        pytest.param(["finite", {"nested": float("nan")}], id="nested-dict-value"),
+        pytest.param({"nested": (0, float("inf"))}, id="nested-tuple-value"),
+        pytest.param({float("-inf"): "nested-key"}, id="dict-key"),
+    ],
+)
+def test_api_compat_rejects_non_finite_values_at_every_depth(value):
+    data = _valid_init()
+    data["manifest"]["llm"]["api_compat"] = value
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"^manifest\.llm\.api_compat: expected recursively "
+            r"JSON-finite value$"
+        ),
+    ):
+        validate_init(data)
+
+
+def test_api_compat_finite_walk_is_depth_safe():
+    value: object = "openai"
+    for _ in range(2_000):
+        value = [value]
+    data = _valid_init()
+    data["manifest"]["llm"]["api_compat"] = value
+
+    assert validate_init(data) == []
 
 
 @pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])

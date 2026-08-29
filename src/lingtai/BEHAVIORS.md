@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/init_reader.py
   - src/lingtai/init_schema.py
+  - tests/test_init_schema.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -32,12 +33,15 @@ must run from the repo root with the project's Python.
 - **estimate**: ≈ 20 minutes
 
 ### Steps
-1. From `<repo>`, run `python -m pytest tests/test_init_reader.py -q` and capture the outcome.
+1. From `<repo>`, run `python -m pytest tests/test_init_reader.py tests/test_init_schema.py -q` and capture the outcome.
 2. In `<scratch>`, write an `init.json` containing a deprecated/ignored field and boot the reader path (boot CLI or refresh `Agent`); hash `<scratch>/init.json` before and after and compare.
 3. Inspect the returned outcome: confirm it reports `FULLY_EFFECTIVE` / `READ_OK_WITH_IGNORED_FIELDS` / `READ_FAILED` with a typed shape decision and the ignored paths, and that the redacted `system/manifest.resolved.json` artifact was produced.
 
 ### Expected evidence
-- [ ] Step 1: the init-reader suite passes, pinning JSONC parsing, identical boot/refresh outcomes, ignored-path reporting, and structured failure evidence.
+- [ ] Step 1: the init-reader/schema suites pass, pinning JSONC parsing,
+      identical boot/refresh outcomes, ignored-path reporting, structured
+      failure evidence, typed `manifest.disable` entries, and rejection of
+      non-finite canonical numbers.
 - [ ] Step 2: the bytes of `<scratch>/init.json` are unchanged after the read (no strip, no canonicalization, no rewrite).
 - [ ] Step 3: the outcome status and shape decision are typed and truthful; failures carry stage, location when available, safe excerpt, behavior, and a next repair step.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -98,6 +99,8 @@ def _raises():
     lambda: [SettingRow("", 1, None, False, "manual#x")],
     lambda: [SettingRow("x", 1, None, 1, "manual#x")],
     lambda: [SettingRow("x", {"not": {"json"}}, None, False, "manual#x")],
+    lambda: [SettingRow("x", float("nan"), None, False, "manual#x")],
+    lambda: [SettingRow("x", {"nested": [float("inf")]}, None, False, "manual#x")],
     lambda: [SettingRow("ok", 1, None, False, "manual#ok"), object()],
 ])
 def test_provider_row_and_serialization_defects_are_one_fixed_failure(provider):
@@ -119,22 +122,45 @@ def test_complete_response_bound_stops_without_partial_rows():
         "SETTINGS_RESPONSE_TOO_LARGE", 65_536)
 
 
-def test_public_export_and_all_production_families_opt_out():
+def test_public_export_and_only_this_owner_opts_in():
     assert public_family.SettingRow is settings_module.SettingRow is SettingRow
     assert public_family.SettingsProvider is settings_module.SettingsProvider
     assert not hasattr(importlib.import_module("lingtai.kernel.tool_plugin"),
                        "ToolSettingsContract")
-    curated = [
-        getattr(importlib.import_module(f"lingtai.mcp_servers.{name}.plugin"), f"{name.upper()}_PLUGIN")
+    curated = {
+        name: getattr(importlib.import_module(f"lingtai.mcp_servers.{name}.plugin"), f"{name.upper()}_PLUGIN")
         for name in ("telegram", "imap", "feishu", "wechat", "whatsapp", "cloud_mail")
-    ]
-    assert all(plugin.settings is False for plugin in curated)
+    }
+    expected_curated = set()
+    assert {name for name, plugin in curated.items() if plugin.settings} == expected_curated
     modules = {"shell": "bash._tool_family", "web": "web_search"}
-    declarations = [
-        importlib.import_module(f"lingtai.tools.{modules.get(name, name)}").DECLARATION
+    declarations = {
+        name: importlib.import_module(f"lingtai.tools.{modules.get(name, name)}").DECLARATION
         for name in OFFICIAL_TOOL_PLUGIN_NAMES
-    ]
-    assert all(item.settings is False and "settings" not in item.public_actions
-               for item in declarations)
-    assert "settings" not in importlib.import_module(
+    }
+    expected_official = {'system'}
+    assert {name for name, item in declarations.items() if item.settings} == expected_official
+    for name, item in declarations.items():
+        assert ("settings" in item.public_actions) is (name in expected_official)
+    psyche_actions = importlib.import_module(
         "lingtai.tools.psyche").get_schema()["properties"]["action"]["enum"]
+    assert ("settings" in psyche_actions) is False
+
+
+def test_parent_contract_states_declaration_provider_opt_in_not_owner_file():
+    repo = Path(__file__).parents[1]
+    manual = (
+        repo
+        / "src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md"
+    ).read_text(encoding="utf-8")
+    contract = (repo / "src/lingtai/tools/CONTRACT.md").read_text(encoding="utf-8")
+
+    assert "System is currently the\nonly production family opted in" in manual
+    assert "declaration opt-in\n   plus this bound provider" in manual
+    assert "may be absent" in manual
+    assert "ToolPluginDeclaration(settings=True)" in contract
+    assert "v1 is exactly the cache-miss-budget source" in contract
+    assert "v2 may carry the seven ordinary runtime-policy fields" in contract
+    assert "A v1 document is exactly the cache-miss-budget source" in manual
+    assert "A v2 document may carry any subset" in manual
+    assert "Its absence leaves SHOW available" in contract

@@ -1,7 +1,8 @@
 """System's official declared host-plugin slice.
 
-``system`` remains one LTP family with its established twelve actions and
-receipts.  The public handler is now a static ``ToolPluginDeclaration`` bound
+``system`` remains one LTP family with eleven operational actions plus the
+reserved ``settings`` and ``manual`` actions (thirteen total).  The public
+handler is now a static ``ToolPluginDeclaration`` bound
 only to three narrow ports: its workdir for manual/addressed documents, a
 runtime/lifecycle vocabulary, and durable naming identity.  The legacy
 ``handle(agent, args)`` entry point remains solely as a compatibility adapter
@@ -10,6 +11,7 @@ bound declaration through the kernel registrar.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -35,6 +37,7 @@ from .name import _name_nickname, _name_set
 from .plugin import SYSTEM_DECLARED_ACTIONS
 from .preset import _check_context_fits, _preset_ref_in, _presets, _refresh
 from .schema import ACTION_ENUM_DESCRIPTION, ACTION_ORDER, INPUT_SCHEMAS, get_description
+from .settings import system_settings_provider
 from .summarize import SUMMARIZE_MARKER, _summarize
 
 if TYPE_CHECKING:
@@ -164,9 +167,25 @@ def _build_children(subject: Any, manual_source: Any = None) -> list[ChildTool]:
     return children
 
 
+def _settings_workdir(source: Any) -> Path | None:
+    if source is None:
+        return None
+    value = getattr(source, "path", None)
+    if value is None:
+        value = getattr(source, "_working_dir", None)
+    if value is None:
+        raise ValueError("System settings require a workdir")
+    return Path(value)
+
+
 def _build_family(subject: Any, manual_source: Any = None) -> ToolFamily:
     """Compose the one System family from declaration-derived children."""
-    return ToolFamily(DECLARATION.name, _build_children(subject, manual_source))
+    owner_source = manual_source if manual_source is not None else subject
+    return ToolFamily(
+        DECLARATION.name,
+        _build_children(subject, manual_source),
+        settings_provider=system_settings_provider(_settings_workdir(owner_source)),
+    )
 
 
 def _adapt_manual_result(result: dict) -> dict:
@@ -227,6 +246,7 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind,
     requires=("workdir", "system_runtime", "identity"),
     glossary_package=__package__,
+    settings=True,
 )
 
 # Static schema composition has no Agent and validates the declaration's

@@ -111,9 +111,14 @@ def _active_stuck_threshold_s() -> float:
     LLM providers without changing kernel code.
     """
     try:
-        return max(30.0, float(os.environ.get("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "600")))
+        threshold = float(
+            os.environ.get("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "600")
+        )
     except (TypeError, ValueError):
         return 600.0
+    if not math.isfinite(threshold):
+        return 600.0
+    return max(30.0, threshold)
 
 
 # One root file is the complete sleep-alarm state: its text is the absolute

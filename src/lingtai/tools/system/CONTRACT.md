@@ -1,7 +1,7 @@
 ---
 name: system-contract
 tool: system
-contract_version: 4
+contract_version: 5
 related_files:
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/plugin.py
@@ -19,7 +19,10 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/kernel/malloc_relief.py
+  - src/lingtai/kernel/tool_executor.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
   - tests/test_tool_family_system_migration.py
   - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
@@ -30,8 +33,12 @@ maintenance: |
   suite. If behavior and this contract disagree, the code is the source of
   truth — fix the contract in the same change and bump contract_version on
   breaking contract edits.
-  contract_version 4 adds the family-owned cache-miss budget setting and retires
-  its legacy init source. contract_version 3 is the breaking public-ownership
+  contract_version 5 applies the System kernel-level catch-all rule to every
+  effective setting without another concrete ToolPlugin owner while retaining
+  a SHOW-only five-field surface. contract_version 4 added read-only discovery
+  for the family-owned cache-miss budget and retired its legacy init source.
+  contract_version 3 is the
+  breaking public-ownership
   change: the public
   summarize action left for context (which split it into record-only summarize and full reconstruction rebuild)
   and the two name actions arrived here from the dissolved psyche family.
@@ -77,8 +84,9 @@ it advertises is actually honored.
 
 `DECLARATION` is a static official declaration constructed at import. The
 kernel reserves `system`, validates its unchanged operational action inventory,
-appends the reserved `manual` action, then binds and mounts it through the
-controlled registrar. The production binder receives only `workdir`,
+inserts the explicitly opted-in reserved `settings` action immediately before
+the reserved `manual` action, then binds and mounts it through the controlled
+registrar. The production binder receives only `workdir`,
 `system_runtime`, and `identity`: the first addresses the installed manual and
 agent-local documents; the second exposes the existing refresh/preset,
 self-sleep, authorization, CPR, token, and audit operations; the third exposes
@@ -94,7 +102,88 @@ the registrar-mounted bound handler. `tests/test_system_declared_plugin.py`
 pins the static declaration, single official mount, identity port behavior, and
 manual path.
 
-### Cache-miss budget setting
+### System settings catch-all
+
+`settings.py` supplies the complete, stable, unique read-only inventory for
+genuine kernel settings that have no other concrete ToolPlugin owner. Each row
+projects exactly `key`, `current`, `default`, `configurable`, and `comment`.
+The inventory includes the cache-miss budget, the seven ordinary
+runtime-policy values resolved as environment > closed-v2 System file > fixed
+default, effective non-policy root/manifest inputs, all effective `manifest.llm`
+axes because no LLM ToolPlugin exists, and the System-owned Nudge, lifecycle,
+prompt-pressure, session-statistics, logging, risky-action, Codex
+auth-directory/transport/trace, and LLM timeout environment controls. Legacy
+init/preset copies of ordinary runtime-policy fields remain compatibility data
+and never become SHOW current values.
+Compatibility aliases are folded into their canonical setting rather than
+emitted as duplicate rows.
+
+Every current and default value comes from the runtime's canonical reader,
+resolver, constant, or selected registered-factory route. SHOW fresh-reads
+effective init/preset inputs and per-use environment resolvers where the runtime
+does; process-start constants are reported as the current effective process
+state. Canonical provider-default normalization runs before the narrow
+registered-factory classifier projects each LLM row. A selected factory's row
+reports the effective value and default that factory actually consumes; an axis
+the factory ignores reports null current/default. Effective adapter selectors
+report the selected public route rather than malformed authored syntax, and an
+unknown selected provider fails the complete action loudly. Projection may
+inspect registry/factory identity, canonical constants, and signatures only; it
+never constructs a client, reads credentials, or performs network I/O.
+
+Prompt text, credentials, headers, authorization material, tokens, and sensitive
+paths are fully redacted. Canonically invalid or non-JSON-finite public values,
+an unreadable current owner source, and any unsafe/malformed projected row fail
+the whole inventory with no partial row or exception detail. The exact evolving
+provider/alias matrix, omission/null/authored distinctions, source precedence,
+accepted values, timing, and authorized operator procedures live only in the
+[`settings-inventory` manual](../../intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md#llm-and-provider-inputs).
+
+The cache row retains its current owner-resolved value, default `2_000_000`,
+and pointer `system-manual#cache-miss-budget`. Missing System JSON selects the
+known default; a higher valid environment source bypasses that document. The
+remaining rows point to the exact sections in
+`system-manual/reference/settings-inventory` that define source, accepted
+values, precedence, invalid behavior, redaction, application timing, and the
+authorized external change procedure.
+
+The `settings` action accepts only `input={}` and has no set, reset, write,
+receipt, or mutation API. `configurable: true` means the system manual provides
+an authorized owner procedure through existing environment/File/Shell routes;
+it does not authorize this action to change anything. The exact meaning,
+accepted values, source precedence, canonical environment and owner-file keys,
+apply timing, sensitivity notes, real change procedure, and second-SHOW
+verification live only in the manual section named by `comment`. Legacy
+`manifest.cache_miss_budget` remains ignored and is not hydrated.
+
+The owner-local classification explicitly excludes settings assigned to Soul,
+Shell, Daemon, Notification, Email, File, Vision, Web, Task Card,
+Plugin/Psyche, MCP, and curated-addon ToolPlugins. In particular,
+`manifest.pseudo_agent_subscriptions` is Email-owned and is reserved for a
+future Email owner-local row that fully redacts its path lists; System does not
+project it. Psyche owns the live root `pad` / `pad_file` prompt inputs, so they
+are concrete-owner exclusions rather than inert compatibility fields. Daemon's
+manager-pool variable is a registered concrete-owner setting; its manager token
+and run directory are registered injected/handoff values. The historically
+named `LINGTAI_DAEMON_MEMORY_RELIEF` instead controls the global `ToolExecutor`
+finally path used by ordinary main-agent and daemon batches, so System exposes
+it once as `runtime.tool_batch_memory_relief` using the canonical
+`malloc_relief.enabled()` resolver. The classification also excludes `manifest.activeness`,
+`manifest.llm.codex_thread_salt`, max-turn/context-
+serialization and other retired compatibility inputs, plus build/test-only
+environment controls and pure injected identity/handoff descriptors. The
+environment partition lives as one owner-local structured authority in
+`settings.py`; manuals project it but do not define it. These classifications
+do not create a generic registry or mutation service.
+
+The outer Agent lazily exposes one scalar cache-budget hook; kernel code never imports
+`lingtai.tools` and resolves that hook once per metadata snapshot for both
+telemetry and the soft Context reminder. Threshold changes never reset
+since-last-molt counters or block a request.
+
+The complete/redacted/read-only agent-observable promise is guarded by
+[B009](BEHAVIORS.md#behavior-b009); source resolution and exclusion mechanics
+remain focused pytest contracts.
 
 `settings.py` owns live `LINGTAI_CACHE_MISS_BUDGET` > closed-v1
 `settings/system.json` (or the v2 `cache_miss_budget` field) > fixed
@@ -208,6 +297,7 @@ siblings.
 | `presets` | — | — | `{status: "ok", active, available: [...]}` | `{status: "error", message}` on unreadable init.json |
 | `name_set` | `content` | — | `{status: "ok", name}` | `{error}` when empty or when a true name is already set (immutable) |
 | `name_nickname` | `content` | — | `{status: "ok", nickname}` (`null` when cleared) | — (empty `content` clears the nickname) |
+| `settings` | — | — | `{"settings":[...]}` in the stable System catch-all order; every row has exactly `key`, `current`, `default`, `configurable`, `comment` | fixed no-row failure for invalid input, unavailable current, malformed provider row, unserializable value, or oversized complete response |
 
 `manual` takes the canonical strict-empty `input` and returns the flat
 `{status, manual, manual_path}` shape (plus `error` when the installed manual is
@@ -349,11 +439,12 @@ drive it are `context`'s.
 | PRIVATE ENGINE: runtime threshold mutation is rejected | `src/lingtai/tools/system/summarize.py:_summarize` | `tests/test_system_summarize.py::test_summarize_runtime_threshold_change_rejected` |
 | Notification/dismiss actions are dropped from the `system` schema | `src/lingtai/tools/system/schema.py` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss`, `tests/test_notification_tool.py::test_system_rejects_dismiss_action` |
 | Karma signal files clear a target channel path end-to-end | `src/lingtai/tools/system/karma.py` | `tests/test_system_dismiss.py` |
-| The model-facing root is the closed LTP v2 envelope with the twelve current actions | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_are_unchanged` |
+| The model-facing root is the closed LTP v2 envelope with eleven operational actions followed by reserved `settings`, `manual` | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_adds_only_reserved_settings` |
 | Each action's arguments live only in its own strict `input` | `src/lingtai/tools/system/schema.py:INPUT_SCHEMAS` | `tests/test_tool_family_system_migration.py::test_action_input_fields_match_what_the_handler_reads` |
 | A cross-action smuggle is rejected before any lifecycle I/O | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` |
 | Envelope metadata never reaches a child handler | `src/lingtai/tools/system/__init__.py:_build_children` | `tests/test_tool_family_system_migration.py::test_envelope_metadata_never_reaches_a_child_handler` |
 | `manual` is the reserved family-owned child, returned without double wrap | `src/lingtai/tools/system/__init__.py:_adapt_manual_result` | `tests/test_tool_family_system_migration.py::test_manual_child_is_registered_unwrapped`, `::test_manual_returns_the_pinned_flat_public_shape` |
+| `settings` returns the complete ordered System catch-all, projects exactly five fields with secrets redacted, and fails the complete inventory when current truth is unavailable | `src/lingtai/tools/system/settings.py:system_settings_provider` | `tests/test_system_declared_plugin.py::test_system_settings_inventory_has_exact_public_contract`, `::test_system_settings_redacts_sensitive_effective_values`, `::test_system_settings_inventory_redacts_owner_io_failures`, `::test_system_budget_invalid_documents_use_default` |
 | `system` is on the kernel `summarize` allowlist | `src/lingtai/kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES` | `tests/test_tool_family_system_migration.py::test_system_is_on_the_kernel_summarize_allowlist` |
 
 ## Verification matrix
@@ -367,6 +458,7 @@ drive it are `context`'s.
 | No public `summarize` action survives on `system` | `tests/test_tool_family_system_migration.py::test_public_summarize_action_is_gone_and_fails_loudly` | Call `system(action='summarize')` | A silent second context-hygiene surface |
 | A true name stays immutable and neither name action renames the workdir | `tests/test_tool_family_system_migration.py::test_name_actions_preserve_identity_semantics` | `name_set` twice; inspect `.agent.json` + workdir | Identity overwrite or an unintended physical rename |
 | No notification verbs on `system` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` | Call `system(action='check')` | Duplicate notification surfaces diverge |
+| System catch-all SHOW remains complete/read-only and each row points to its exact owner procedure | `tests/test_system_declared_plugin.py` settings/manual tests; [B009](BEHAVIORS.md#behavior-b009) | SHOW, perform one authorized external change, then SHOW again | Hidden mutation, secret exposure, omitted setting, or an unverified shadowed change |
 | Cross-action input cannot reach a lifecycle handler | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` | Call `sleep` with an `address` in `input` | A weaker action smuggles a privileged target |
 | `nirvana`'s blast radius is exactly one directory | `tests/test_tool_family_system_migration.py::test_nirvana_destroys_only_the_disposable_target` | Inspect siblings after a disposable-target nirvana | Irreversible over-deletion |
 

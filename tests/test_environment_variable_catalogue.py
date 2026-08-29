@@ -14,6 +14,7 @@ _REGISTRY = Path("ENVIRONMENT_VARIABLES.md")
 _ROUTER = Path(
     "src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md"
 )
+_SYSTEM_SETTINGS = Path("src/lingtai/tools/system/settings.py")
 _ENV_NAME = re.compile(r"\bLINGTAI_[A-Z0-9_]+\b")
 # Include source and test suffixes that can carry executable literals. The
 # registry and this test are excluded below so the crawl cannot derive its
@@ -66,6 +67,13 @@ _REGISTRY_COLUMNS = [
     "Owner",
     "Security",
 ]
+_SYSTEM_DECLARATION_ONLY_ASSIGNMENTS = frozenset(
+    {
+        "SYSTEM_ENVIRONMENT_SETTING_SPECS",
+        "SYSTEM_ENVIRONMENT_SETTING_OWNERS",
+        "SYSTEM_ENVIRONMENT_CLASSIFICATION",
+    }
+)
 
 
 def _frontmatter(path: Path) -> dict:
@@ -105,22 +113,61 @@ def _registry_rows() -> list[tuple[str, ...]]:
     return rows
 
 
-def _python_string_literals(text: str) -> list[str]:
+def _assignment_root_name(target: ast.expr) -> str | None:
+    while isinstance(target, ast.Subscript):
+        target = target.value
+    return target.id if isinstance(target, ast.Name) else None
+
+
+class _PythonStringLiteralVisitor(ast.NodeVisitor):
+    def __init__(self, excluded_assignments: frozenset[str]) -> None:
+        self.excluded_assignments = excluded_assignments
+        self.values: list[str] = []
+
+    def _visit_assignment(
+        self, node: ast.Assign | ast.AnnAssign, targets: tuple[ast.expr, ...]
+    ) -> None:
+        if any(
+            _assignment_root_name(target) in self.excluded_assignments
+            for target in targets
+        ):
+            return
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+        self._visit_assignment(node, tuple(node.targets))
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
+        self._visit_assignment(node, (node.target,))
+
+    def visit_Constant(self, node: ast.Constant) -> None:  # noqa: N802
+        if isinstance(node.value, str):
+            self.values.append(node.value)
+
+
+def _python_string_literals(
+    text: str, *, excluded_assignments: frozenset[str] = frozenset()
+) -> list[str]:
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return []
-    return [
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    ]
+    visitor = _PythonStringLiteralVisitor(excluded_assignments)
+    visitor.visit(tree)
+    return visitor.values
 
 
 def _literal_environment_names(path: Path) -> set[str]:
     text = path.read_text(encoding="utf-8", errors="replace")
     if path.suffix == ".py":
-        values = _python_string_literals(text)
+        excluded_assignments = (
+            _SYSTEM_DECLARATION_ONLY_ASSIGNMENTS
+            if path.resolve() == (_REPO / _SYSTEM_SETTINGS).resolve()
+            else frozenset()
+        )
+        values = _python_string_literals(
+            text, excluded_assignments=excluded_assignments
+        )
     else:
         values = [
             match.group(1)
@@ -157,6 +204,57 @@ def test_registry_is_rooted_fixed_width_and_has_unique_canonical_rows() -> None:
     assert rows
     assert len(names) == len(set(names))
     assert all(len(row) == len(_REGISTRY_COLUMNS) for row in rows)
+
+
+def test_daemon_setting_handoff_and_global_memory_rows_are_truthfully_scoped() -> None:
+    rows = {row[0].strip("`"): row for row in _registry_rows()}
+    assert {
+        "LINGTAI_DAEMON_MANAGER_POOL_SIZE",
+        "LINGTAI_DAEMON_MEMORY_RELIEF",
+        "LINGTAI_DAEMON_MANAGER_TOKEN",
+        "LINGTAI_DAEMON_RUN_DIR",
+    } <= set(rows)
+
+    assert "Daemon" in rows["LINGTAI_DAEMON_MANAGER_POOL_SIZE"][6]
+    assert "system` catch-all" in rows["LINGTAI_DAEMON_MEMORY_RELIEF"][6]
+    assert "every `ToolExecutor` batch" in rows["LINGTAI_DAEMON_MEMORY_RELIEF"][3]
+    assert "not an operator setting" in rows["LINGTAI_DAEMON_MANAGER_TOKEN"][7]
+    assert "not an operator setting" in rows["LINGTAI_DAEMON_RUN_DIR"][7]
+    assert "Non-negative integer" in rows["LINGTAI_DAEMON_MANAGER_POOL_SIZE"][2]
+    assert "Exactly `1`" in rows["LINGTAI_DAEMON_MEMORY_RELIEF"][2]
+
+    executor_source = (
+        _REPO / "src/lingtai/kernel/tool_executor.py"
+    ).read_text(encoding="utf-8")
+    turn_source = (
+        _REPO / "src/lingtai/kernel/base_agent/turn.py"
+    ).read_text(encoding="utf-8")
+    assert "malloc_relief.relieve()" in executor_source
+    assert "def _make_tool_executor(" in turn_source
+    assert "return ToolExecutor(" in turn_source
+
+
+def test_system_declaration_only_literals_do_not_satisfy_source_coverage() -> None:
+    source = '''
+SYSTEM_ENVIRONMENT_SETTING_SPECS = ("LINGTAI_DECLARATION_ONLY_SPEC_FAKE",)
+SYSTEM_ENVIRONMENT_SETTING_OWNERS = {"LINGTAI_DECLARATION_ONLY_OWNER_FAKE": "x"}
+SYSTEM_ENVIRONMENT_SETTING_OWNERS["LINGTAI_DECLARATION_ONLY_SUBSCRIPT_FAKE"] = "x"
+SYSTEM_ENVIRONMENT_CLASSIFICATION = {"system": {"LINGTAI_DECLARATION_ONLY_CLASS_FAKE"}}
+CACHE_MISS_BUDGET_ENV = "LINGTAI_EXECUTABLE_CONSTANT_FAKE"
+
+def resolve():
+    return os.environ.get(CACHE_MISS_BUDGET_ENV) or os.environ.get(
+        "LINGTAI_EXECUTABLE_CONSUMER_FAKE"
+    )
+'''
+    values = _python_string_literals(
+        source, excluded_assignments=_SYSTEM_DECLARATION_ONLY_ASSIGNMENTS
+    )
+    names = set().union(*(set(_ENV_NAME.findall(value)) for value in values))
+    assert names == {
+        "LINGTAI_EXECUTABLE_CONSTANT_FAKE",
+        "LINGTAI_EXECUTABLE_CONSUMER_FAKE",
+    }
 
 
 def test_literal_environment_names_are_registered_and_owning_anatomies_are_linked() -> None:

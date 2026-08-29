@@ -1,10 +1,10 @@
 """Optional libc hint to return freed-but-retained heap pages to the OS.
 
 On macOS, libmalloc keeps the address space of a freed magazine region mapped
-and dirty, showing up in ``vmmap -summary`` as ``MALLOC_MEDIUM (empty)``. A
-long-lived daemon execution child that has processed a few large tool outputs
-can carry hundreds of MB of such pages: the memory is free to the allocator but
-still counted against the process RSS.
+and dirty, showing up in ``vmmap -summary`` as ``MALLOC_MEDIUM (empty)``. Any
+long-lived process using the global ``ToolExecutor`` can carry hundreds of MB
+of such pages after processing a few large tool outputs: the memory is free to
+the allocator but still counted against the process RSS.
 
 ``malloc_zone_pressure_relief(zone, goal)`` is Apple's documented request to
 release that space back. This module exposes it as an opt-in hook.
@@ -16,10 +16,11 @@ returned 0 bytes released and moved RSS by ~1MB. A realistic
 tool-output-shaped workload moved empty-region dirty pages 30.9MB -> 22.3MB
 but RSS only 57MB -> 56MB. So this is **disabled by default** and gated behind
 ``LINGTAI_DAEMON_MEMORY_RELIEF=1`` purely so the hypothesis can be re-measured
-on a live daemon (different workload, macOS version, or allocation mix) without
-shipping a per-tool-batch cost to everyone.
+on a live ToolExecutor process (different workload, macOS version, or allocation
+mix) without shipping a per-tool-batch cost to everyone. The historical
+environment name does not limit the hook to daemon execution children.
 
-Do not enable it in production without measuring that specific daemon first.
+Do not enable it in production without measuring that specific process first.
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ _relief = _UNRESOLVED
 
 
 def enabled() -> bool:
-    """True when the operator opted in via ``LINGTAI_DAEMON_MEMORY_RELIEF=1``."""
+    """True when the operator opted every ToolExecutor in to memory relief."""
     return os.environ.get("LINGTAI_DAEMON_MEMORY_RELIEF", "").strip() == "1"
 
 

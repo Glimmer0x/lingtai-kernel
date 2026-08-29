@@ -1041,8 +1041,9 @@ class ToolExecutor:
             self._current_api_call_id = previous_api_call_id
             # A tool batch is this process's largest transient allocation, so
             # it is the only point where returning empty heap regions could pay
-            # off. Off unless LINGTAI_DAEMON_MEMORY_RELIEF=1 — see the measured
-            # (negative) result in malloc_relief's docstring.
+            # off. This global executor path includes ordinary main-agent and
+            # daemon batches. Off unless LINGTAI_DAEMON_MEMORY_RELIEF=1 — see
+            # the measured (negative) result in malloc_relief's docstring.
             malloc_relief.relieve()
 
     def _execute_with_current_api_call_id(
