@@ -11,6 +11,10 @@ lease, and then follows the production chain:
 The deterministic fake LLM exists only to avoid a live model dependency.  The
 Driver server, lease, two process boundaries, entrypoint adoption, and
 provider-call adjudication are all real.
+
+Run this probe from LingTai's exact `uv sync --locked` interpreter.  The
+`--puffo-src` input is source-only: Puffo's runtime environment has an
+incompatible MCP-major dependency and must not be injected into this process.
 """
 from __future__ import annotations
 
@@ -36,8 +40,9 @@ def _require_e2e_environment() -> None:
         raise RuntimeError(
             "E2E_ENVIRONMENT_INVALID: the selected mcp "
             f"({installed}) does not provide mcp.server.ServerRequestContext; "
-            "recreate this exact checkout with `uv sync --locked` before "
-            "interpreting the Driver lifecycle verdict"
+            "run from LingTai's `uv sync --locked` environment with only "
+            "Puffo source on --puffo-src (do not inject Puffo site-packages) "
+            "before interpreting the Driver lifecycle verdict"
         ) from exc
 
 
