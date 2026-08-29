@@ -221,6 +221,7 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 return ProviderCallDecision(ProviderAdmissionState.DENIED, "provider_parent_endpoint_mismatch")
         else:
             return ProviderCallDecision(ProviderAdmissionState.INDETERMINATE, "derived_admission_port_unconnected")
+        received_fd = None
         try:
             response, received_fd = self._exchange(
                 {
@@ -270,6 +271,7 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 ProviderAdmissionState.INDETERMINATE,
                 "derived_launch_admission_port_unconnected",
             )
+        received_fd = None
         try:
             response, received_fd = self._exchange(
                 {
@@ -282,8 +284,18 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
             decision = self._derived_decision(response, received_fd)
             if not decision.allowed and received_fd is not None:
                 os.close(received_fd)
+                received_fd = None
             return decision
         except DriverAuthorityTransportError:
+            # A malformed or mismatched decision can arrive with SCM_RIGHTS.
+            # Rejecting its JSON is not enough: close the received capability
+            # before invalidating the stream so a rejected reply cannot leak a
+            # live child endpoint through an error path.
+            if received_fd is not None:
+                try:
+                    os.close(received_fd)
+                except OSError:
+                    pass
             self._invalidate_transport()
             return DerivedLaunchDecision(
                 ProviderAdmissionState.INDETERMINATE,
