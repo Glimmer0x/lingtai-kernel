@@ -212,17 +212,29 @@ with open(os.environ[\"RESULT_PATH\"], \"w\", encoding=\"utf-8\") as output:
         child_driver.close()
 
 
-def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):
-    """The production avatar launch request carries no authority bearer."""
+def test_manager_marks_driver_derived_avatar_child_as_requiring_authority(tmp_path):
+    """A Driver-derived avatar launch carries only a restrictive boot hint."""
     launcher = MagicMock()
     launcher.launch.return_value = AvatarLaunchReceipt(419, object())
     manager = AvatarManager(SimpleNamespace(), launcher=launcher)
     with patch("lingtai.venv_resolve.resolve_venv", return_value=tmp_path), patch(
         "lingtai.venv_resolve.venv_python", return_value=tmp_path / "python"
     ):
-        manager._launch(tmp_path)
+        manager._launch(tmp_path, derived_child=True)
     request = launcher.launch.call_args.args[0]
     assert request.environment == {"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"}
+
+
+def test_manager_does_not_mark_generic_avatar_child_as_driver_derived(tmp_path):
+    """Ordinary LingTai launches retain no Driver-derived boot state."""
+    launcher = MagicMock()
+    manager = AvatarManager(SimpleNamespace(), launcher=launcher)
+    with patch("lingtai.venv_resolve.resolve_venv", return_value=tmp_path), patch(
+        "lingtai.venv_resolve.venv_python", return_value=tmp_path / "python"
+    ):
+        manager._launch(tmp_path)
+    request = launcher.launch.call_args.args[0]
+    assert request.environment is None
 
 
 def test_manager_boot_policy_uses_opaque_port_and_preserves_precedence(tmp_path):

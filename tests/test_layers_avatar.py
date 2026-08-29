@@ -99,11 +99,10 @@ class TestAvatarManager:
         assert "avatar" in child_caps
 
     @pytest.mark.parametrize("avatar_type", ["shallow", "deep"])
-    def test_spawn_persists_restrictive_derived_child_state(self, tmp_path, avatar_type):
-        """Every spawn mode keeps the child directory derived after copying."""
+    def test_generic_spawn_does_not_persist_driver_derived_child_state(self, tmp_path, avatar_type):
+        """A legacy avatar spawn must not become Driver-derived by itself."""
         from lingtai.agent import Agent
         from lingtai.tools.avatar._launcher import (
-            DERIVED_AVATAR_STATE,
             derived_avatar_state_path,
         )
 
@@ -121,11 +120,7 @@ class TestAvatarManager:
         )
 
         assert result["status"] == "ok"
-        assert json.loads(
-            derived_avatar_state_path(parent._working_dir.parent / "child").read_text(
-                encoding="utf-8"
-            )
-        ) == DERIVED_AVATAR_STATE
+        assert not derived_avatar_state_path(parent._working_dir.parent / "child").exists()
 
     def test_spawn_inherits_covenant(self, tmp_path):
         """Spawned agent should inherit parent's covenant."""

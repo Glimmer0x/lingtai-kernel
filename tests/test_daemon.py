@@ -580,6 +580,28 @@ def test_agent_tool_surface_uses_persistent_derived_identity_not_required_bit(
     assert ({"daemon", "avatar"} & set(dispatch)) == expected_derived_tools
 
 
+def test_unknown_derived_marker_keeps_refusal_surface_open_and_logs(
+    tmp_path, monkeypatch, caplog,
+):
+    """Unreadable durable identity must not silently remove nested refusals."""
+    from lingtai.adapters.tool_plugin_host import persistent_derived_tool_surface_open
+    from lingtai.tools.avatar._launcher import derived_avatar_state_path
+
+    marker = derived_avatar_state_path(tmp_path)
+    marker.write_text("present", encoding="utf-8")
+    real_lstat = Path.lstat
+
+    def fail_for_marker(path):
+        if path == marker:
+            raise PermissionError("simulated marker read failure")
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_for_marker)
+    with caplog.at_level("WARNING"):
+        assert persistent_derived_tool_surface_open(tmp_path) is True
+    assert "derived_avatar_tool_surface_marker_unknown" in caplog.text
+
+
 def test_build_tool_surface_unknown_tool(tmp_path):
     """Unknown tool name raises ValueError."""
     agent = _make_agent(tmp_path, ["daemon"])

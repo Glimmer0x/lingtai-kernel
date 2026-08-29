@@ -623,15 +623,16 @@ class AvatarManager:
             encoding="utf-8"
         )
 
-        # Derived status belongs to the child directory, not this particular
-        # process invocation.  A later ``lingtai run <dir>`` therefore keeps
-        # the restrictive nested-launch requirement even if a wrapper drops
-        # the redundant environment marker.
-        atomic_write_json(
-            derived_avatar_state_path(avatar_working_dir),
-            DERIVED_AVATAR_STATE,
-            sort_keys=True,
-        )
+        # Only a Driver-granted child endpoint makes this spawn a persistent
+        # derived child. Generic LingTai's legacy GRANTED decision has no
+        # lease, and must retain its historical un-gated provider behavior.
+        derived_child = launch_decision.child_endpoint_lease is not None
+        if derived_child:
+            atomic_write_json(
+                derived_avatar_state_path(avatar_working_dir),
+                DERIVED_AVATAR_STATE,
+                sort_keys=True,
+            )
 
         # Drop the spawn prompt as a `.prompt` signal file — the avatar's
         # kernel watcher consumes it on first poll and delivers it once.
@@ -647,6 +648,7 @@ class AvatarManager:
         proc, stderr_path = self._launch(
             avatar_working_dir,
             authority_lease=launch_decision.child_endpoint_lease,
+            derived_child=derived_child,
         )
         pid = proc.pid
 
@@ -901,7 +903,11 @@ class AvatarManager:
     _BOOT_POLL_INTERVAL = BOOT_POLL_INTERVAL_SECONDS
 
     def _launch(
-        self, working_dir: Path, *, authority_lease: object | None = None
+        self,
+        working_dir: Path,
+        *,
+        authority_lease: object | None = None,
+        derived_child: bool = False,
     ) -> tuple[AvatarLaunchReceipt, Path]:
         """Launch `lingtai-agent run <dir>` as a fully detached process.
 
@@ -933,10 +939,12 @@ class AvatarManager:
             AvatarLaunchRequest(
                 argv=cmd,
                 stderr_path=stderr_path,
-                # Redundant boot signal only. The durable child state written
-                # during _spawn is authoritative for subsequent/restarted
-                # launches and never carries a grant or authority bearer.
-                environment={DERIVED_AVATAR_EXECUTION_ENV: "1"},
+                # Redundant boot signal for a Driver-derived child only. The
+                # durable child state written above remains authoritative for
+                # subsequent/restarted launches and carries no grant/bearer.
+                environment=(
+                    {DERIVED_AVATAR_EXECUTION_ENV: "1"} if derived_child else None
+                ),
                 authority_lease=authority_lease,
             )
         )

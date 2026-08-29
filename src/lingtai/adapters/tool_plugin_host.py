@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from functools import partial
+import logging
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
@@ -41,6 +42,8 @@ from lingtai.kernel.tool_plugin import (
     ToolPluginDeclaration,
     register_official_tool_plugins,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "AgentWorkdirAdapter",
@@ -90,11 +93,16 @@ class AgentWorkdirAdapter:
 
 
 def persistent_derived_tool_surface_open(working_dir: Path) -> bool:
-    """Read the durable avatar-derived identity without accepting an env proxy."""
-    from lingtai.tools.avatar._launcher import derived_avatar_state_path
+    """Open the refusal surface for present or unreadable derived identity."""
+    from lingtai.tools.avatar._launcher import (
+        DerivedAvatarState,
+        probe_derived_avatar_state,
+    )
 
-    marker = derived_avatar_state_path(working_dir)
-    return marker.exists() or marker.is_symlink()
+    state = probe_derived_avatar_state(working_dir)
+    if state is DerivedAvatarState.UNKNOWN:
+        _LOGGER.warning("derived_avatar_tool_surface_marker_unknown")
+    return state is not DerivedAvatarState.ABSENT
 
 
 class AgentActiveProviderAdapter:

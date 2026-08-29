@@ -994,6 +994,10 @@ Those are deliberately separate facts: every detached child has the admission
 requirement, while the tool surface reads only the same durable v3 manifest
 field (`derived_launch_admission_required`) that marks this run as derived.
 Transient launcher environment never decides the surface.
+For a direct avatar child, the corresponding durable marker is classified by
+the shared present/absent/unknown probe: only absence retains the generic
+surface; unknown keeps daemon/avatar available for their typed refusal and is
+logged rather than silently removing those tools.
 In the absence of a real authority that request is a structured
 `required_derived_launch_admission_port_missing` refusal before launch side
 effects; it must not fall back to generic `legacy_default` allow. This is

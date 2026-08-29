@@ -217,6 +217,14 @@ def test_unconnected_unix_endpoint_is_explicitly_closed_by_decision_parser(monke
     ), "the parser must explicitly close the endpoint, not defer to __del__"
 
 
+def _fd_is_open(fd: int) -> bool:
+    try:
+        os.fstat(fd)
+    except OSError:
+        return False
+    return True
+
+
 def test_root_driver_adapter_receives_one_child_endpoint_lease_and_consumes_once():
     client, server = socket.socketpair()
     child_client, child_driver = socket.socketpair()
@@ -283,6 +291,94 @@ def test_child_endpoint_lease_remains_explicitly_closeable_after_detach_failure(
 
     lease.close()
     endpoint.close.assert_called_once_with()
+
+
+def test_denied_launch_reply_closes_an_unexpected_received_fd(tmp_path):
+    """A malicious/buggy denied decision cannot leak an SCM_RIGHTS descriptor."""
+    client, server = socket.socketpair()
+    payload_path = tmp_path / "received-fd-payload"
+    payload_path.write_text("unique")
+    sent_fd = os.open(payload_path, os.O_RDONLY)
+    sent_identity = os.fstat(sent_fd)
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-1", "capability": None})
+        _recv_frame(sock)
+        _send_frame(
+            sock,
+            {"version": 1, "state": "denied", "reason_code": "denied"},
+            fd=sent_fd,
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    root = RootProviderAdmission("turn-denied-fd", "puffo-v0.test")
+    token = bind_provider_admission(root)
+    try:
+        decision = adapter.authorize_derived_launch(root, DerivedLaunchCapability.AVATAR)
+    finally:
+        clear_provider_admission(token)
+        adapter.close()
+        os.close(sent_fd)
+    thread.join(timeout=2)
+    leaked = {
+        fd
+        for fd in range(3, 128)
+        if fd != sent_fd
+        and _fd_is_open(fd)
+        and (stat := os.fstat(fd)).st_dev == sent_identity.st_dev
+        and stat.st_ino == sent_identity.st_ino
+    }
+    for fd in leaked:
+        os.close(fd)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert leaked == set()
+
+
+def test_granted_launch_rejects_non_unix_stream_child_endpoint_before_spawn():
+    """Only connected AF_UNIX stream endpoints may become child leases."""
+    client, server = socket.socketpair()
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_identity = os.fstat(udp.fileno())
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-1", "capability": None})
+        _recv_frame(sock)
+        _send_frame(
+            sock,
+            {"version": 1, "state": "granted", "reason_code": "allowed"},
+            fd=udp.fileno(),
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    root = RootProviderAdmission("turn-invalid-child-fd", "puffo-v0.test")
+    token = bind_provider_admission(root)
+    try:
+        decision = adapter.authorize_derived_launch(root, DerivedLaunchCapability.AVATAR)
+    finally:
+        clear_provider_admission(token)
+        adapter.close()
+        udp.close()
+    thread.join(timeout=2)
+    leaked = {
+        fd
+        for fd in range(3, 128)
+        if _fd_is_open(fd)
+        and (stat := os.fstat(fd)).st_dev == udp_identity.st_dev
+        and stat.st_ino == udp_identity.st_ino
+    }
+    for fd in leaked:
+        os.close(fd)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert decision.child_endpoint_lease is None
+    assert leaked == set()
 
 
 def test_derived_endpoint_cannot_mint_a_second_child_even_if_it_has_a_socket():

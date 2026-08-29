@@ -12,6 +12,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import Context, copy_context
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -19,6 +20,7 @@ from typing import Any, Callable
 @dataclass
 class _WorkItem:
     fn: Callable[[], Any]
+    context: Context
     future: concurrent.futures.Future
 
 
@@ -50,7 +52,11 @@ class APICallGate:
         if self._stop.is_set():
             raise RuntimeError("Gate is shut down")
         future: concurrent.futures.Future = concurrent.futures.Future()
-        self._queue.put(_WorkItem(fn=fn, future=future))
+        # The gate and pool deliberately cross threads.  Provider admission's
+        # scoped audit trace is a ContextVar, so capture the submitter context
+        # here rather than letting the worker observe its empty thread-local
+        # default at the actual provider-I/O boundary.
+        self._queue.put(_WorkItem(fn=fn, context=copy_context(), future=future))
         return future.result()
 
     def shutdown(self) -> None:
@@ -106,7 +112,7 @@ class APICallGate:
     def _execute(item: _WorkItem) -> None:
         """Run in pool thread. Always resolves the future."""
         try:
-            result = item.fn()
+            result = item.context.run(item.fn)
             item.future.set_result(result)
         except BaseException as exc:
             item.future.set_exception(exc)

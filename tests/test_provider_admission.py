@@ -34,11 +34,13 @@ from lingtai.tools.soul.consultation import _send_with_timeout as soul_send_with
 class _InnerSession:
     def __init__(self):
         self.calls = []
+        self.audit_ids = []
         self.interface = object()
         self.pre_request_hook = None
 
     def send(self, message):
         self.calls.append(("send", message))
+        self.audit_ids.append(current_provider_call_audit_id())
         return message
 
     def send_stream(self, message, on_chunk=None):
@@ -367,8 +369,8 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
         ("src/lingtai/tools/soul/consultation.py", 67, "Thread"),
     }
     post_admission_provider_dispatch = {
-        ("src/lingtai/llm/api_gate.py", 42, "ThreadPoolExecutor"),
-        ("src/lingtai/llm/api_gate.py", 43, "Thread"),
+        ("src/lingtai/llm/api_gate.py", 44, "ThreadPoolExecutor"),
+        ("src/lingtai/llm/api_gate.py", 45, "Thread"),
     }
     outside_root_provider_dispatch = {
         ("src/lingtai/adapters/acp/server.py", 277, "Thread"),
@@ -582,7 +584,7 @@ def test_root_admission_reaches_rate_gated_provider_io_worker():
     inner = _InnerService()
     gate = APICallGate(max_rpm=60, pool_size=1)
     inner.session = _GatedSession(inner.session, gate)
-    port = _RecordingAdmissionPort()
+    port = _AuditRecordingAdmissionPort()
     session = ProviderAdmittedLLMService(inner, port).create_session("system")
     root = RootProviderAdmission("turn-rate-gated-worker", "puffo-v0.test")
     token = bind_provider_admission(root)
@@ -602,7 +604,8 @@ def test_root_admission_reaches_rate_gated_provider_io_worker():
 
     assert result == "through-rate-gate"
     assert inner.session._inner.calls == [("send", "through-rate-gate")]
-    assert port.calls == [(root, ProviderCallClass.ROOT)]
+    assert inner.session._inner.audit_ids == ["audit-1"]
+    assert port.adjudications == ["audit-1"]
 
 
 def test_root_admission_reaches_soul_consultation_worker_thread():
