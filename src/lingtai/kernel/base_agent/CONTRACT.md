@@ -415,10 +415,9 @@ Clause IDs are stable; each rule composes the linked normative source.
    a newer integration head merely by branch name.
    The current process probe proves only the supervisor-to-execution-child
    (hop-2) boundary; the first supervisor hop and entrypoint adoption have no
-   end-to-end behavior proof. Driver-side `ISSUED -> CLAIMED` enforcement and
-   endpoint binding, #299 directory binding/provider-call CAS, dynamic revoke,
-   and any global removal of the generic daemon/avatar filter remain
-   unimplemented. Persistent child markers prevent accidental launch/restart
+   end-to-end behavior proof. #299 directory binding/provider-call CAS,
+   dynamic revoke, and any global removal of the generic daemon/avatar filter
+   remain out of scope. Persistent child markers prevent accidental launch/restart
    confusion only; a same-OS-user child able to rewrite its own directory or
    run manifest is outside this guarantee. The Core local nested denial is
    merely a structural backstop and must not be the only rejection signal: a
