@@ -87,14 +87,20 @@ only the mock.
 ### 4. Source pinning
 
 Run the kernel from this checkout, not from an installed wheel, so the test
-exercises the code under review. Pin the source and the interpreter explicitly:
+exercises the code under review. Choose the source by running `pytest` from the
+checkout itself, and pin the interpreter explicitly:
 
 ```bash
-PYTHONPATH="$PWD/src" /path/to/project/.venv/bin/python -m pytest -q <targets>
+cd /path/to/lingtai-checkout
+/path/to/project/.venv/bin/python -m pytest -q <targets>
 ```
 
-An unpinned run can silently import a different installed `lingtai`, turning a
-green bar into a lie about the working tree.
+This repository's pytest configuration supplies its checkout-local `src/`.
+Do not use `PYTHONPATH` to select another worktree: here it is not a source pin
+and can silently leave pytest running the current checkout. To test another
+tree, run pytest *from that tree*. An unpinned run can silently import a
+different installed `lingtai`, turning a green bar into a lie about the working
+tree.
 
 ### 5. Deterministic validation
 
@@ -202,9 +208,14 @@ import sys
 
 # Let pytest choose its own import path first. Inspect the module it actually
 # loaded afterwards; pre-importing it here would alter that observation.
+evidence_module = "<module>"
+if evidence_module in sys.modules:
+    print("INVALID: evidence module was loaded before pytest")
+    raise SystemExit(2)
+
 import pytest
 exit_code = pytest.main(["<target>"])
-module = sys.modules.get("<module>")
+module = sys.modules.get(evidence_module)
 if module is None or not getattr(module, "__file__", None):
     print("INVALID: pytest did not load the required evidence module")
     raise SystemExit(2)
