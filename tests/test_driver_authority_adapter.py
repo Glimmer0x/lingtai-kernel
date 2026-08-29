@@ -438,6 +438,57 @@ def test_granted_launch_rejects_non_unix_stream_child_endpoint_before_spawn():
     assert leaked == set()
 
 
+def test_unconnected_unix_endpoint_is_explicitly_closed_by_decision_parser(monkeypatch):
+    """A socket-object failure must not pass only through its finalizer."""
+    from lingtai.adapters.acp import driver_authority as authority_module
+
+    client, server = socket.socketpair()
+    unconnected = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    close_stacks = []
+    real_socket = authority_module.socket.socket
+
+    class _CloseRecordingSocket(real_socket):
+        def close(self):
+            close_stacks.append(traceback.extract_stack())
+            return super().close()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-unconnected", "capability": None})
+        _recv_frame(sock)
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "state": "granted",
+                "reason_code": "allowed",
+                "audit_id": "audit-unconnected",
+            },
+            fd=unconnected.fileno(),
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    monkeypatch.setattr(authority_module.socket, "socket", _CloseRecordingSocket)
+    try:
+        decision = adapter.authorize_derived_launch(
+            RootProviderAdmission("turn-unconnected", "puffo-v0.test"),
+            DerivedLaunchCapability.AVATAR,
+        )
+    finally:
+        adapter.close()
+        unconnected.close()
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert any(
+        frame.name == "_derived_decision"
+        for stack in close_stacks
+        for frame in stack
+    ), "the parser must explicitly close the endpoint, not defer to __del__"
+
+
 def test_derived_endpoint_asks_driver_to_audit_and_deny_a_second_child():
     client, server = socket.socketpair()
 
