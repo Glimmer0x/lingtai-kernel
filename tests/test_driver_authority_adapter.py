@@ -266,6 +266,84 @@ def test_derived_endpoint_asks_driver_to_audit_and_deny_a_second_child():
     assert raised.value.decision.audit_id == "audit-nested-1"
 
 
+def test_timeout_invalidates_endpoint_so_a_late_grant_cannot_admit_next_call():
+    """A response belongs to its request, never to the next wait on a socket."""
+
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {"version": 1, "role": "root", "launch_id": "root-timeout", "capability": None},
+        )
+        first = _recv_frame(sock)
+        assert first["op"] == "authorize_provider_call"
+        # First wait expires at 20ms; the second is then waiting when this
+        # delayed first response arrives at 30ms.
+        time.sleep(0.03)
+        try:
+            _send_frame(
+                sock,
+                {
+                    "version": 1,
+                    "state": "granted",
+                    "reason_code": "allowed",
+                    "audit_id": "audit-late-first",
+                },
+            )
+            # Before the fix, the second request is already queued and this
+            # stale grant is consumed as its response.  A fixed client has
+            # invalidated the endpoint, so EOF/OSError is expected here.
+            _recv_frame(sock)
+        except (BrokenPipeError, ConnectionResetError, EOFError, OSError):
+            pass
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client, timeout=0.02)
+    root = RootProviderAdmission("turn-timeout", "puffo-v0.test")
+    first = adapter.authorize_provider_call(root, ProviderCallClass.ROOT)
+    second = adapter.authorize_provider_call(root, ProviderCallClass.ROOT)
+    adapter.close()
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert first.state is ProviderAdmissionState.INDETERMINATE
+    assert second.state is ProviderAdmissionState.INDETERMINATE
+    assert second.audit_id is None
+
+
+@pytest.mark.parametrize("state", ("granted", "denied"))
+def test_driver_decision_without_audit_id_is_indeterminate(state):
+    """Every Driver decision must have a stable audit correlation id."""
+
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {"version": 1, "role": "root", "launch_id": "root-audit", "capability": None},
+        )
+        request = _recv_frame(sock)
+        assert request["op"] == "authorize_provider_call"
+        _send_frame(
+            sock,
+            {"version": 1, "state": state, "reason_code": "test-decision"},
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    root = RootProviderAdmission("turn-audit", "puffo-v0.test")
+    decision = adapter.authorize_provider_call(root, ProviderCallClass.ROOT)
+    adapter.close()
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert decision.reason_code == "derived_admission_port_unconnected"
+
+
 @pytest.mark.parametrize(
     ("endpoint_capability", "expected_call_class"),
     [

@@ -237,6 +237,7 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 raise DriverAuthorityTransportError("provider decision must not return an fd")
             return self._provider_decision(response)
         except DriverAuthorityTransportError:
+            self._invalidate_transport()
             return ProviderCallDecision(
                 ProviderAdmissionState.INDETERMINATE,
                 "derived_admission_port_unconnected",
@@ -283,16 +284,30 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 os.close(received_fd)
             return decision
         except DriverAuthorityTransportError:
+            self._invalidate_transport()
             return DerivedLaunchDecision(
                 ProviderAdmissionState.INDETERMINATE,
                 "derived_launch_admission_port_unconnected",
             )
 
     def close(self) -> None:
+        self._buffer.clear()
         try:
             self._socket.close()
         except OSError:
             pass
+
+    def _invalidate_transport(self) -> None:
+        """Discard a desynchronized stream after any failed request/response.
+
+        A timeout leaves it unknowable whether a later frame belongs to the
+        request that timed out.  Keeping the socket would let that stale frame
+        become a decision for the next provider or launch request.  Authority
+        is therefore lost rather than guessed; callers receive the existing
+        structured INDETERMINATE result and cannot fall back to a grant.
+        """
+
+        self.close()
 
     def _exchange(
         self, request: dict[str, Any], *, expect_fd: bool | None
@@ -399,7 +414,7 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
             raise DriverAuthorityTransportError("root endpoint must not declare capability")
         return _EndpointIdentity(role=role, launch_id=launch_id, capability=capability)
 
-    def _state(self, response: dict[str, Any]) -> tuple[ProviderAdmissionState, str, str | None, str | None]:
+    def _state(self, response: dict[str, Any]) -> tuple[ProviderAdmissionState, str, str, str | None]:
         if response.get("version") != _PROTOCOL_VERSION:
             raise DriverAuthorityTransportError("authority protocol version mismatch")
         try:
@@ -407,11 +422,10 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
         except (TypeError, ValueError) as exc:
             raise DriverAuthorityTransportError("authority decision state is invalid") from exc
         reason = self._nonempty_string(response.get("reason_code"), "reason_code")
-        audit_id = response.get("audit_id")
+        audit_id = self._nonempty_string(response.get("audit_id"), "audit_id")
         admission_id = response.get("admission_id")
-        for value, field in ((audit_id, "audit_id"), (admission_id, "admission_id")):
-            if value is not None and (not isinstance(value, str) or not value):
-                raise DriverAuthorityTransportError(f"authority response {field} is invalid")
+        if admission_id is not None and (not isinstance(admission_id, str) or not admission_id):
+            raise DriverAuthorityTransportError("authority response admission_id is invalid")
         return state, reason, audit_id, admission_id
 
     def _provider_decision(self, response: dict[str, Any]) -> ProviderCallDecision:

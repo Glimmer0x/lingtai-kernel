@@ -315,18 +315,18 @@ def require_derived_launch_admission(
         # Preserve the structural one-hop backstop even if a constrained child
         # loses its transport.  With a live port the same nested request must
         # still cross Driver so it receives the authoritative denial/audit.
-        if isinstance(parent, DerivedProviderAdmission):
-            raise DerivedLaunchAdmissionError(
-                DerivedLaunchDecision(
-                    ProviderAdmissionState.DENIED,
-                    "nested_derived_launch_denied",
-                )
-            )
         if required:
             raise DerivedLaunchAdmissionError(
                 DerivedLaunchDecision(
                     ProviderAdmissionState.INDETERMINATE,
                     "required_derived_launch_admission_port_missing",
+                )
+            )
+        if isinstance(parent, DerivedProviderAdmission):
+            raise DerivedLaunchAdmissionError(
+                DerivedLaunchDecision(
+                    ProviderAdmissionState.DENIED,
+                    "nested_derived_launch_denied",
                 )
             )
         return DerivedLaunchDecision(ProviderAdmissionState.GRANTED, "legacy_default")
@@ -350,9 +350,17 @@ def require_derived_launch_admission(
         or not isinstance(decision.state, ProviderAdmissionState)
         or not isinstance(decision.reason_code, str)
         or not decision.reason_code
+        # Every response received from a configured Driver port must be
+        # correlatable.  A missing audit id is not merely incomplete
+        # observability: it makes a grant or denial unverifiable at the
+        # authority boundary, so fail closed before process state changes.
+        or (
+            decision.state is not ProviderAdmissionState.INDETERMINATE
+            and (not isinstance(decision.audit_id, str) or not decision.audit_id)
+        )
         or any(
             value is not None and (not isinstance(value, str) or not value)
-            for value in (decision.audit_id, decision.admission_id)
+            for value in (decision.admission_id,)
         )
         or (
             decision.state is ProviderAdmissionState.GRANTED
@@ -415,9 +423,16 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> str | 
         or not isinstance(decision.reason_code, str)
         or not decision.reason_code
         or decision.state is not ProviderAdmissionState.GRANTED
+        # Provider I/O is admitted only when the actual Driver adjudication
+        # can be joined to that I/O.  Never let a syntactically valid but
+        # uncorrelated grant reach the provider.
+        or (
+            decision.state is not ProviderAdmissionState.INDETERMINATE
+            and (not isinstance(decision.audit_id, str) or not decision.audit_id)
+        )
         or any(
             value is not None and (not isinstance(value, str) or not value)
-            for value in (decision.audit_id, decision.admission_id)
+            for value in (decision.admission_id,)
         )
     ):
         reason = (
