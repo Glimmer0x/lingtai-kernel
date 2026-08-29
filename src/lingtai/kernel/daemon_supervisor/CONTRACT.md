@@ -61,6 +61,13 @@ the root endpoint is close-on-exec and never becomes a child `pass_fds` entry.
 Windows has no equivalent Driver endpoint transport and rejects such a lease
 before launch.
 
+The current cross-repository lifecycle gate exercises this exact POSIX path:
+real root `Agent`, real Driver issuance, supervisor entrypoint, execution-child
+entrypoint, adopted child endpoint, and a legal admitted provider call. Its
+directed mutation suppresses the supervisor relay and must fail closed before
+provider I/O. This is evidence for the current review candidate, not a blanket
+authorization to merge unrelated changes or to relax the generic filter.
+
 The Windows adapter (`WindowsDaemonSupervisorAdapter`) is the `nt` production
 sibling behind the same Port: the same encoded request and secret-stripped
 environment, launched against Windows-owned entrypoint mirrors

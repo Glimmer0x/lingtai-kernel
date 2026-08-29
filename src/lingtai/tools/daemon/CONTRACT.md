@@ -973,22 +973,32 @@ cancellation. `daemon(action="ask")` uses the run-local control spool and is
 accepted only while durable state is running. The ownership transition is
 unconditional; detached supervision is not gated behind a production flag.
 
-The detached execution child is not currently given derived-launch authority.
-Its production composition root sets only the restrictive
-`_requires_derived_launch_admission_port` requirement. Generic emanations keep
-the historical daemon/avatar tool filter; a persistently restricted child alone
-exposes those two tools so a nested request reaches the typed admission seam.
-Those are deliberately separate facts: every detached child has the admission
-requirement, while the tool surface reads only the same durable v3 manifest
-field (`derived_launch_admission_required`) that marks this run as derived.
-Transient launcher environment never decides the surface.
-In the absence of a real authority that request is a structured
-`required_derived_launch_admission_port_missing` refusal before launch side
-effects; it must not fall back to generic `legacy_default` allow. This is
-refusal-side Step 3 evidence, not a legal root-to-one-hop allow or complete 2b.
-This requirement flag is not a grant, parent identity, or bearer. A future
-Driver authority bridge must supply those separately before any legitimate
-derived launch can be allowed.
+A constrained Driver-derived detached execution child receives a one-use,
+opaque child endpoint through the real root-to-supervisor-to-execution-child
+handoff. Its composition root adopts that endpoint as both derived-launch and
+provider-call admission authority; it never receives the root endpoint. Generic
+emanations keep the historical daemon/avatar tool filter, while a persistently
+restricted child alone exposes those two tools so a nested request reaches the
+typed admission seam and then the Driver. These are deliberately separate
+facts: every detached child has the admission requirement, while the tool
+surface reads only the durable v3 manifest field
+(`derived_launch_admission_required`) that marks this run as derived. Transient
+launcher environment never decides the surface.
+
+The persistent requirement flag is not a grant, parent identity, or bearer. A
+missing or malformed required endpoint fails closed as
+`required_derived_launch_admission_port_missing` before launch side effects; it
+must not fall back to generic `legacy_default` allow. A live child endpoint
+permits the legal one-hop provider call, while every real nested daemon/avatar
+request is presented to Driver for a denied decision with a non-empty audit id;
+Core still applies its structural backstop and never accepts a nested grant.
+`scripts/verify_driver_supervisor_execution_e2e.py` proves the real first-hop
+and entrypoint-adoption path, and
+`scripts/verify_driver_daemon_dispatch_audit.py` proves the nested dispatch
+audit path. The current candidate is therefore ready for independent review,
+not direct merge approval. #299 binding/provider-call CAS, dynamic revoke,
+response-to-request correlation v2, and removal of the generic filter remain
+separate work.
 
 ## Acceptance Gate
 

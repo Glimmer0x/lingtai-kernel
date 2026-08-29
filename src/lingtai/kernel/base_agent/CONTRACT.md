@@ -399,22 +399,24 @@ Clause IDs are stable; each rule composes the linked normative source.
    whole-program proof over dynamic dispatch (`getattr`, registry lookup, or
    factory indirection) or subclasses/wrappers that override a launch entry;
    those are explicit blind spots that require focused review and production
-   path E2E, not an inference from a green inventory. The source tree contains
-   a Draft 2b integration candidate: a real Driver server issues and claims
-   the endpoint on a legal root-to-one-hop launch, and the same recording
-   transport observes the legal provider call plus one non-empty Driver denial
-   audit for each real nested tool request. That is stronger than the earlier
-   Step-3 refusal-only slice, but it is still not merge authorization: the
-   current exact-head candidate must pass its lifecycle and mutation acceptance
-   probes before a reviewer can remove **NO MERGE**. A protocol fixture can
-   prove Core-only interoperability but cannot replace that production
-   Driver-server gate. Historical Step-3 acceptance records do not transfer to
-   a newer integration head merely by branch name.
-   The current process probe proves only the supervisor-to-execution-child
-   (hop-2) boundary; the first supervisor hop and entrypoint adoption have no
-   end-to-end behavior proof. #299 directory binding/provider-call CAS,
-   dynamic revoke, and any global removal of the generic daemon/avatar filter
-   remain out of scope. Persistent child markers prevent accidental launch/restart
+   path E2E, not an inference from a green inventory. The source tree carries a
+   review candidate with real 2b lifecycle evidence. The cross-repository
+   `scripts/verify_driver_supervisor_execution_e2e.py` starts a real root
+   `Agent`, crosses the POSIX supervisor entrypoint and exact execution-child
+   entrypoint, and observes a legal child provider call authorized by the real
+   Driver. Its directed mutation removes the supervisor authority relay and
+   must fail closed before provider I/O. Separately,
+   `scripts/verify_driver_daemon_dispatch_audit.py` observes a legal provider
+   call plus one non-empty Driver denial audit for each real nested daemon and
+   avatar tool request, with zero nested provider I/O. Together those probes
+   cover the real root-to-one-hop handoff, entrypoint adoption, legal call, and
+   nested-denial lifecycle; a protocol fixture alone cannot replace them.
+   Their current exact-head results make the change ready for independent
+   review, not merge authorization: a reviewer must rerun the applicable
+   lifecycle and mutation gates on the proposed content. Historical evidence
+   never transfers merely by branch name. #299 directory binding/provider-call
+   CAS, dynamic revoke, and any global removal of the generic daemon/avatar
+   filter remain out of scope. Persistent child markers prevent accidental launch/restart
    confusion only; a same-OS-user child able to rewrite its own directory or
    run manifest is outside this guarantee. The Core local nested denial is
    merely a structural backstop and must not be the only rejection signal: a
