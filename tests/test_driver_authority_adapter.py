@@ -381,10 +381,11 @@ def test_granted_launch_rejects_non_unix_stream_child_endpoint_before_spawn():
     assert leaked == set()
 
 
-def test_derived_endpoint_cannot_mint_a_second_child_even_if_it_has_a_socket():
+def test_derived_endpoint_asks_driver_to_audit_and_deny_a_second_child():
     client, server = socket.socketpair()
 
     def handler(sock):
+        sock.settimeout(0.5)
         assert _recv_frame(sock) == {"version": 1, "op": "hello"}
         _send_frame(
             sock,
@@ -395,20 +396,35 @@ def test_derived_endpoint_cannot_mint_a_second_child_even_if_it_has_a_socket():
                 "capability": "daemon",
             },
         )
+        assert _recv_frame(sock) == {
+            "version": 1,
+            "op": "authorize_derived_launch",
+            "launch_id": "child-1",
+            "capability": "daemon",
+        }
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "state": "denied",
+                "reason_code": "nested_derived_launch_denied",
+                "audit_id": "audit-nested-1",
+            },
+        )
 
     thread, errors = _server_thread(server, handler)
     adapter = DriverAuthorityAdapter(client)
     root = RootProviderAdmission("turn-1", "puffo-v0.full-tool-acp-ingress.v1")
     child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
-    # The Core boundary rejects nested derived work before it asks the Driver.
     token = bind_provider_admission(child)
     try:
-        with pytest.raises(Exception, match="nested_derived_launch_denied"):
+        with pytest.raises(Exception, match="nested_derived_launch_denied") as raised:
             require_derived_launch_admission(adapter, DerivedLaunchCapability.DAEMON)
     finally:
         clear_provider_admission(token)
     thread.join(timeout=2)
     assert errors == []
+    assert raised.value.decision.audit_id == "audit-nested-1"
 
 
 @pytest.mark.parametrize(

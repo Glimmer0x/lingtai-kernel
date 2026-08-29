@@ -247,15 +247,27 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
 
     def authorize_derived_launch(
         self,
-        parent: RootProviderAdmission,
+        parent: ProviderAdmissionParent,
         capability: DerivedLaunchCapability,
     ) -> DerivedLaunchDecision:
-        if not isinstance(parent, RootProviderAdmission) or self._identity.role != "root":
-            return DerivedLaunchDecision(
-                ProviderAdmissionState.DENIED,
-                "nested_derived_launch_denied",
-            )
         if not isinstance(capability, DerivedLaunchCapability):
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.INDETERMINATE,
+                "derived_launch_admission_port_unconnected",
+            )
+        if self._identity.role == "root":
+            if not isinstance(parent, RootProviderAdmission):
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.DENIED,
+                    "endpoint_binding_mismatch",
+                )
+        elif self._identity.role == "derived":
+            if not isinstance(parent, DerivedProviderAdmission):
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.DENIED,
+                    "endpoint_binding_mismatch",
+                )
+        else:
             return DerivedLaunchDecision(
                 ProviderAdmissionState.INDETERMINATE,
                 "derived_launch_admission_port_unconnected",
@@ -526,7 +538,7 @@ class UnavailableDriverAuthorityAdapter(ProviderCallAdmissionPort):
 
     def authorize_derived_launch(
         self,
-        _parent: RootProviderAdmission,
+        _parent: ProviderAdmissionParent,
         _capability: DerivedLaunchCapability,
     ) -> DerivedLaunchDecision:
         return DerivedLaunchDecision(
@@ -562,7 +574,7 @@ class EndpointBindingMismatchAuthorityAdapter(ProviderCallAdmissionPort):
 
     def authorize_derived_launch(
         self,
-        _parent: RootProviderAdmission,
+        _parent: ProviderAdmissionParent,
         _capability: DerivedLaunchCapability,
     ) -> DerivedLaunchDecision:
         return DerivedLaunchDecision(

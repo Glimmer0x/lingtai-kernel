@@ -85,7 +85,7 @@ class PuffoV0RuntimePolicy:
 
     def authorize_derived_launch(
         self,
-        _parent: RootProviderAdmission,
+        _parent: ProviderAdmissionParent,
         _capability: DerivedLaunchCapability,
     ) -> DerivedLaunchDecision:
         """Refuse launch until the Driver-owned authority transport is wired."""

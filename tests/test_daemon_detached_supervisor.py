@@ -1867,6 +1867,25 @@ def test_persisted_detached_child_opens_both_tools_and_reaches_nested_denial(
                 separators=(",", ":"),
             ).encode()
             server.sendall(struct.pack("!I", len(payload)) + payload)
+            header = server.recv(4)
+            assert len(header) == 4
+            size = struct.unpack("!I", header)[0]
+            assert json.loads(server.recv(size).decode()) == {
+                "version": 1,
+                "op": "authorize_derived_launch",
+                "launch_id": "daemon-child",
+                "capability": "daemon",
+            }
+            payload = json.dumps(
+                {
+                    "version": 1,
+                    "state": "denied",
+                    "reason_code": "nested_derived_launch_denied",
+                    "audit_id": "audit-nested-daemon",
+                },
+                separators=(",", ":"),
+            ).encode()
+            server.sendall(struct.pack("!I", len(payload)) + payload)
         except BaseException as exc:
             server_errors.append(exc)
         finally:
@@ -1893,6 +1912,7 @@ def test_persisted_detached_child_opens_both_tools_and_reaches_nested_denial(
 
     assert server_errors == []
     assert raised.value.decision.reason_code == "nested_derived_launch_denied"
+    assert raised.value.decision.audit_id == "audit-nested-daemon"
 
 
 def test_detached_file_manifest_injects_file_io(tmp_path):

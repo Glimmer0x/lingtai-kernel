@@ -768,8 +768,8 @@ def test_v0_derived_admission_rejects_nested_derived_execution():
         begin_derived_provider_admission(child, ProviderCallClass.AVATAR_CHILD)  # type: ignore[arg-type]
 
 
-def test_derived_launch_requires_root_admission_and_never_accepts_a_child_parent():
-    """A one-hop child cannot self-authorize another daemon/avatar launch."""
+def test_derived_launch_reports_a_child_request_to_the_port_then_denies_it():
+    """Core remains a backstop, but Driver sees and audits a nested request."""
 
     root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
     child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
@@ -784,7 +784,7 @@ def test_derived_launch_requires_root_admission_and_never_accepts_a_child_parent
         clear_provider_admission(token)
 
     assert raised.value.decision.state is ProviderAdmissionState.DENIED
-    assert port.calls == []
+    assert port.calls == [(child, DerivedLaunchCapability.AVATAR)]
 
 
 def test_derived_launch_port_is_fail_closed_when_unconnected_or_indeterminate():
