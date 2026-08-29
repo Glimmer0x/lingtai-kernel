@@ -186,7 +186,7 @@ class DerivedLaunchAdmissionPort(Protocol):
 
     def authorize_derived_launch(
         self,
-        parent: RootProviderAdmission,
+        parent: ProviderAdmissionParent,
         capability: DerivedLaunchCapability,
     ) -> DerivedLaunchDecision: ...
 
@@ -289,7 +289,18 @@ def require_derived_launch_admission(
 
     if not isinstance(capability, DerivedLaunchCapability):
         raise TypeError("derived launch capability must be typed")
+    parent = current_provider_admission()
     if port is None:
+        # Preserve the structural one-hop backstop even if a constrained child
+        # loses its transport.  With a live port the same nested request must
+        # still cross Driver so it receives the authoritative denial/audit.
+        if isinstance(parent, DerivedProviderAdmission):
+            raise DerivedLaunchAdmissionError(
+                DerivedLaunchDecision(
+                    ProviderAdmissionState.DENIED,
+                    "nested_derived_launch_denied",
+                )
+            )
         if required:
             raise DerivedLaunchAdmissionError(
                 DerivedLaunchDecision(
@@ -299,15 +310,12 @@ def require_derived_launch_admission(
             )
         return DerivedLaunchDecision(ProviderAdmissionState.GRANTED, "legacy_default")
 
-    parent = current_provider_admission()
-    if not isinstance(parent, RootProviderAdmission):
-        reason = (
-            "nested_derived_launch_denied"
-            if isinstance(parent, DerivedProviderAdmission)
-            else "missing_root_provider_admission"
-        )
+    if not isinstance(parent, (RootProviderAdmission, DerivedProviderAdmission)):
         raise DerivedLaunchAdmissionError(
-            DerivedLaunchDecision(ProviderAdmissionState.DENIED, reason)
+            DerivedLaunchDecision(
+                ProviderAdmissionState.DENIED,
+                "missing_root_provider_admission",
+            )
         )
     try:
         decision = port.authorize_derived_launch(parent, capability)
@@ -333,6 +341,16 @@ def require_derived_launch_admission(
         decision = DerivedLaunchDecision(
             ProviderAdmissionState.INDETERMINATE,
             "malformed_derived_launch_admission_decision",
+        )
+    # A nested request must be presented to Driver first, so the Driver can
+    # record its own denial.  Core remains a second, structural one-hop
+    # backstop: an erroneous Driver grant can never create a second child.
+    if isinstance(parent, DerivedProviderAdmission) and decision.allowed:
+        decision = DerivedLaunchDecision(
+            ProviderAdmissionState.DENIED,
+            "nested_derived_launch_denied",
+            audit_id=decision.audit_id,
+            admission_id=decision.admission_id,
         )
     if not decision.allowed:
         raise DerivedLaunchAdmissionError(decision)

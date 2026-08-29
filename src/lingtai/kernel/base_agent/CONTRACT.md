@@ -367,7 +367,10 @@ Clause IDs are stable; each rule composes the linked normative source.
    actual provider call; it cannot reuse a root grant. v0 is explicitly
    one-hop: only a `RootProviderAdmission` can mint a derived parent, and a
    daemon/avatar child cannot mint another model-executing daemon/avatar.
-   Driver launch admission MUST reject the same nested request; adding recursive
+   Driver launch admission MUST reject and audit the same nested request with
+   its own reason code and audit correlation; when a live Port exists, Core
+   MUST present the request to that Port before applying its structural
+   backstop. Adding recursive
    derivation requires a new contract with per-hop authority and a recursive
    production-boundary inventory. This is an authorization rule, not a tool
    surface reduction: a full-tool child must be able to make its real
@@ -402,7 +405,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    It is neither complete 2b nor merge authorization. Complete 2b additionally
    requires a real Driver server to issue and claim the endpoint on a legal
    root-to-one-hop launch, then the same recording transport must show a
-   non-empty legal provider call and empty denied nested calls. A protocol test
+   non-empty legal provider call, empty denied nested calls, and one Driver
+   denial audit with a non-empty audit id for each real nested tool request. A protocol test
    fixture can prove Core-only interoperability but cannot replace that
    production Driver-server gate. **Acceptance record:** this is a Step 3
    refusal-side scoped candidate only and carries **NO MERGE** authorization.
@@ -413,8 +417,10 @@ Clause IDs are stable; each rule composes the linked normative source.
    and any global removal of the generic daemon/avatar filter remain
    unimplemented. Persistent child markers prevent accidental launch/restart
    confusion only; a same-OS-user child able to rewrite its own directory or
-   run manifest is outside this guarantee. The Core `TypeError` is
-   merely a structural backstop and must not be the only rejection signal. The
+   run manifest is outside this guarantee. The Core local nested denial is
+   merely a structural backstop and must not be the only rejection signal: a
+   live Driver Port is attempted first so Driver owns the nested denial audit.
+   The
    derived-launch inventory uses `(file, enclosing qualified function,
    constructor)` keys, so unrelated line movement does not turn that specific
    tripwire into mechanical maintenance.

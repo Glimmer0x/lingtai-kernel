@@ -1309,6 +1309,24 @@ def test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches(
                     "admission_id": "admission-ordinary-provider",
                 }
             )
+            for capability, audit_id in (
+                ("avatar", "audit-nested-avatar"),
+                ("daemon", "audit-nested-daemon"),
+            ):
+                assert receive_frame() == {
+                    "version": 1,
+                    "op": "authorize_derived_launch",
+                    "launch_id": "avatar-child",
+                    "capability": capability,
+                }
+                send_frame(
+                    {
+                        "version": 1,
+                        "state": "denied",
+                        "reason_code": "nested_derived_launch_denied",
+                        "audit_id": audit_id,
+                    }
+                )
         except BaseException as exc:
             server_errors.append(exc)
         finally:
@@ -1383,6 +1401,7 @@ def test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches(
     assert server_errors == []
 
     assert avatar_result["reason_code"] == "nested_derived_launch_denied"
+    assert avatar_result["audit_id"] == "audit-nested-avatar"
     assert daemon_result == {
         "status": "error",
         "message": "derived launch was not admitted: nested_derived_launch_denied",
@@ -1394,7 +1413,7 @@ def test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches(
                 "capability": "daemon",
                 "state": "denied",
                 "reason_code": "nested_derived_launch_denied",
-                "audit_id": None,
+                "audit_id": "audit-nested-daemon",
             },
         )
     ]
