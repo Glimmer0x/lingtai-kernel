@@ -240,6 +240,15 @@ def _clean_signal_files(working_dir: Path) -> None:
                 pass
 
 
+def _register_agent_boot(agent: Agent, working_dir: Path, *, ledger=None) -> dict:
+    """Durably register this exact runtime after Agent acquired its lease."""
+    if ledger is None:
+        from lingtai.adapters.agent_guardian import FilesystemLifecycleLedgerAdapter
+
+        ledger = FilesystemLifecycleLedgerAdapter(working_dir)
+    return ledger.register_boot(agent_address=working_dir.name, working_dir=str(working_dir))
+
+
 def _stop_signal_numbers() -> list[int]:
     """Stop signals the CLI host hooks on this platform.
 
@@ -324,7 +333,16 @@ def _check_duplicate_process(working_dir: Path) -> None:
 def run(working_dir: Path) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
     _check_duplicate_process(working_dir)
-    _clean_signal_files(working_dir)
+    from lingtai.adapters.agent_guardian import FilesystemLifecycleLedgerAdapter
+    from lingtai.kernel.agent_guardian import LifecycleLedgerError
+
+    # Refuse an already-suspended agent before constructing providers, MCP
+    # clients, or ToolPlugins. register_boot repeats this check under the
+    # ledger lock after Agent construction, closing a concurrent-suspend race.
+    ledger = FilesystemLifecycleLedgerAdapter(working_dir)
+    if ledger.read_snapshot().active_intent_id is not None:
+        raise LifecycleLedgerError("explicit_suspend_active")
+
     # Durable file logging for daemonized agents: stderr alone is DEVNULL for
     # avatars and truncated per-spawn in logs/spawn.stderr, so logger warnings
     # (mail claim failures, adapter retries, restore diagnostics) would
@@ -351,6 +369,19 @@ def run(working_dir: Path) -> None:
     data["venv_path"] = str(venv_dir)
 
     agent = build_agent(data, working_dir)
+    try:
+        # register_boot repeats the durable intent check under the append lock
+        # after cleanup, so a concurrent suspend cannot race into a started boot.
+        _clean_signal_files(working_dir)
+        # Agent construction owns the workdir lease; start() has not yet
+        # published a heartbeat or Agent Record. Ledger failure therefore
+        # releases the agent and prevents an unregistered runtime from starting.
+        _register_agent_boot(agent, working_dir, ledger=ledger)
+    except BaseException:
+        try:
+            agent.stop(timeout=10.0)
+        finally:
+            raise
     agent._venv_path = str(venv_dir)
     _install_signal_handlers(working_dir, agent)
 
@@ -581,6 +612,8 @@ def main() -> None:
     add_puffo_v0_parser(sub)
     from lingtai.cli_project import add_project_parser
     add_project_parser(sub)
+    from lingtai.cli_guardian import add_guardian_parser
+    add_guardian_parser(sub)
 
     maintenance_parser = sub.add_parser(
         "maintenance",
@@ -625,7 +658,20 @@ def main() -> None:
             sys.exit(1)
         if getattr(args, "verbose", False):
             os.environ["LINGTAI_VERBOSE"] = "1"
-        run(working_dir)
+        from lingtai.kernel.agent_guardian import LifecycleLedgerError
+
+        try:
+            run(working_dir)
+        except LifecycleLedgerError as exc:
+            print(
+                json.dumps(
+                    {"error": {"code": exc.code}},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
     elif args.command == "check-caps":
         from lingtai.tools.registry import get_all_providers
         print(json.dumps(get_all_providers()))
@@ -660,6 +706,10 @@ def main() -> None:
         from lingtai.cli_project import handle_project_command
 
         handle_project_command(args)
+    elif args.command == "guardian":
+        from lingtai.cli_guardian import handle_guardian_command
+
+        handle_guardian_command(args)
     elif args.command == "maintenance":
         _handle_maintenance_command(args)
     else:
