@@ -195,6 +195,13 @@ PYTHONPYCACHEPREFIX="$phase_pyc_cache" \
   python -B -m pytest <target>
 ```
 
+Do not use `PYTHONPATH=<other-worktree>` to select a mutation tree for
+`pytest`. This repository's pytest configuration injects its own `src/` path,
+which can take precedence and silently run the clean checkout instead. Mutate
+the source in the same worktree that invokes pytest, unless a deliberately
+different import configuration is used and the test records the runtime
+`module.__file__` (or equivalent loaded-path evidence).
+
 Python's normal timestamp validation accepts an unchanged `(mtime, size)`
 pair: a same-second, same-length edit can therefore make a restored source run
 the mutated bytecode or make a mutation run the old bytecode. Before trusting
@@ -208,7 +215,9 @@ its absence. Record the cache-isolation method and the three outcomes —
 `clean-pass → mutation-must-red → restored-clean-pass` — with the mutation
 command. A phase without this provenance is **invalid**, not pass or fail; a
 result without it is not evidence that the assertion did—or did not—carry the
-regression.
+regression. Prefer a loaded-code fingerprint that differs in the mutation
+phase and returns exactly to the clean baseline in the restored phase: unlike
+sentinel absence alone, that also excludes an older stale cache.
 
 ## Maintenance
 
