@@ -421,12 +421,26 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
         if state is ProviderAdmissionState.GRANTED:
             if received_fd is None:
                 raise DriverAuthorityTransportError("granted launch omitted child endpoint")
+            endpoint: socket.socket | None = None
             try:
                 endpoint = socket.socket(fileno=received_fd)
+                if (
+                    endpoint.family != socket.AF_UNIX
+                    or (endpoint.type & socket.SOCK_STREAM) != socket.SOCK_STREAM
+                ):
+                    raise DriverAuthorityTransportError(
+                        "granted child endpoint must be an AF_UNIX stream socket"
+                    )
+                # A stream socket's type alone is insufficient: an unconnected
+                # local socket cannot be the Driver-held peer endpoint.
+                endpoint.getpeername()
                 os.set_inheritable(endpoint.fileno(), False)
-            except OSError as exc:
+            except (OSError, DriverAuthorityTransportError) as exc:
                 try:
-                    os.close(received_fd)
+                    if endpoint is not None:
+                        endpoint.close()
+                    else:
+                        os.close(received_fd)
                 except OSError:
                     pass
                 raise DriverAuthorityTransportError("granted child endpoint is invalid") from exc
@@ -438,6 +452,10 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 child_endpoint_lease=DriverChildEndpointLease(endpoint),
             )
         if received_fd is not None:
+            try:
+                os.close(received_fd)
+            except OSError:
+                pass
             raise DriverAuthorityTransportError("denied launch carried child endpoint")
         return DerivedLaunchDecision(state, reason, audit_id=audit_id, admission_id=admission_id)
 

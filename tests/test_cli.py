@@ -1409,7 +1409,11 @@ def test_avatar_spawned_directory_stays_restricted_without_launch_env(
     from lingtai.agent import Agent
     from lingtai.kernel.provider_admission import (
         DerivedLaunchAdmissionError,
+        DerivedLaunchDecision,
         ProviderAdmissionState,
+        RootProviderAdmission,
+        bind_provider_admission,
+        clear_provider_admission,
     )
     from lingtai.tools.avatar import AvatarManager
     from lingtai.tools.avatar._launcher import AvatarLaunchReceipt, derived_avatar_state_path
@@ -1421,22 +1425,35 @@ def test_avatar_spawned_directory_stays_restricted_without_launch_env(
         parent_dir,
         {"manifest": {"capabilities": {"avatar": {}}}},
     )
+    class _GrantingDriverPort:
+        def authorize_derived_launch(self, _parent, _capability):
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "driver_allowed",
+                child_endpoint_lease=object(),
+            )
+
     parent = Agent(
         service=make_gemini_mock_service(),
         agent_name="parent",
         working_dir=parent_dir,
         capabilities=["avatar"],
+        derived_launch_admission_port=_GrantingDriverPort(),
     )
     parent_avatar = parent.get_capability("avatar")
     parent_avatar._launcher = SimpleNamespace(release=lambda handle: None)
-    with patch.object(
-        AvatarManager,
-        "_launch",
-        return_value=(AvatarLaunchReceipt(12345, object()), tmp_path / "spawn.stderr"),
-    ), patch.object(AvatarManager, "_wait_for_boot", return_value=("ok", None)):
-        spawned = parent_avatar.handle(
-            {"action": "spawn", "input": {"name": "child", "confirm": True}}
-        )
+    token = bind_provider_admission(RootProviderAdmission("root", "driver-test"))
+    try:
+        with patch.object(
+            AvatarManager,
+            "_launch",
+            return_value=(AvatarLaunchReceipt(12345, object()), tmp_path / "spawn.stderr"),
+        ), patch.object(AvatarManager, "_wait_for_boot", return_value=("ok", None)):
+            spawned = parent_avatar.handle(
+                {"action": "spawn", "input": {"name": "child", "confirm": True}}
+            )
+    finally:
+        clear_provider_admission(token)
 
     child_dir = parent_dir.parent / "child"
     assert spawned["status"] == "ok"
