@@ -196,24 +196,27 @@ PYTHONPYCACHEPREFIX="$phase_pyc_cache" \
   PYTHONDONTWRITEBYTECODE=1 \
   python -B - <<'PY'
 import hashlib
-import importlib
 import inspect
 from pathlib import Path
 import sys
 
-# Match this repository's pytest source root before importing the evidence
-# module; the resulting pytest.main call stays in this same process.
-sys.path.insert(0, str(Path("src").resolve()))
-module = importlib.import_module("<module>")
+# Let pytest choose its own import path first. Inspect the module it actually
+# loaded afterwards; pre-importing it here would alter that observation.
+import pytest
+exit_code = pytest.main(["<target>"])
+module = sys.modules.get("<module>")
+if module is None or not getattr(module, "__file__", None):
+    print("INVALID: pytest did not load the required evidence module")
+    raise SystemExit(2)
+
 selected = module
 for part in "<code-object-on-tested-path>".split("."):
     selected = getattr(selected, part)
 code_object = inspect.unwrap(selected).__code__
 print(f"loaded_module={Path(module.__file__).resolve()}")
 print(f"co_code_sha256={hashlib.sha256(code_object.co_code).hexdigest()}")
-
-import pytest
-raise SystemExit(pytest.main(["<target>"]))
+print(f"python={sys.version}")
+raise SystemExit(exit_code)
 PY
 ```
 
@@ -240,6 +243,10 @@ result without it is not evidence that the assertion did—or did not—carry th
 regression. Prefer a loaded-code fingerprint that differs in the mutation
 phase and returns exactly to the clean baseline in the restored phase: unlike
 sentinel absence alone, that also excludes an older stale cache.
+`co_code` is a three-phase invariant within one interpreter/runtime, not a
+cross-reviewer identifier: Python versions may produce different bytecode for
+the same source. Record the runtime and compare only `clean == restored !=
+mutation` within that one environment.
 
 ## Maintenance
 
