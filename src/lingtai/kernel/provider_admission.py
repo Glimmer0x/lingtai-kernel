@@ -279,9 +279,10 @@ def _discard_child_endpoint_lease(lease: object | None) -> None:
     Core deliberately does not know the adapter's lease type or its file
     descriptor.  It may nevertheless reject a malformed decision, or keep its
     one-hop structural backstop after a faulty Driver grant.  In both cases
-    retaining the opaque handoff would strand the authority endpoint.  Adapter
+    retaining the opaque handoff would defer release to its finalizer.  Adapter
     leases expose a no-argument ``close`` method; unknown opaque values remain
-    harmlessly non-closable so Core stays transport-neutral.
+    harmlessly non-closable so Core stays transport-neutral.  This makes the
+    disposal deterministic; it does not claim a CPython finalizer leak.
     """
 
     close = getattr(lease, "close", None)
