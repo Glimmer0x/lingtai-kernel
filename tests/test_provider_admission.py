@@ -78,6 +78,7 @@ class _RecordingAdmissionPort:
                 if self.state is ProviderAdmissionState.GRANTED
                 else "denied_by_test"
             ),
+            audit_id="audit-recording-test",
         )
 
 
@@ -714,10 +715,13 @@ def test_provider_worker_rechecks_admission_for_each_call():
         def authorize_provider_call(self, _parent, _call_class):
             self.calls += 1
             if self.calls == 1:
-                return ProviderCallDecision(ProviderAdmissionState.GRANTED, "allowed")
+                return ProviderCallDecision(
+                    ProviderAdmissionState.GRANTED, "allowed", audit_id="audit-fresh-1"
+                )
             return ProviderCallDecision(
                 ProviderAdmissionState.INDETERMINATE,
                 "admission_no_longer_current",
+                audit_id="audit-fresh-2",
             )
 
     inner = _InnerService()
@@ -849,6 +853,51 @@ def test_derived_launch_port_is_fail_closed_when_unconnected_or_indeterminate():
     assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
 
 
+@pytest.mark.parametrize("state", (ProviderAdmissionState.GRANTED, ProviderAdmissionState.DENIED))
+def test_driver_launch_decisions_require_a_nonempty_audit_id(state):
+    """A configured Driver's grant or denial must remain correlatable."""
+
+    root = RootProviderAdmission("turn-audit", RUNTIME_POLICY.policy_version)
+
+    class _AuditlessLaunchPort:
+        def authorize_derived_launch(self, _parent, _capability):
+            return DerivedLaunchDecision(state, "driver_response_without_audit")
+
+    token = bind_provider_admission(root)
+    try:
+        with pytest.raises(
+            DerivedLaunchAdmissionError,
+            match="malformed_derived_launch_admission_decision",
+        ) as raised:
+            require_derived_launch_admission(
+                _AuditlessLaunchPort(), DerivedLaunchCapability.DAEMON
+            )
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+
+
+def test_driver_provider_grant_requires_a_nonempty_audit_id():
+    """Provider I/O cannot proceed on an uncorrelated Driver grant."""
+
+    class _AuditlessProviderPort:
+        def authorize_provider_call(self, _parent, _call_class):
+            return ProviderCallDecision(ProviderAdmissionState.GRANTED, "allowed")
+
+    inner = _InnerService()
+    service = ProviderAdmittedLLMService(inner, _AuditlessProviderPort())
+    token = bind_provider_admission(RootProviderAdmission("turn-audit", "test"))
+    try:
+        with pytest.raises(ProviderAdmissionError, match="allowed") as raised:
+            service.create_session("system").send("must-not-reach-provider")
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.state is ProviderAdmissionState.GRANTED
+    assert inner.session.calls == []
+
+
 def test_required_derived_launch_port_cannot_fall_back_to_legacy_default():
     """A constrained composition must expose a missing Driver seam."""
 
@@ -866,6 +915,27 @@ def test_required_derived_launch_port_cannot_fall_back_to_legacy_default():
         clear_provider_admission(token)
 
     assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+
+
+def test_required_missing_port_precedes_the_nested_launch_backstop():
+    """A constrained derived child must report lost authority, not an auditless deny."""
+
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
+    token = bind_provider_admission(child)
+    try:
+        with pytest.raises(
+            DerivedLaunchAdmissionError,
+            match="required_derived_launch_admission_port_missing",
+        ) as raised:
+            require_derived_launch_admission(
+                None, DerivedLaunchCapability.AVATAR, required=True
+            )
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+    assert raised.value.decision.audit_id is None
 
 
 def test_derived_launch_port_returns_auditable_grant_for_an_admitted_root():
@@ -960,11 +1030,12 @@ def test_each_provider_call_requires_a_fresh_non_cached_decision():
             self.calls += 1
             if self.calls == 1:
                 return ProviderCallDecision(
-                    ProviderAdmissionState.GRANTED, "allowed"
+                    ProviderAdmissionState.GRANTED, "allowed", audit_id="audit-fresh-1"
                 )
             return ProviderCallDecision(
                 ProviderAdmissionState.INDETERMINATE,
                 "revocation_state_unavailable",
+                audit_id="audit-fresh-2",
             )
 
     inner = _InnerService()

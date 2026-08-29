@@ -1066,6 +1066,85 @@ def test_capsule_is_bounded_before_spawn_and_env_is_secret_scrubbed(tmp_path, mo
     assert called == []
 
 
+def test_oversized_capsule_closes_the_unconsumed_authority_lease(tmp_path, monkeypatch):
+    """A failed supervisor preparation cannot leave a reusable child endpoint."""
+    from lingtai.adapters.posix import daemon_supervisor as adapter_mod
+    from lingtai.adapters.acp.driver_authority import consume_posix_child_endpoint_lease
+
+    run_dir = _make_run_dir(tmp_path, task="authority cleanup", timeout_s=30)
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="authority cleanup", tools=[], max_turns=1, timeout_s=30, group_id=None,
+    )
+    write_manifest(run_dir.path, manifest)
+    request = DaemonSupervisorRequest(
+        run_id=run_dir.run_id, manifest_path=str(manifest_path_for(run_dir.path)),
+        python_executable=sys.executable,
+    )
+    child, peer = socket.socketpair()
+    lease = DriverChildEndpointLease(child)
+    called = []
+    monkeypatch.setattr(adapter_mod.subprocess, "Popen", lambda *a, **k: called.append(1))
+    try:
+        with pytest.raises(ValueError, match="exceeds"):
+            PosixDaemonSupervisorAdapter().spawn_detached(
+                request,
+                capsule={"blob": "x" * (adapter_mod._MAX_CAPSULE_BYTES + 1)},
+                authority_lease=lease,
+            )
+        with pytest.raises(Exception, match="already consumed"):
+            consume_posix_child_endpoint_lease(lease)
+    finally:
+        peer.close()
+
+    assert called == []
+    assert not (run_dir.path / "supervisor.stdout.log").exists()
+    assert not (run_dir.path / "supervisor.stderr.log").exists()
+
+
+def test_execution_child_log_open_failure_closes_taken_authority_fd(tmp_path, monkeypatch):
+    """After endpoint detachment, every later setup failure closes that fd."""
+    from lingtai.adapters.posix import daemon_supervisor as adapter_mod
+
+    run_dir = _make_run_dir(tmp_path, task="execution cleanup", timeout_s=30)
+    client, peer = socket.socketpair()
+    original_open = open
+    opened = []
+
+    def fail_second_log_open(*args, **kwargs):
+        if opened:
+            raise OSError("second log open failed")
+        handle = original_open(*args, **kwargs)
+        opened.append(handle)
+        return handle
+
+    fd = client.fileno()
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(fd))
+    adapter_mod.adopt_supervisor_authority_endpoint()
+    monkeypatch.setattr(adapter_mod, "open", fail_second_log_open, raising=False)
+    try:
+        with pytest.raises(OSError, match="second log open failed"):
+            PosixDaemonSupervisorAdapter._spawn_capsule_process(
+                adapter_mod.EXECUTION_CHILD_MODULE,
+                sys.executable,
+                [],
+                run_dir=run_dir.path,
+            )
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    finally:
+        peer.close()
+        try:
+            client.close()
+        except OSError:
+            pass
+
+    assert adapter_mod._SUPERVISOR_AUTHORITY_ENDPOINT is None
+    assert len(opened) == 1
+    assert opened[0].closed
+
+
 def test_real_manager_parent_interpreter_exit_keeps_supervisor_owner(tmp_path, monkeypatch):
     """A contained parent interpreter can exit after real manager dispatch."""
     child = Path(__file__).parent / "_manager_detached_parent.py"

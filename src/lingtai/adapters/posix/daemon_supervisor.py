@@ -185,20 +185,21 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
         run_dir = Path(request.manifest_path).resolve().parent
         stdout_path = run_dir / "supervisor.stdout.log"
         stderr_path = run_dir / "supervisor.stderr.log"
-        stdout = open(stdout_path, "ab", buffering=0)
-        stderr = open(stderr_path, "ab", buffering=0)
+        stdout = stderr = None
         read_fd = write_fd = authority_fd = None
         capsule_bytes = None
-        if capsule:
-            capsule_bytes = json.dumps(
-                capsule, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8")
-            if len(capsule_bytes) > _MAX_CAPSULE_BYTES:
-                raise ValueError(
-                    f"daemon runtime capsule exceeds {_MAX_CAPSULE_BYTES} bytes"
-                )
-            read_fd, write_fd = os.pipe()
         try:
+            if capsule:
+                capsule_bytes = json.dumps(
+                    capsule, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+                if len(capsule_bytes) > _MAX_CAPSULE_BYTES:
+                    raise ValueError(
+                        f"daemon runtime capsule exceeds {_MAX_CAPSULE_BYTES} bytes"
+                    )
+                read_fd, write_fd = os.pipe()
+            stdout = open(stdout_path, "ab", buffering=0)
+            stderr = open(stderr_path, "ab", buffering=0)
             for path in (stdout_path, stderr_path):
                 try:
                     os.chmod(path, 0o600)
@@ -255,8 +256,17 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                         os.close(fd)
                     except OSError:
                         pass
-            stdout.close()
-            stderr.close()
+            # A failed preparation must never leave a reusable child lease.
+            # After a successful consume this is deliberately an idempotent
+            # no-op, while failures before consumption close the endpoint.
+            if authority_lease is not None:
+                from lingtai.adapters.acp.driver_authority import close_child_endpoint_lease
+
+                close_child_endpoint_lease(authority_lease)
+            if stdout is not None:
+                stdout.close()
+            if stderr is not None:
+                stderr.close()
 
     @staticmethod
     def _spawn_capsule_process(
@@ -275,26 +285,28 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                     f"daemon runtime capsule exceeds {_MAX_CAPSULE_BYTES} bytes"
                 )
             read_fd, write_fd = os.pipe()
-        env = {
-            key: value for key, value in os.environ.items()
-            if not _SECRET_ENV_NAME_RE.search(key)
-        }
-        source_root = Path(__file__).resolve().parents[3]
-        parts = [str(source_root)]
-        parts.extend(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)
-        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(parts))
-        authority_fd = _take_supervisor_authority_fd(module)
-        if authority_fd is not None:
-            # The env value is just a locator for this exact object in the
-            # execution child. The supervisor no longer retains either form.
-            env["LINGTAI_DRIVER_AUTHORITY_FD"] = str(authority_fd)
-        if read_fd is not None:
-            env["LINGTAI_DAEMON_CAPSULE_FD"] = str(read_fd)
-        stdout_path = run_dir / ("execution.stdout.log" if "execution_child" in module else "resume-owner.stdout.log")
-        stderr_path = run_dir / ("execution.stderr.log" if "execution_child" in module else "resume-owner.stderr.log")
-        stdout = open(stdout_path, "ab", buffering=0)
-        stderr = open(stderr_path, "ab", buffering=0)
+        stdout = stderr = None
+        authority_fd = None
         try:
+            env = {
+                key: value for key, value in os.environ.items()
+                if not _SECRET_ENV_NAME_RE.search(key)
+            }
+            source_root = Path(__file__).resolve().parents[3]
+            parts = [str(source_root)]
+            parts.extend(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)
+            env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(parts))
+            authority_fd = _take_supervisor_authority_fd(module)
+            if authority_fd is not None:
+                # The env value is just a locator for this exact object in the
+                # execution child. The supervisor no longer retains either form.
+                env["LINGTAI_DRIVER_AUTHORITY_FD"] = str(authority_fd)
+            if read_fd is not None:
+                env["LINGTAI_DAEMON_CAPSULE_FD"] = str(read_fd)
+            stdout_path = run_dir / ("execution.stdout.log" if "execution_child" in module else "resume-owner.stdout.log")
+            stderr_path = run_dir / ("execution.stderr.log" if "execution_child" in module else "resume-owner.stderr.log")
+            stdout = open(stdout_path, "ab", buffering=0)
+            stderr = open(stderr_path, "ab", buffering=0)
             for path in (stdout_path, stderr_path):
                 try:
                     os.chmod(path, 0o600)
@@ -333,8 +345,10 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                         os.close(fd)
                     except OSError:
                         pass
-            stdout.close()
-            stderr.close()
+            if stdout is not None:
+                stdout.close()
+            if stderr is not None:
+                stderr.close()
 
     def spawn_execution_child(self, *, python_executable: str,
                                manifest_path: str, run_id: str,

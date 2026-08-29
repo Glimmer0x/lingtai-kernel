@@ -402,17 +402,17 @@ Clause IDs are stable; each rule composes the linked normative source.
    whole-program proof over dynamic dispatch (`getattr`, registry lookup, or
    factory indirection) or subclasses/wrappers that override a launch entry;
    those are explicit blind spots that require focused review and production
-   path E2E, not an inference from a green inventory. The currently implemented
-   Step 3 slice is refusal-side evidence only: a persistent derived child opens
-   both real tool paths and reaches the typed nested denial before provider I/O.
-   It is neither complete 2b nor merge authorization. Complete 2b additionally
-   requires a real Driver server to issue and claim the endpoint on a legal
-   root-to-one-hop launch, then the same recording transport must show a
-   non-empty legal provider call, empty denied nested calls, and one Driver
-   denial audit with a non-empty audit id for each real nested tool request. A protocol test
-   fixture can prove Core-only interoperability but cannot replace that
-   production Driver-server gate. **Acceptance record:** this is a Step 3
-   refusal-side scoped candidate only and carries **NO MERGE** authorization.
+   path E2E, not an inference from a green inventory. The source tree contains
+   a Draft 2b integration candidate: a real Driver server issues and claims
+   the endpoint on a legal root-to-one-hop launch, and the same recording
+   transport observes the legal provider call plus one non-empty Driver denial
+   audit for each real nested tool request. That is stronger than the earlier
+   Step-3 refusal-only slice, but it is still not merge authorization: the
+   current exact-head candidate must pass its lifecycle and mutation acceptance
+   probes before a reviewer can remove **NO MERGE**. A protocol fixture can
+   prove Core-only interoperability but cannot replace that production
+   Driver-server gate. Historical Step-3 acceptance records do not transfer to
+   a newer integration head merely by branch name.
    The current process probe proves only the supervisor-to-execution-child
    (hop-2) boundary; the first supervisor hop and entrypoint adoption have no
    end-to-end behavior proof. Driver-side `ISSUED -> CLAIMED` enforcement and
