@@ -56,12 +56,13 @@ def _request(args: argparse.Namespace) -> ProjectCreateRequest:
     if not isinstance(llm, dict) or not isinstance(capabilities, dict):
         raise _error("invalid_preset", "preset LLM and capabilities must be objects")
     llm = dict(llm)
+    # Preset-local context-fit metadata must not become a new init runtime input.
+    llm.pop("context_limit", None)
     return ProjectCreateRequest(
         agent_name=args.agent_name,
         preset_ref=preset_ref,
         llm=llm,
         capabilities=dict(capabilities),
-        context_limit=llm.pop("context_limit", None),
         covenant=_read_covenant(args.covenant_file),
     )
 

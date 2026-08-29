@@ -509,11 +509,11 @@ def materialize_active_preset(
             raise
     preset_manifest = preset.get("manifest", {})
 
-    # context_limit lives inside manifest.llm in the preset, but at manifest
-    # root in init.json — strip it from the llm dict before substitution and
-    # write it to the root.
+    # Context limits are System-owned runtime policy.  A preset may retain its
+    # own value for preset-local context-fit checks, but materialization must
+    # not make it an init.json runtime source.
     preset_llm = dict(preset_manifest.get("llm") or manifest.get("llm") or {})
-    preset_ctx = preset_llm.pop("context_limit", None)
+    preset_llm.pop("context_limit", None)
     manifest["llm"] = preset_llm
 
     # The preset chooses *which* opt-in capabilities run (atomic swap is the
@@ -586,8 +586,6 @@ def materialize_active_preset(
         new_caps["skills"] = skills_kwargs
 
     manifest["capabilities"] = new_caps
-    if preset_ctx is not None:
-        manifest["context_limit"] = preset_ctx
 
 
 # ---------------------------------------------------------------------------

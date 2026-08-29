@@ -12,8 +12,8 @@ Two closed document versions share ``<workdir>/settings/system.json``:
   values.
 
 Ordinary boot/refresh fields resolve once through
-:func:`resolve_runtime_policy` as ``valid env > valid v2 field > effective
-manifest > default``. Two documented exceptions keep their live resolvers:
+:func:`resolve_runtime_policy` as ``valid env > valid v2 field > fixed
+default``. Two documented exceptions keep their live resolvers:
 the cache-miss budget (``env > v1/v2 > 2_000_000``; legacy
 ``manifest.cache_miss_budget`` is never a source) and the notification cap
 (Core parses ``LINGTAI_NOTIFICATION_MAX_CHARS`` itself, then asks the outer
@@ -85,7 +85,6 @@ DEFAULT_MAX_RPM = 60
 
 SOURCE_ENV = "env"
 SOURCE_SYSTEM = "system"
-SOURCE_MANIFEST = "manifest"
 SOURCE_DEFAULT = "default"
 
 
@@ -378,10 +377,7 @@ def _policy_defaults() -> dict[str, Any]:
 class ResolvedRuntimePolicy:
     """Effective ordinary runtime policy plus per-field provenance.
 
-    ``sources[field]`` is one of ``"env"``, ``"system"``, ``"manifest"``, or
-    ``"default"``. Manifest values are taken as the effective manifest already
-    validated by the init reader, so a manifest-sourced field reproduces the
-    pre-policy ``manifest.get(...)`` behavior exactly.
+    ``sources[field]`` is one of ``"env"``, ``"system"``, or ``"default"``.
     """
 
     context_limit: int | None
@@ -398,17 +394,14 @@ class ResolvedRuntimePolicy:
         return {name: getattr(self, name) for name in ORDINARY_POLICY_FIELDS}
 
 
-def resolve_runtime_policy(
-    working_dir: Any, manifest: Mapping[str, Any] | None
-) -> ResolvedRuntimePolicy:
+def resolve_runtime_policy(working_dir: Any) -> ResolvedRuntimePolicy:
     """Resolve the ordinary boot/refresh fields once for boot and refresh.
 
-    Per field: valid env > valid v2 System field > effective manifest key
-    (presence, not truthiness — a manifest ``null`` is a manifest value) >
-    unchanged default. The manifest mapping is never mutated.
+    Per field: valid env > valid v2 System field > fixed default.  Agent
+    ``init.json`` is deliberately not an input: stale ordinary runtime knobs
+    remain compatibility-known but cannot affect boot or refresh.
     """
     system_fields = read_runtime_policy_document(working_dir)
-    manifest = manifest or {}
     defaults = _policy_defaults()
     values: dict[str, Any] = {}
     sources: dict[str, str] = {}
@@ -418,8 +411,6 @@ def resolve_runtime_policy(
             values[name], sources[name] = env_value, SOURCE_ENV
         elif name in system_fields:
             values[name], sources[name] = system_fields[name], SOURCE_SYSTEM
-        elif name in manifest:
-            values[name], sources[name] = manifest[name], SOURCE_MANIFEST
         else:
             values[name], sources[name] = defaults[name], SOURCE_DEFAULT
     return ResolvedRuntimePolicy(sources=sources, **values)

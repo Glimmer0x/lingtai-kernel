@@ -109,14 +109,16 @@ the operator details; focused System, meta, and init tests own proof.
 
 ### Runtime-policy setting (v2)
 
-`settings.py::resolve_runtime_policy(working_dir, manifest)` resolves the
+`settings.py::resolve_runtime_policy(working_dir)` resolves the
 ordinary fields `context_limit`, `max_rpm`, `streaming`, `aed_timeout`,
 `max_aed_attempts`, `snapshot_interval`, and `activeness` as valid
 `LINGTAI_<FIELD>` env > valid closed-v2 `settings/system.json` field > effective
-manifest key (presence, so a manifest `null` is a manifest value) > unchanged
-default, returning the values with per-field provenance. One invalid v2 key or
+fixed default, returning the values with per-field provenance. `init.json` and
+its effective manifest are deliberately not resolver inputs: old root keys are
+recognized-and-ignored compatibility data and are never validated, hydrated,
+or materialized from presets. One invalid v2 key or
 value rejects the whole document; absent and explicit `null` are distinct. The
-manifest is an input and is never mutated. `cli.build_llm_service`/`build_agent`
+`cli.build_llm_service`/`build_agent`
 and `Agent._setup_from_init` (through `Agent.resolve_runtime_policy`) apply the
 same resolved policy to the LLM service, `AgentConfig` (via
 `build_agent_config(..., runtime_policy=)`), and the `SessionManager.streaming`

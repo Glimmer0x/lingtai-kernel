@@ -117,21 +117,14 @@ def build_agent_config(
 ) -> AgentConfig:
     """Overlay host manifest values onto AgentConfig defaults.
 
-    When *runtime_policy* (a System-resolved ``ResolvedRuntimePolicy``) is
-    given, the ordinary policy fields it owns — ``context_limit``,
-    ``activeness``, ``snapshot_interval``, ``aed_timeout``,
-    ``max_aed_attempts`` — come from it instead of the raw manifest, so boot
-    and refresh apply one effective policy without mutating the manifest.
-    Without it the legacy manifest-only overlay is unchanged.
+    The ordinary runtime fields are System-owned.  When *runtime_policy* is
+    supplied it provides them; otherwise their fixed ``AgentConfig`` defaults
+    apply.  Raw manifest values are compatibility data, never configuration.
     """
     defaults = AgentConfig()
     soul = manifest.get("soul", {})
     llm = manifest.get("llm", {})
-    if runtime_policy is not None:
-        policy: dict[str, Any] = dict(manifest)
-        policy.update(runtime_policy.as_overrides())
-    else:
-        policy = manifest
+    policy = runtime_policy.as_overrides() if runtime_policy is not None else {}
 
     return AgentConfig(
         soul_delay=soul.get("delay", defaults.soul_delay),
@@ -234,11 +227,11 @@ class Agent(BaseAgent):
 
         return resolve_notification_max_chars(self)
 
-    def resolve_runtime_policy(self, manifest: dict[str, Any]) -> Any:
-        """Resolve the ordinary runtime policy for *manifest* once per setup."""
+    def resolve_runtime_policy(self) -> Any:
+        """Resolve the System-owned ordinary runtime policy once per setup."""
         from lingtai.tools.system.settings import resolve_runtime_policy
 
-        return resolve_runtime_policy(self._working_dir, manifest)
+        return resolve_runtime_policy(self._working_dir)
 
     def __init__(
         self,
@@ -2062,15 +2055,13 @@ class Agent(BaseAgent):
         preset_manifest = preset.get("manifest", {})
 
         preset_llm = dict(preset_manifest.get("llm") or manifest.get("llm") or {})
-        # context_limit lives inside manifest.llm in the preset, but stays
-        # at manifest root in init.json — strip it from the llm dict before
-        # substitution and write it to the root.
-        preset_ctx = preset_llm.pop("context_limit", None)
+        # Context limits are System-owned runtime policy, never init.json
+        # configuration.  Keep a preset's provider/model selection but do not
+        # hand its context value into the activated init document.
+        preset_llm.pop("context_limit", None)
         manifest["llm"] = preset_llm
         manifest["capabilities"] = preset_manifest.get(
             "capabilities", manifest.get("capabilities", {}))
-        if preset_ctx is not None:
-            manifest["context_limit"] = preset_ctx
 
         # Set active in the umbrella. Preserve default if already set; otherwise
         # initialize default to the same value as active (first activation).
@@ -2230,12 +2221,12 @@ class Agent(BaseAgent):
         new_provider = llm["provider"]
         new_model = llm["model"]
         new_base_url = llm.get("base_url")
-        # One System-resolved policy (env > settings/system.json v2 > effective
-        # manifest > default) feeds the service, AgentConfig, and the session
+        # One System-resolved policy (env > settings/system.json v2 > fixed
+        # default) feeds the service, AgentConfig, and the session
         # streaming flag below, so boot and refresh never disagree. The
         # effective manifest ``m`` is read, never mutated, so the published
         # ``system/manifest.resolved.json`` stays a truthful init artifact.
-        runtime_policy = self.resolve_runtime_policy(m)
+        runtime_policy = self.resolve_runtime_policy()
         new_context_window = runtime_policy.context_limit
         if (
             not isinstance(new_context_window, int)
@@ -2244,9 +2235,8 @@ class Agent(BaseAgent):
         ):
             new_context_window = CONSERVATIVE_CONTEXT_WINDOW
 
-        # Default 60 matches AgentConfig.max_rpm — existing agents whose
-        # init.json predates this field cooperatively share the network-wide
-        # 60 RPM cap by default. Set to 0 in init.json to disable gating.
+        # The fixed 60 RPM default cooperatively shares the network-wide cap.
+        # Set the System v2 field or environment variable to change it.
         new_max_rpm = runtime_policy.max_rpm
         # Pass working_dir so a Codex agent's per-agent session/thread identity
         # (the agent path) is resolved into the provider defaults. The agent

@@ -101,6 +101,21 @@ def test_activate_preset_preserves_other_manifest_fields(tmp_path):
     assert "stamina" not in m
 
 
+def test_activate_preset_does_not_handoff_preset_context_limit(tmp_path):
+    wd, plib = _make_workdir_and_lib(tmp_path)
+    preset_path = plib / "minimax.json"
+    preset = json.loads(preset_path.read_text())
+    preset["manifest"]["llm"]["context_limit"] = 16_384
+    preset_path.write_text(json.dumps(preset))
+
+    a = _make_probe_agent(wd)
+    a._activate_preset(str(preset_path))
+
+    manifest = json.loads((wd / "init.json").read_text())["manifest"]
+    assert "context_limit" not in manifest
+    assert "context_limit" not in manifest["llm"]
+
+
 def test_activate_preset_unknown_raises_key_error(tmp_path):
     """Unknown preset name → KeyError; init.json untouched."""
     wd, plib = _make_workdir_and_lib(tmp_path)

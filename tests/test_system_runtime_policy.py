@@ -76,9 +76,9 @@ def test_v1_is_not_widened_by_v2_fields(tmp_path, body):
     assert system_settings._parse_runtime_policy_v2(body) is None
     _write_settings(tmp_path, body)
     assert system_settings.resolve_cache_miss_budget(_settings_agent(tmp_path)) == 2_000_000
-    policy = system_settings.resolve_runtime_policy(tmp_path, {"context_limit": 77})
-    assert policy.context_limit == 77
-    assert policy.sources["context_limit"] == system_settings.SOURCE_MANIFEST
+    policy = system_settings.resolve_runtime_policy(tmp_path)
+    assert policy.context_limit is None
+    assert policy.sources["context_limit"] == system_settings.SOURCE_DEFAULT
 
 
 def test_v1_cache_precedence_unchanged_and_manifest_never_a_source(monkeypatch, tmp_path):
@@ -92,7 +92,7 @@ def test_v1_cache_precedence_unchanged_and_manifest_never_a_source(monkeypatch, 
     assert system_settings.resolve_cache_miss_budget(agent) == 3_000_000
     # The runtime-policy resolver never carries the cache budget, and a legacy
     # manifest.cache_miss_budget is neither a resolver input nor hydrated.
-    policy = system_settings.resolve_runtime_policy(tmp_path, {"cache_miss_budget": 5})
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     assert "cache_miss_budget" not in policy.as_overrides()
     cfg = build_agent_config({"cache_miss_budget": 5}, max_rpm=0, runtime_policy=policy)
     assert not hasattr(cfg, "cache_miss_budget")
@@ -193,9 +193,9 @@ def test_v2_invalid_documents_are_rejected_whole(tmp_path, body):
     assert system_settings._parse_runtime_policy_v2(body) is None
     _write_settings(tmp_path, body)
     assert system_settings.read_runtime_policy_document(tmp_path) == {}
-    policy = system_settings.resolve_runtime_policy(tmp_path, {"max_rpm": 7})
-    assert policy.max_rpm == 7
-    assert policy.sources["max_rpm"] == system_settings.SOURCE_MANIFEST
+    policy = system_settings.resolve_runtime_policy(tmp_path)
+    assert policy.max_rpm == system_settings.DEFAULT_MAX_RPM
+    assert policy.sources["max_rpm"] == system_settings.SOURCE_DEFAULT
     assert system_settings.resolve_cache_miss_budget(_settings_agent(tmp_path)) == 2_000_000
     assert system_settings.resolve_notification_max_chars(_settings_agent(tmp_path)) is None
 
@@ -220,7 +220,7 @@ def test_v2_cannot_configure_fixed_safety_or_legacy_fields(tmp_path, key):
     body = json.dumps(_v2(**{key: 0.99, "max_rpm": 5}))
     assert system_settings._parse_runtime_policy_v2(body) is None
     _write_settings(tmp_path, body)
-    policy = system_settings.resolve_runtime_policy(tmp_path, {})
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     assert policy.max_rpm == system_settings.DEFAULT_MAX_RPM
     # The kernel-fixed reconstruction policy is untouched by any System input.
     assert CONTEXT_PRESSURE_HIGH_RATIO == 0.85
@@ -240,7 +240,7 @@ def test_unreadable_settings_file_yields_defaults(tmp_path):
 
 
 def test_defaults_when_nothing_is_configured(tmp_path):
-    policy = system_settings.resolve_runtime_policy(tmp_path, {})
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     defaults = AgentConfig()
     assert policy.context_limit is None
     assert policy.max_rpm == 60
@@ -253,7 +253,7 @@ def test_defaults_when_nothing_is_configured(tmp_path):
     assert set(policy.sources) == set(system_settings.ORDINARY_POLICY_FIELDS)
 
 
-def test_env_beats_system_beats_manifest_beats_default(monkeypatch, tmp_path):
+def test_env_beats_system_beats_fixed_default(monkeypatch, tmp_path):
     manifest = {
         "context_limit": 100,
         "max_rpm": 10,
@@ -263,9 +263,8 @@ def test_env_beats_system_beats_manifest_beats_default(monkeypatch, tmp_path):
         "snapshot_interval": 100,
         "activeness": "manifest",
     }
-    policy = system_settings.resolve_runtime_policy(tmp_path, manifest)
-    assert policy.as_overrides() == manifest
-    assert set(policy.sources.values()) == {system_settings.SOURCE_MANIFEST}
+    policy = system_settings.resolve_runtime_policy(tmp_path)
+    assert set(policy.sources.values()) == {system_settings.SOURCE_DEFAULT}
 
     _write_settings(
         tmp_path,
@@ -279,7 +278,7 @@ def test_env_beats_system_beats_manifest_beats_default(monkeypatch, tmp_path):
             activeness="system",
         ),
     )
-    policy = system_settings.resolve_runtime_policy(tmp_path, manifest)
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     assert policy.as_overrides() == {
         "context_limit": 200,
         "max_rpm": 20,
@@ -298,7 +297,7 @@ def test_env_beats_system_beats_manifest_beats_default(monkeypatch, tmp_path):
     monkeypatch.setenv(system_settings.MAX_AED_ATTEMPTS_ENV, "9")
     monkeypatch.setenv(system_settings.SNAPSHOT_INTERVAL_ENV, "45")
     monkeypatch.setenv(system_settings.ACTIVENESS_ENV, "env")
-    policy = system_settings.resolve_runtime_policy(tmp_path, manifest)
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     assert policy.as_overrides() == {
         "context_limit": 300,
         "max_rpm": 0,
@@ -309,19 +308,17 @@ def test_env_beats_system_beats_manifest_beats_default(monkeypatch, tmp_path):
         "activeness": "env",
     }
     assert set(policy.sources.values()) == {system_settings.SOURCE_ENV}
-    # The manifest mapping is an input, never mutated.
+    # Legacy init values remain inert data.
     assert manifest["context_limit"] == 100
 
 
-def test_partial_system_document_mixes_layers_per_field(tmp_path):
+def test_partial_system_document_mixes_system_and_defaults_per_field(tmp_path):
     _write_settings(tmp_path, _v2(max_rpm=30, streaming=True))
-    policy = system_settings.resolve_runtime_policy(
-        tmp_path, {"context_limit": 4096, "streaming": False}
-    )
-    assert (policy.max_rpm, policy.streaming, policy.context_limit) == (30, True, 4096)
+    policy = system_settings.resolve_runtime_policy(tmp_path)
+    assert (policy.max_rpm, policy.streaming, policy.context_limit) == (30, True, None)
     assert policy.aed_timeout == 360.0
     assert policy.sources == {
-        "context_limit": "manifest",
+        "context_limit": "default",
         "max_rpm": "system",
         "streaming": "system",
         "aed_timeout": "default",
@@ -331,11 +328,10 @@ def test_partial_system_document_mixes_layers_per_field(tmp_path):
     }
 
 
-def test_explicit_v2_null_overrides_manifest_value(tmp_path):
-    """JSON ``null`` is a present value ("no configured limit"/"off"), not absent."""
+def test_explicit_v2_null_is_a_system_value(tmp_path):
+    """JSON ``null`` is a present System value ("no configured limit"/"off")."""
     _write_settings(tmp_path, _v2(context_limit=None, snapshot_interval=None, activeness=None))
-    manifest = {"context_limit": 5000, "snapshot_interval": 60, "activeness": "eager"}
-    policy = system_settings.resolve_runtime_policy(tmp_path, manifest)
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     assert policy.context_limit is None
     assert policy.snapshot_interval is None
     assert policy.activeness is None
@@ -381,7 +377,7 @@ def test_invalid_env_falls_through_to_system_then_manifest(monkeypatch, tmp_path
     }
     _write_settings(tmp_path, _v2(**{field: system_values[field]}))
     monkeypatch.setenv(name, raw)
-    policy = system_settings.resolve_runtime_policy(tmp_path, {field: "manifest-value"})
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     assert getattr(policy, field) == system_values[field]
     assert policy.sources[field] == system_settings.SOURCE_SYSTEM
 
@@ -390,22 +386,22 @@ def test_env_snapshot_off_and_boolean_spellings(monkeypatch, tmp_path):
     _write_settings(tmp_path, _v2(snapshot_interval=30, streaming=False))
     monkeypatch.setenv(system_settings.SNAPSHOT_INTERVAL_ENV, "OFF")
     monkeypatch.setenv(system_settings.STREAMING_ENV, "yes")
-    policy = system_settings.resolve_runtime_policy(tmp_path, {})
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     assert policy.snapshot_interval is None
     assert policy.sources["snapshot_interval"] == system_settings.SOURCE_ENV
     assert policy.streaming is True
     for word in ("1", "true", "on", "YES"):
         monkeypatch.setenv(system_settings.STREAMING_ENV, word)
-        assert system_settings.resolve_runtime_policy(tmp_path, {}).streaming is True
+        assert system_settings.resolve_runtime_policy(tmp_path).streaming is True
     for word in ("0", "false", "no", "OFF"):
         monkeypatch.setenv(system_settings.STREAMING_ENV, word)
-        assert system_settings.resolve_runtime_policy(tmp_path, {}).streaming is False
+        assert system_settings.resolve_runtime_policy(tmp_path).streaming is False
 
 
-def test_manifest_null_is_a_manifest_value_not_absent(tmp_path):
-    policy = system_settings.resolve_runtime_policy(tmp_path, {"context_limit": None})
+def test_manifest_values_are_never_runtime_sources(tmp_path):
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     assert policy.context_limit is None
-    assert policy.sources["context_limit"] == system_settings.SOURCE_MANIFEST
+    assert policy.sources["context_limit"] == system_settings.SOURCE_DEFAULT
 
 
 def test_build_agent_config_with_policy_leaves_manifest_untouched():
@@ -432,9 +428,12 @@ def test_build_agent_config_with_policy_leaves_manifest_untouched():
     assert (cfg.aed_timeout, cfg.max_aed_attempts, cfg.max_rpm) == (4.0, 5, 3)
     assert cfg.soul_delay == 5
     assert json.dumps(manifest, sort_keys=True) == snapshot
-    # Legacy manifest-only overlay is unchanged when no policy is supplied.
+    # A raw manifest is never an ordinary runtime-policy fallback.
     legacy = build_agent_config(manifest, max_rpm=0)
-    assert (legacy.context_limit, legacy.activeness, legacy.max_aed_attempts) == (1, "manifest", 1)
+    defaults = AgentConfig()
+    assert (legacy.context_limit, legacy.activeness, legacy.max_aed_attempts) == (
+        defaults.context_limit, defaults.activeness, defaults.max_aed_attempts,
+    )
 
 
 # --- notification cap: Core env/clamp layering over the System file ---------
@@ -506,14 +505,13 @@ def test_outer_agent_hooks_delegate_to_system(monkeypatch, tmp_path):
     sentinel = object()
     seen = {}
 
-    def fake_resolve(working_dir, manifest):
-        seen["args"] = (working_dir, manifest)
+    def fake_resolve(working_dir):
+        seen["args"] = working_dir
         return sentinel
 
     monkeypatch.setattr(system_settings, "resolve_runtime_policy", fake_resolve)
-    manifest = {"max_rpm": 1}
-    assert Agent.resolve_runtime_policy(subject, manifest) is sentinel
-    assert seen["args"] == (tmp_path, manifest)
+    assert Agent.resolve_runtime_policy(subject) is sentinel
+    assert seen["args"] == tmp_path
 
 
 def test_kernel_meta_block_still_imports_no_system_tool_code():
@@ -599,7 +597,7 @@ def test_build_llm_service_shares_the_boot_policy(tmp_path):
     # max_rpm 0 disables gating: the provider bucket carries no positive cap.
     assert service._provider_defaults.get("openai", {}).get("max_rpm", 0) == 0
 
-    policy = system_settings.resolve_runtime_policy(tmp_path, data["manifest"])
+    policy = system_settings.resolve_runtime_policy(tmp_path)
     explicit = build_llm_service(data, tmp_path, policy)
     assert explicit._context_window == 4096
     assert data["manifest"]["max_rpm"] == 11
@@ -640,9 +638,9 @@ def test_refresh_applies_and_removes_system_policy_coherently(tmp_path, monkeypa
     agent, constructed = _refresh_agent(tmp_path, monkeypatch, init)
 
     agent._setup_from_init()
-    assert agent.service._context_window == 100_000
-    assert agent._config.max_rpm == 10
-    assert agent._config.aed_timeout == 100
+    assert agent.service._context_window == 272_000
+    assert agent._config.max_rpm == 60
+    assert agent._config.aed_timeout == 360.0
     assert agent._session.streaming is False
 
     _write_settings(
@@ -669,12 +667,12 @@ def test_refresh_applies_and_removes_system_policy_coherently(tmp_path, monkeypa
     assert resolved_manifest["max_rpm"] == 10
     assert "activeness" not in resolved_manifest
 
-    # Removing the file returns every field to manifest/default.
+    # Removing the file returns every field to its fixed default.
     (tmp_path / "settings" / "system.json").write_text("{}", encoding="utf-8")
     agent._setup_from_init()
-    assert constructed[-1]["context_window"] == 100_000
-    assert agent._config.max_rpm == 10
-    assert agent._config.aed_timeout == 100
+    assert constructed[-1]["context_window"] == 272_000
+    assert agent._config.max_rpm == 60
+    assert agent._config.aed_timeout == 360.0
     assert agent._config.max_aed_attempts == 3
     assert agent._config.activeness == "balanced"
     assert agent._session.streaming is False

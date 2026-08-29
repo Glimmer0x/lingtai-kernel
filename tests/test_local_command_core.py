@@ -212,10 +212,17 @@ def test_kanban_snapshot_preserves_shared_dashboard_values(tmp_path: Path) -> No
     assert data["current_agent"] == tmp_path.name
     assert data["current_model"] == "test-model"
     assert data["current_provider"] == "test-provider"
+    assert data["context_limit"] == 0
     assert data["agent_state"] == "active"
     assert data["fmt"](1200) == "1.2K"
     assert data["fmt_duration"](125) == "2m"
     assert data["addon_status"] == {"telegram": False, "feishu": True}
+
+    (tmp_path / ".agent.json").write_text(
+        json.dumps({"agent_id": "agent-1", "llm": {"context_limit": 8192}}),
+        encoding="utf-8",
+    )
+    assert LocalCommandCore(tmp_path).collect_kanban_data()["context_limit"] == 8192
 
 
 def test_kanban_snapshot_survives_sibling_with_non_utf8_agent_json(

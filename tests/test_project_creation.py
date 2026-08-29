@@ -31,7 +31,6 @@ def _request(name: str = "alpha") -> ProjectCreateRequest:
         preset_ref="/presets/local.json",
         llm={"provider": "openai", "model": "test-model"},
         capabilities={"shell": {"yolo": False}},
-        context_limit=8192,
         covenant="caller covenant",
     )
 
@@ -44,6 +43,7 @@ def test_core_builds_one_seed_through_its_port() -> None:
     init = json.loads(workspace.seed.init_json)
     assert init["covenant"] == "caller covenant"
     assert init["manifest"]["preset"]["allowed"] == ["/presets/local.json"]
+    assert "context_limit" not in init["manifest"]
     assert result.to_payload()["status"] == "created"
 
 
@@ -94,4 +94,7 @@ def test_root_cli_creates_reader_accepted_data_without_starting_agent(
     cli.main()
 
     assert json.loads(capsys.readouterr().out)["agent_name"] == "alpha"
-    assert (tmp_path / ".lingtai" / "alpha" / "init.json").is_file()
+    init = json.loads((tmp_path / ".lingtai" / "alpha" / "init.json").read_text(encoding="utf-8"))
+    assert "context_limit" not in init["manifest"]
+    assert "context_limit" not in init["manifest"]["llm"]
+    assert json.loads(preset.read_text(encoding="utf-8"))["manifest"]["llm"]["context_limit"] == 8192

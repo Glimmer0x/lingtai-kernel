@@ -18,10 +18,8 @@ def _valid_init() -> dict:
             "capabilities": {},
             "soul": {"delay": 120},
             "stamina": 3600,
-            "context_limit": None,
             "max_turns": 50,
             "admin": {"karma": True},
-            "streaming": False,
         },
         "covenant": "",
         "pad": "",
@@ -124,19 +122,20 @@ def test_cache_miss_budget_is_schema_unknown_legacy_data(legacy_value):
     assert "unknown field: manifest.cache_miss_budget" in warnings
 
 
-@pytest.mark.parametrize("bad_value", [True, False])
-def test_context_limit_rejects_bool(bad_value):
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("context_limit", "not-an-int"), ("max_rpm", object()),
+        ("streaming", "yes"), ("aed_timeout", -1),
+        ("max_aed_attempts", 0), ("snapshot_interval", False),
+        ("activeness", 3),
+    ],
+)
+def test_ordinary_runtime_manifest_fields_are_legacy_ignored(field, value):
     data = _valid_init()
-    data["manifest"]["context_limit"] = bad_value
-    with pytest.raises(ValueError, match=r"manifest\.context_limit.*bool"):
-        validate_init(data)
-
-
-@pytest.mark.parametrize("good_value", [200_000, None])
-def test_context_limit_accepts_int_and_null(good_value):
-    data = _valid_init()
-    data["manifest"]["context_limit"] = good_value
-    assert validate_init(data) == []
+    data["manifest"][field] = value
+    warnings = validate_init(data)
+    assert not any(field in warning for warning in warnings)
 
 
 def test_compact_threshold_rejects_bool_via_check_type():
@@ -150,116 +149,6 @@ def test_check_type_bool_allowed_when_listed():
     # Escape hatch: a field that explicitly accepts bool | int is not rejected.
     _check_type(True, (int, bool), "x")  # should not raise
     _check_type(3, (int, bool), "x")  # should not raise
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("max_aed_attempts", 5),
-        ("aed_timeout", 120),
-        ("aed_timeout", 360.0),
-    ],
-)
-def test_aed_manifest_fields_accept_valid_values_without_warning(field, value):
-    """Both AED manifest fields — max_aed_attempts (int) and aed_timeout
-    (int/float seconds) — are hydrated into AgentConfig by
-    agent.build_agent_config and consumed by the AED subsystem, so init_schema
-    must recognize them as known optional fields: a valid value must not warn
-    as 'unknown field' (issue #612).
-    """
-    data = _valid_init()
-    data["manifest"][field] = value
-
-    warnings = validate_init(data)
-
-    assert not any(field in w for w in warnings), (
-        f"valid manifest.{field} should not warn, got: {warnings}"
-    )
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("max_aed_attempts", "five"),
-        ("aed_timeout", "soon"),
-    ],
-)
-def test_aed_manifest_fields_reject_wrong_type(field, value):
-    """Each AED field must raise when given a value of the wrong type:
-    max_aed_attempts is int; aed_timeout is int or float seconds."""
-    data = _valid_init()
-    data["manifest"][field] = value
-
-    with pytest.raises(ValueError, match=rf"manifest\.{field}"):
-        validate_init(data)
-
-
-def test_activeness_type():
-    """activeness is hydrated into AgentConfig by build_agent_config, so it
-    must be schema-known (str | null) and must not warn as unknown."""
-    data = _valid_init()
-    data["manifest"]["activeness"] = "balanced"
-    warnings = validate_init(data)
-    assert not any("activeness" in w for w in warnings), (
-        f"valid manifest.activeness should not warn, got: {warnings}"
-    )
-
-    data["manifest"]["activeness"] = None
-    validate_init(data)
-
-    data["manifest"]["activeness"] = 3
-    with pytest.raises(ValueError, match="manifest.activeness"):
-        validate_init(data)
-
-
-@pytest.mark.parametrize("value", [None, 30, 2.5])
-def test_snapshot_interval_accepts_valid_values(value):
-    """snapshot_interval accepts null (off) or positive int/float seconds
-    without an 'unknown field' warning (issue #736)."""
-    data = _valid_init()
-    data["manifest"]["snapshot_interval"] = value
-    warnings = validate_init(data)
-    assert not any("snapshot_interval" in w for w in warnings), (
-        f"valid manifest.snapshot_interval should not warn, got: {warnings}"
-    )
-
-
-@pytest.mark.parametrize("value", ["30", True, 0, -5])
-def test_snapshot_interval_rejects_bad_values(value):
-    """snapshot_interval must reject strings, bools, and non-positive numbers
-    at validation time instead of hydrating them verbatim into the lifecycle
-    snapshot loop (issue #736)."""
-    data = _valid_init()
-    data["manifest"]["snapshot_interval"] = value
-    with pytest.raises(ValueError, match="manifest.snapshot_interval"):
-        validate_init(data)
-
-
-@pytest.mark.parametrize("value", [360, 360.5])
-def test_aed_timeout_accepts_positive_numbers(value):
-    """aed_timeout accepts positive int/float seconds (issue #736)."""
-    data = _valid_init()
-    data["manifest"]["aed_timeout"] = value
-    validate_init(data)
-
-
-@pytest.mark.parametrize("value", [0, -1])
-def test_aed_timeout_rejects_non_positive(value):
-    """aed_timeout must be > 0 — a zero/negative STUCK window is meaningless
-    and would previously pass validation unchecked (issue #736)."""
-    data = _valid_init()
-    data["manifest"]["aed_timeout"] = value
-    with pytest.raises(ValueError, match="manifest.aed_timeout"):
-        validate_init(data)
-
-
-def test_max_aed_attempts_rejects_below_one():
-    """max_aed_attempts must be >= 1, matching the AgentConfig.__post_init__
-    clamp but failing at validation instead of silently clamping (issue #736)."""
-    data = _valid_init()
-    data["manifest"]["max_aed_attempts"] = 0
-    with pytest.raises(ValueError, match="manifest.max_aed_attempts"):
-        validate_init(data)
 
 
 def test_max_turns_is_legacy_ignored():
@@ -284,13 +173,6 @@ def test_wrong_type_capabilities():
     data = _valid_init()
     data["manifest"]["capabilities"] = ["file", "bash"]
     with pytest.raises(ValueError, match="manifest.capabilities.*object"):
-        validate_init(data)
-
-
-def test_wrong_type_streaming():
-    data = _valid_init()
-    data["manifest"]["streaming"] = "yes"
-    with pytest.raises(ValueError, match="manifest.streaming.*bool"):
         validate_init(data)
 
 

@@ -175,56 +175,21 @@ def _context_limit_init(top: object, nested_present: bool, nested: object) -> st
     return json.dumps({**_REQUIRED, "manifest": manifest}, indent=2)
 
 
-_NESTED_TO_ROOT = [{
-    "raw_path": "manifest.llm.context_limit",
-    "effective_path": "manifest.context_limit",
-}]
-
-
-def test_stray_nested_context_limit_nudges_and_preserves_raw(tmp_path):
-    # A nested manifest.llm.context_limit on an init.json is never a runtime
-    # source: the effective manifest and AgentConfig hydrate the root. Surface
-    # it as nested raw -> root effective so the Nudge points at the field that
-    # actually takes effect (the disagreement case that started this PR).
+def test_legacy_root_context_limit_is_ignored_and_nested_is_diagnosed(tmp_path):
+    """Old root input is compatibility-known; nested input remains unknown."""
     raw = _context_limit_init(top=350000, nested_present=True, nested=500000)
     _write_init(tmp_path, raw)
 
     outcome = read_init(tmp_path)
 
     assert outcome.status is InitReadStatus.READ_OK_WITH_IGNORED_FIELDS
-    assert outcome.shape_decision is InitShapeDecision.NUDGE
+    assert outcome.shape_decision is InitShapeDecision.PASS
     assert outcome.finding_decision is InitShapeDecision.NUDGE
-    assert outcome.compatibility_paths == _NESTED_TO_ROOT
+    assert outcome.compatibility_paths == []
+    assert "unknown field in manifest.llm: context_limit" in outcome.warnings
     assert (tmp_path / "init.json").read_text(encoding="utf-8") == raw
 
-
-def test_nested_only_context_limit_still_nudges_to_root(tmp_path):
-    # Nested-only must NOT report fully-effective: the runtime ignores the LLM
-    # value entirely (AgentConfig.context_limit stays None). The compatibility
-    # path tells the operator the root is the effective field.
-    raw = _context_limit_init(top=None, nested_present=True, nested=500000)
-    _write_init(tmp_path, raw)
-
-    outcome = read_init(tmp_path)
-
-    assert outcome.status is InitReadStatus.READ_OK_WITH_IGNORED_FIELDS
-    assert outcome.shape_decision is InitShapeDecision.NUDGE
-    assert outcome.compatibility_paths == _NESTED_TO_ROOT
-    assert (tmp_path / "init.json").read_text(encoding="utf-8") == raw
-
-
-def test_explicit_null_nested_context_limit_is_flagged(tmp_path):
-    # Membership, not .get(), so explicit JSON null is still a stray nested key.
-    raw = _context_limit_init(top=500000, nested_present=True, nested=None)
-    _write_init(tmp_path, raw)
-
-    outcome = read_init(tmp_path)
-
-    assert outcome.shape_decision is InitShapeDecision.NUDGE
-    assert outcome.compatibility_paths == _NESTED_TO_ROOT
-
-
-def test_root_only_context_limit_passes(tmp_path):
+def test_root_only_context_limit_is_fully_effective_but_inert(tmp_path):
     raw = _context_limit_init(top=500000, nested_present=False, nested=None)
     _write_init(tmp_path, raw)
 
@@ -235,12 +200,8 @@ def test_root_only_context_limit_passes(tmp_path):
     assert outcome.compatibility_paths == []
 
 
-def test_stray_nested_context_limit_through_reader_callbacks_preserves_effective_root(tmp_path):
-    """Boot/refresh path (reader_callbacks + materialize): with an active preset,
-    materialization lifts the preset's llm.context_limit onto the root, and the
-    stray raw nested key is still surfaced as a compatibility path without
-    pretending the nested value is the effective one.
-    """
+def test_preset_materialization_discards_context_limit_from_effective_init(tmp_path):
+    """A preset keeps its context metadata without creating an init source."""
     from lingtai.init_reader import reader_callbacks
 
     def fake_load_preset(name, working_dir=None):
@@ -267,10 +228,12 @@ def test_stray_nested_context_limit_through_reader_callbacks_preserves_effective
     outcome = read_init(tmp_path, materialize=materialize, prepare=prepare)
 
     assert outcome.status is InitReadStatus.FULLY_EFFECTIVE
-    assert outcome.shape_decision is InitShapeDecision.NUDGE
-    # Effective root is the preset's lifted value, not the raw nested key.
-    assert outcome.data["manifest"]["context_limit"] == 16384
-    assert outcome.compatibility_paths == _NESTED_TO_ROOT
+    assert outcome.shape_decision is InitShapeDecision.PASS
+    # The raw root is retained only as inert compatibility data; the preset
+    # value never crosses into the materialized LLM block or runtime policy.
+    assert outcome.data["manifest"]["context_limit"] == 350000
+    assert "context_limit" not in outcome.data["manifest"]["llm"]
+    assert outcome.compatibility_paths == []
     # Raw init bytes are untouched.
     assert (tmp_path / "init.json").read_text(encoding="utf-8") == raw
 
@@ -303,8 +266,10 @@ def test_failure_precedence_validate_and_resolve_stages(tmp_path):
     """VALIDATE and RESOLVE failures must also classify as UNKNOWN, not as a
     benign PASS/NUDGE that could clear an existing init-config Nudge.
     """
-    # VALIDATE failure: a stray nested key plus a schema-invalid root value.
-    raw = _context_limit_init(top="not-an-int", nested_present=True, nested=500000)
+    # VALIDATE failure: old runtime keys are inert, so use a required LLM key.
+    raw_data = json.loads(_context_limit_init(top="not-an-int", nested_present=True, nested=500000))
+    raw_data["manifest"]["llm"]["provider"] = 5
+    raw = json.dumps(raw_data)
     _write_init(tmp_path, raw)
 
     outcome = read_init(tmp_path, failure_behavior="KEEP_PREVIOUS_EFFECTIVE")

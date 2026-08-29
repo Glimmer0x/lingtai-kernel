@@ -486,7 +486,7 @@ def test_failed_validate_lifecycle_seeded_mixed(tmp_path):
     assert len(_entries(tmp_path)) == 1
 
     bad = dict(required)
-    bad["manifest"]["context_limit"] = "not-an-int"
+    bad["manifest"]["llm"]["provider"] = 5
     raw_bad = json.dumps(bad)
     init.write_text(raw_bad, encoding="utf-8")
     failed = read_init(tmp_path, failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
@@ -547,7 +547,7 @@ def test_failed_validate_lifecycle_seeded_isolated(tmp_path):
     assert len(_entries(tmp_path)) == 1
 
     bad = dict(required)
-    bad["manifest"] = {"llm": {"provider": "openai", "model": "gpt-4o"},
+    bad["manifest"] = {"llm": {"provider": 5, "model": "gpt-4o"},
                        "context_limit": "not-an-int"}
     raw_bad = json.dumps(bad)
     init.write_text(raw_bad, encoding="utf-8")
@@ -613,12 +613,8 @@ def _frontmatter_related_files(text):
     return files
 
 
-def test_context_limit_ownership_model_is_documented_across_normative_sources():
-    """The preset-nested / init-root context_limit ownership model and the
-    manual route must stay synchronized across the owner Contract, paired
-    Anatomy, canonical init.jsonc, substrate manual, and the system-manual
-    router. Parses frontmatter related_files (not substrings) and asserts
-    source-specific direction semantics."""
+def test_runtime_policy_ownership_model_is_documented_across_normative_sources():
+    """Init must not regain an ordinary runtime-policy source by accident."""
     root = Path(__file__).parents[1]
     contract_path = root / "src/lingtai/CONTRACT.md"
     anatomy_path = root / "src/lingtai/ANATOMY.md"
@@ -647,22 +643,13 @@ def test_context_limit_ownership_model_is_documented_across_normative_sources():
     # 2. Ownership vocabulary in all normative sources.
     for text, name in ((contract, "CONTRACT.md"), (anatomy, "ANATOMY.md"), (substrate, "substrate")):
         assert "manifest.llm.context_limit" in text, f"{name} missing nested preset location"
-        assert "manifest.context_limit" in text, f"{name} missing init root location"
-    assert "manifest.llm.context_limit" in init_jsonc
+    assert "manifest.context_limit" in contract
+    assert "context_limit" not in init_jsonc
 
     # 3. Source-specific direction assertions.
-    #    Contract: nested init key is not a runtime source; mapping is nested
-    #    raw -> root effective; m001 relocates preset documents only.
-    assert "never a runtime source" in contract
-    assert "manifest.context_limit` effective" in contract
-    assert "m001 relocates preset documents" in contract
-    #    Anatomy: same direction with the raw/effective arrow.
-    assert "raw → `manifest.context_limit` effective" in anatomy
-    #    init.jsonc: root is the canonical home sentence.
-    assert "Canonical home for agent init.json / effective manifest" in init_jsonc
-    #    substrate: documents the split ownership and the compatibility path.
-    assert "split by document type" in substrate or "split by\ndocument type" in substrate
-    assert "nested raw" in substrate and "root effective" in substrate
+    assert "fixed defaults" in contract
+    assert "materialization discards it" in anatomy
+    assert "discard a preset context" in substrate
 
     # 4. The old "open implementation question" framing must not regress.
     assert "root-vs-LLM `context_limit` semantics" not in substrate

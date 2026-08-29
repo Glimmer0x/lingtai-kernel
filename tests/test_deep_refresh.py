@@ -335,23 +335,26 @@ def test_direct_agent_still_composes_default_mcp_surface(tmp_path):
         shell._workdir_lease.release()
 
 
-def test_cli_build_agent_context_window_uses_config_or_conservative_fallback(tmp_path):
+def test_cli_build_agent_context_window_ignores_legacy_init_and_uses_system_policy(tmp_path):
     from lingtai.cli import build_agent, load_init
     from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
 
     init = _make_init()
-    init["manifest"]["context_limit"] = None
+    init["manifest"]["context_limit"] = 123_456
     (tmp_path / "init.json").write_text(json.dumps(init))
 
     agent = build_agent(load_init(tmp_path), tmp_path)
     assert agent.service._context_window == CONSERVATIVE_CONTEXT_WINDOW
     agent._workdir_lease.release()
 
-    init["manifest"]["context_limit"] = 123_456
+    (tmp_path / "settings").mkdir()
+    (tmp_path / "settings" / "system.json").write_text(
+        json.dumps({"schema_version": 2, "context_limit": 234_567})
+    )
     (tmp_path / "init.json").write_text(json.dumps(init))
 
     agent = build_agent(load_init(tmp_path), tmp_path)
-    assert agent.service._context_window == 123_456
+    assert agent.service._context_window == 234_567
     agent._workdir_lease.release()
 
 
@@ -510,7 +513,7 @@ def test_refresh_logs_env_resolve_warning(mock_llm_service, tmp_path, monkeypatc
     )
 
 
-def test_live_refresh_rebuilds_service_for_effective_context_window(tmp_path, monkeypatch):
+def test_live_refresh_rebuilds_service_from_system_context_window(tmp_path, monkeypatch):
     from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
 
     init = _make_init()
@@ -538,16 +541,19 @@ def test_live_refresh_rebuilds_service_for_effective_context_window(tmp_path, mo
     monkeypatch.setattr("lingtai.agent.LLMService", FakeService)
 
     agent._setup_from_init()
-    assert constructed[-1]["context_window"] == 123_456
-    assert agent.service._context_window == 123_456
+    assert constructed[-1]["context_window"] == CONSERVATIVE_CONTEXT_WINDOW
+    assert agent.service._context_window == CONSERVATIVE_CONTEXT_WINDOW
     assert agent._session._llm_service is agent.service
 
-    init["manifest"]["context_limit"] = None
+    (tmp_path / "settings").mkdir()
+    (tmp_path / "settings" / "system.json").write_text(
+        json.dumps({"schema_version": 2, "context_limit": 234_567})
+    )
     (tmp_path / "init.json").write_text(json.dumps(init))
 
     agent._setup_from_init()
-    assert constructed[-1]["context_window"] == CONSERVATIVE_CONTEXT_WINDOW
-    assert agent.service._context_window == CONSERVATIVE_CONTEXT_WINDOW
+    assert constructed[-1]["context_window"] == 234_567
+    assert agent.service._context_window == 234_567
 
 
 def test_init_procedures_override_is_migrated_not_prompted(tmp_path):

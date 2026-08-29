@@ -229,12 +229,12 @@ integer), and `notification_max_chars` (positive integer; Core still clamps it t
 in for numbers, `NaN`/`Infinity` are rejected, and an unknown, duplicate, or
 invalid key rejects the whole document so nothing is applied partially. An
 absent key and an explicit `null` are different: absent falls through to the
-manifest, `null` is the configured value.
+fixed default, `null` is the configured value.
 
 Each ordinary field resolves as valid `LINGTAI_CONTEXT_LIMIT` / `LINGTAI_MAX_RPM`
 / `LINGTAI_STREAMING` / `LINGTAI_AED_TIMEOUT` / `LINGTAI_MAX_AED_ATTEMPTS` /
 `LINGTAI_SNAPSHOT_INTERVAL` (`off` disables) / `LINGTAI_ACTIVENESS` > valid v2
-field > effective `init.json` manifest field > kernel default. The policy is
+field > fixed default; `init.json` is not a runtime-policy source. The policy is
 resolved once at CLI boot, before the first LLM service is built, and once on
 every refresh, so the service, `AgentConfig`, and the session streaming flag
 always agree; `init.json` and `system/manifest.resolved.json` are never

@@ -91,7 +91,7 @@ def build_llm_service(
     inherit.
 
     ``max_rpm`` and ``context_limit`` come from the System-resolved runtime
-    policy (env > ``settings/system.json`` v2 > effective manifest > default),
+    policy (env > ``settings/system.json`` v2 > fixed default),
     the same policy ``Agent._setup_from_init`` applies, so the service built
     here never disagrees with the later configured setup. Pass
     *runtime_policy* to reuse an already-resolved policy.
@@ -100,7 +100,7 @@ def build_llm_service(
     llm = m["llm"]
     env_file = data.get("env_file")
     if runtime_policy is None:
-        runtime_policy = resolve_runtime_policy(working_dir, m)
+        runtime_policy = resolve_runtime_policy(working_dir)
 
     api_key = resolve_env_checked(
         llm.get("api_key"),
@@ -111,7 +111,7 @@ def build_llm_service(
 
     # Default 60 matches AgentConfig.max_rpm — agents whose init.json
     # predates this field cooperatively share the network-wide 60 RPM cap
-    # by default. Set to 0 in init.json to disable gating.
+    # by default. Set the System v2 field or environment variable to disable gating.
     max_rpm = runtime_policy.max_rpm
     # Pass working_dir so Codex agents get their per-agent session/thread
     # identity (agent path + last molt time) wired in by default.
@@ -166,7 +166,7 @@ def build_agent(
     # feed both the early service and the constructor-time streaming flag
     # from it; _setup_from_init re-resolves the same inputs for the
     # configured pass, so boot cannot be internally inconsistent.
-    runtime_policy = resolve_runtime_policy(working_dir, m)
+    runtime_policy = resolve_runtime_policy(working_dir)
     service = build_llm_service(data, working_dir, runtime_policy)
 
     mail_service = PosixFilesystemMailAdapter(
