@@ -185,7 +185,10 @@ wake the wait; prove the cadence/interval is preserved.
 Mutation runs are source-level evidence, so they must not execute a `.pyc`
 compiled from a previous mutation or restoration. The clean baseline, the
 must-red mutation, and the restored control must each run in a separate fresh
-process. Before *each* phase, clear the affected package's `__pycache__`, or
+process. A must-red result must assert its expected failing assertion or
+diagnostic, not merely a non-zero exit: timeout, cleanup, import, or unrelated
+harness failures are invalid evidence for a mutation. Before *each* phase,
+clear the affected package's `__pycache__`, or
 give that phase a distinct, empty `PYTHONPYCACHEPREFIX`. `python -B` and
 `PYTHONDONTWRITEBYTECODE=1` are useful supplements, but not substitutes: they
 prevent writing new bytecode, not reading an existing cache that still matches

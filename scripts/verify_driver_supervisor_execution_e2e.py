@@ -98,7 +98,13 @@ def main(lingtai_src: Path, puffo_src: Path) -> None:
     root_adapter = None
     endpoint = None
     try:
-        with tempfile.TemporaryDirectory(prefix="lingtai-driver-first-hop-") as raw_workdir:
+        # Detached children may finish their terminal write just after their
+        # durable state becomes `done`.  Directory cleanup is not part of this
+        # probe's verdict, so it must not turn an already-proven lifecycle
+        # result into a false failure by racing that final write.
+        with tempfile.TemporaryDirectory(
+            prefix="lingtai-driver-first-hop-", ignore_cleanup_errors=True
+        ) as raw_workdir:
             workdir = Path(raw_workdir)
             agent = Agent(
                 _RootService(),
@@ -133,24 +139,24 @@ def main(lingtai_src: Path, puffo_src: Path) -> None:
             run_dir = RunDir.attach(workdir / "root-agent" / "daemons" / run_id)
             state = _wait_terminal(run_dir, timeout_s=35)
 
-        assert state.get("state") == "done", state
-        assert isinstance(state.get("supervisor_pid"), int), state
-        assert isinstance(state.get("execution_pid"), int), state
-        assert state.get("execution_registration") == "registered", state
+            assert state.get("state") == "done", state
+            assert isinstance(state.get("supervisor_pid"), int), state
+            assert isinstance(state.get("execution_pid"), int), state
+            assert state.get("execution_registration") == "registered", state
 
-        records = list(server.audit_records())
-        launch = [record for record in records if record.operation == "authorize_derived_launch"]
-        provider = [record for record in records if record.operation == "authorize_provider_call"]
-        assert len(launch) == 1, records
-        assert (launch[0].state, launch[0].reason_code) == ("granted", "allowed")
-        assert provider, records
-        assert all((record.state, record.reason_code) == ("granted", "allowed") for record in provider)
-        assert {record.launch_id for record in provider}.isdisjoint({launch[0].launch_id}), records
+            records = list(server.audit_records())
+            launch = [record for record in records if record.operation == "authorize_derived_launch"]
+            provider = [record for record in records if record.operation == "authorize_provider_call"]
+            assert len(launch) == 1, records
+            assert (launch[0].state, launch[0].reason_code) == ("granted", "allowed")
+            assert provider, records
+            assert all((record.state, record.reason_code) == ("granted", "allowed") for record in provider)
+            assert {record.launch_id for record in provider}.isdisjoint({launch[0].launch_id}), records
 
-        print("root_to_supervisor_to_execution_child=ok")
-        print(f"supervisor_pid={state['supervisor_pid']} execution_pid={state['execution_pid']}")
-        print(f"launch_audit={launch[0].audit_id} provider_audits={[record.audit_id for record in provider]}")
-        print(f"provider_launch_ids={sorted({record.launch_id for record in provider})}")
+            print("root_to_supervisor_to_execution_child=ok")
+            print(f"supervisor_pid={state['supervisor_pid']} execution_pid={state['execution_pid']}")
+            print(f"launch_audit={launch[0].audit_id} provider_audits={[record.audit_id for record in provider]}")
+            print(f"provider_launch_ids={sorted({record.launch_id for record in provider})}")
     finally:
         if endpoint is not None:
             endpoint.close()
@@ -167,5 +173,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--lingtai-src", required=True, type=Path)
     parser.add_argument("--puffo-src", required=True, type=Path)
+    parser.add_argument(
+        "--expect-failure",
+        help="Treat only an exception containing this text as the expected must-red result.",
+    )
     args = parser.parse_args()
-    main(args.lingtai_src, args.puffo_src)
+    try:
+        main(args.lingtai_src, args.puffo_src)
+    except Exception as exc:
+        if args.expect_failure and args.expect_failure in str(exc):
+            print(f"expected_failure={args.expect_failure!r}")
+            raise SystemExit(0) from None
+        raise
+    if args.expect_failure:
+        raise AssertionError(f"expected failure was not observed: {args.expect_failure!r}")
