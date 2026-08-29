@@ -318,6 +318,7 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
         adapter deliberately has no reconnect path, so the loss lasts for the
         lifetime of this child composition; its owner must restart/recompose a
         child if fresh authority is required.
+
         """
 
         with self._lock:
