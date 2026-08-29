@@ -338,6 +338,50 @@ def test_denied_launch_reply_closes_an_unexpected_received_fd(tmp_path):
     assert leaked == set()
 
 
+def test_malformed_granted_launch_reply_closes_its_received_fd(tmp_path):
+    """A rejected grant frame must not leave its SCM_RIGHTS capability live."""
+    client, server = socket.socketpair()
+    payload_path = tmp_path / "received-malformed-fd-payload"
+    payload_path.write_text("unique")
+    sent_fd = os.open(payload_path, os.O_RDONLY)
+    sent_identity = os.fstat(sent_fd)
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-malformed", "capability": None})
+        _recv_frame(sock)
+        # Missing audit_id makes the frame malformed after its fd has arrived.
+        _send_frame(
+            sock,
+            {"version": 1, "state": "granted", "reason_code": "allowed"},
+            fd=sent_fd,
+        )
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    root = RootProviderAdmission("turn-malformed-fd", "puffo-v0.test")
+    try:
+        decision = adapter.authorize_derived_launch(root, DerivedLaunchCapability.AVATAR)
+    finally:
+        adapter.close()
+        os.close(sent_fd)
+    thread.join(timeout=2)
+    leaked = {
+        fd
+        for fd in range(3, 128)
+        if fd != sent_fd
+        and _fd_is_open(fd)
+        and (stat := os.fstat(fd)).st_dev == sent_identity.st_dev
+        and stat.st_ino == sent_identity.st_ino
+    }
+    for fd in leaked:
+        os.close(fd)
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert leaked == set()
+
+
 def test_granted_launch_rejects_non_unix_stream_child_endpoint_before_spawn():
     """Only connected AF_UNIX stream endpoints may become child leases."""
     client, server = socket.socketpair()
