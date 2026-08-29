@@ -251,7 +251,9 @@ argv, environment, or MCP command from the remote caller.
     and deny/audit all later or competing claimants. The exact POSIX
     `pass_fds` spawn is the only Core consumer. Core does
     not parse fd/frame/registry data. A derived endpoint is server-bound to
-    `depth=1` and cannot mint another child. A persistent derived marker means
+    `depth=1` and cannot mint another child; its nested daemon/avatar request
+    still crosses the Driver endpoint so Driver returns and audits the typed
+    denial before Core applies its one-hop backstop. A persistent derived marker means
     authority is required, never granted: missing, closed, malformed, or
     unavailable transport is a structured indeterminate denial before any
     spawn/provider I/O and never a `legacy_default` fallback. This wiring does
