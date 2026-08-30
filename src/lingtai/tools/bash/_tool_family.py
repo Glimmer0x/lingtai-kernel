@@ -4,7 +4,8 @@ The public/model-facing ``shell`` tool is migrated to the LingTai Tool
 Protocol v2 action-separated shape (``action``/``input``/``reasoning``/
 ``summarize``, see ``../CONTRACT.md``) using the generic, optional
 ``tool_family`` infrastructure (``../tool_family/__init__.py``). ``run``,
-``poll``, ``cancel``, and the reserved ``manual`` become four ``ChildTool``s
+``poll``, ``cancel``, and the reserved ``settings``/``manual`` actions become
+five ``ChildTool``s
 with their own strict per-action ``input`` schemas — run-only fields
 (``command``, ``timeout``, ``working_dir``, ``async``, ``reminder``) live only
 in ``run``'s branch; ``job_id`` lives only in ``poll``/``cancel``'s branches.
@@ -31,7 +32,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
-from ..tool_family import ChildTool, ToolFamily
+from ..tool_family import ChildTool, SettingRow, SettingsProvider, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA as _MANUAL_INPUT_SCHEMA, build_manual_child
 from ._shell_dialect import ShellKind
 
@@ -71,6 +72,71 @@ def resolve_timeout_max_seconds(environ: Mapping[str, str] | None = None) -> flo
     if not math.isfinite(value) or value <= 0:
         return _DEFAULT_TIMEOUT_MAX_SECONDS
     return max(value, float(_DEFAULT_TIMEOUT_SECONDS))
+
+
+def _shell_setting_rows(manager: Any) -> tuple[SettingRow, ...]:
+    """Read applied Shell facts without changing owner or process state."""
+    shell_kind = manager.shell_kind
+    if not isinstance(shell_kind, ShellKind):
+        raise RuntimeError("current shell kind is unavailable")
+    max_output = manager._max_output
+    if type(max_output) is not int or max_output <= 0:
+        raise RuntimeError("current result limit is unavailable")
+    policy = manager._policy
+    if not callable(getattr(policy, "is_allowed", None)):
+        raise RuntimeError("current command policy is unavailable")
+    return (
+        SettingRow(
+            "shell_kind",
+            shell_kind.value,
+            None,
+            True,
+            "shell-manual#shell-kind",
+        ),
+        SettingRow(
+            "sync_timeout_default_seconds",
+            _DEFAULT_TIMEOUT_SECONDS,
+            _DEFAULT_TIMEOUT_SECONDS,
+            False,
+            "shell-manual#sync-timeout-default",
+        ),
+        SettingRow(
+            "sync_timeout_max_seconds",
+            resolve_timeout_max_seconds(),
+            _DEFAULT_TIMEOUT_MAX_SECONDS,
+            True,
+            "shell-manual#sync-timeout-ceiling",
+        ),
+        SettingRow(
+            "result_max_chars",
+            max_output,
+            50_000,
+            True,
+            "shell-manual#result-size-limit",
+        ),
+        SettingRow(
+            "async_default",
+            False,
+            False,
+            False,
+            "shell-manual#async-default",
+        ),
+        SettingRow(
+            "async_reminder_default_seconds",
+            _DEFAULT_ASYNC_REMINDER_SECONDS,
+            _DEFAULT_ASYNC_REMINDER_SECONDS,
+            False,
+            "shell-manual#async-reminder-default",
+        ),
+        SettingRow(
+            "command_policy",
+            "configured",
+            "platform-packaged",
+            True,
+            "shell-manual#command-policy",
+            _sensitive=True,
+        ),
+    )
 
 RUN_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -192,6 +258,7 @@ def get_description(
         "shell(action='run', input={'command': '...'}, reasoning='...') executes a command; "
         "shell(action='poll', input={'job_id': '...'}, reasoning='...') checks an async job; "
         "shell(action='cancel', input={'job_id': '...'}, reasoning='...') kills an async job; "
+        "shell(action='settings', input={}, reasoning='...') shows applied Shell settings; "
         "shell(action='manual', input={}, reasoning='...') returns the installed shell-manual skill. "
         "Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. "
         "Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. "
@@ -257,11 +324,19 @@ def _build_family() -> ToolFamily:
     children.append(
         ChildTool("manual", DECLARATION.manual_input_schema, _unused, title="manual input")
     )
-    return ToolFamily(DECLARATION.name, children)
+    def _schema_only_settings() -> tuple[SettingRow, ...]:
+        return ()
+
+    return ToolFamily(
+        DECLARATION.name,
+        children,
+        settings_provider=_schema_only_settings,
+    )
 
 
 def _build_dispatching_family(dispatcher: ShellFamilyDispatcher, manual_source: Any) -> ToolFamily:
     """Build the granted family with dispatcher-owned handlers and one manual."""
+    settings_provider: SettingsProvider = lambda: _shell_setting_rows(dispatcher.manager)
     return ToolFamily(
         DECLARATION.name,
         [
@@ -270,6 +345,7 @@ def _build_dispatching_family(dispatcher: ShellFamilyDispatcher, manual_source: 
             ChildTool("cancel", DECLARATION.input_schemas["cancel"], dispatcher._dispatch_cancel, title="cancel input"),
             build_manual_child(manual_source, DECLARATION.manual),
         ],
+        settings_provider=settings_provider,
     )
 
 
@@ -346,6 +422,7 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind,
     requires=("workdir", "notifications", "configuration"),
     glossary_package=__package__,
+    settings=True,
 )
 
 

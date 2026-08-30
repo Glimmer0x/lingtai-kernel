@@ -308,10 +308,10 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     task_card_schema = task_card_tool.get_schema()
     assert task_card_schema["required"] == ["action", "input", "reasoning"]
     assert len(task_card_schema["properties"]["input"]["anyOf"]) == 7
-    # ``shell`` is migrated to the same LTP v2 envelope, with four children.
+    # ``shell`` opts into settings immediately before its manual.
     shell_schema = shell_tool.get_schema()
     assert shell_schema["required"] == ["action", "input", "reasoning"]
-    assert len(shell_schema["properties"]["input"]["oneOf"]) == 4
+    assert len(shell_schema["properties"]["input"]["anyOf"]) == 5
 
     agent = _StubAgent(tmp_path)
     agent._file_io = _ActionFileIO(tmp_path)

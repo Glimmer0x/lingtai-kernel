@@ -19,6 +19,7 @@ related_files:
   - src/lingtai/kernel/llm/base.py
   - tests/test_shell_sandbox_containment.py
   - tests/test_shell_tool_plugin_declaration.py
+  - tests/test_shell_settings.py
   - tests/contracts/llm_conversation_input/test_send_str.py
   - tests/test_context_ownership_redesign.py
   - tests/test_repeated_tool_error_continue.py
@@ -135,11 +136,12 @@ outside or sibling-prefix path executes, or if the error message shape changes.
    and `additionalProperties`.
 2. Call `shell(action="run", input={"command": "pwd"}, reasoning="ok")`.
 3. Call `shell(action="frobnicate", input={}, reasoning="x")` — an action
-   that is not one of the four children.
+   that is not one of the five children.
 4. Call `shell(action="poll", input={"command": "pwd"}, reasoning="x")` — a
    `run`-only field smuggled into `poll`'s input.
-5. Call `shell(action="manual", input={}, reasoning="x")`.
-6. Call `shell(action="manual", input={"page": 2}, reasoning="x")`.
+5. Call `shell(action="settings", input={}, reasoning="x")`.
+6. Call `shell(action="manual", input={}, reasoning="x")`.
+7. Call `shell(action="manual", input={"page": 2}, reasoning="x")`.
 
 ### Expected evidence
 - [ ] Step 1: `properties == {action, input, reasoning, summarize}`,
@@ -147,19 +149,26 @@ outside or sibling-prefix path executes, or if the error message shape changes.
       `additionalProperties == false` (the strict LTP v2 root).
 - [ ] Step 2: `{status: "ok", ...}` — the valid envelope dispatches.
 - [ ] Step 3: `{status: "failed", error_code: "ACTION_REQUIRED", message:
-      "action must be one of run, poll, cancel, or manual"}`.
+      "action must be one of run, poll, cancel, settings, or manual"}`.
 - [ ] Step 4: `{status: "failed", error_code: "INVALID_ARGUMENT", message:
       "unsupported shell input field"}` — rejected before any job lookup.
-- [ ] Step 5: `{status: "ok", content: [{type: "text", text: <shell-manual
+- [ ] Step 5: exactly seven rows keyed `shell_kind`,
+      `sync_timeout_default_seconds`, `sync_timeout_max_seconds`,
+      `result_max_chars`, `async_default`,
+      `async_reminder_default_seconds`, and `command_policy`; every row has
+      exactly `key/current/default/configurable/comment`, and both command
+      policy values are `<redacted>`.
+- [ ] Step 6: `{status: "ok", content: [{type: "text", text: <shell-manual
       body>}], structuredContent: {manual_path}}`.
-- [ ] Step 6: `{status: "failed", error_code: "INVALID_ARGUMENT", message:
+- [ ] Step 7: `{status: "failed", error_code: "INVALID_ARGUMENT", message:
       "unsupported shell input field"}` — `manual` input is strict empty.
-- [ ] Steps 3, 4, 6 spawned no process and touched no job state.
+- [ ] Steps 3–7 spawned no process and touched no job state.
 
 ### Pass / Fail
-Pass when the root schema matches exactly and every invalid call is refused
-with the exact `error_code`/`message` above. Fail if an unknown action or a
-cross-action input key dispatches, or if the closed root gains a field.
+Pass when the root schema and settings inventory match exactly and every
+invalid call is refused with the exact `error_code`/`message` above. Fail if an
+unknown action or a cross-action input key dispatches, if settings leaks policy
+values, or if the closed root gains a field.
 
 ## Behavior S003 — send(str) reaches the provider transport as provider text
 

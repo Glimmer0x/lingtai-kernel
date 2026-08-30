@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/bash/__init__.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/tools/tool_family/settings.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/bash/_async_supervisor.py
@@ -36,6 +37,7 @@ related_files:
   - tests/test_bash_async.py
   - tests/test_execution_workspace.py
   - tests/test_shell_tool_plugin_declaration.py
+  - tests/test_shell_settings.py
   - tests/test_layers_bash.py
   - src/lingtai/tools/bash/glossary-en.md
   - src/lingtai/tools/bash/glossary-zh.md
@@ -68,8 +70,8 @@ be explicitly opted into.
 
 ## Components
 
-- `bash/__init__.py` — the execution engine plus policy, sync execution, and durable async manager orchestration. It declares no schema or description of its own: the package's single public pair is re-exported from `_tool_family.py` at `__init__.py:43` under the canonical `get_schema`/`get_description` names, so there is exactly one model-facing surface and no second flat one to drift against. `setup` is only composition wiring: it passes policy/dialect overrides as immutable configuration to the static `DECLARATION` in `_tool_family.py`, then asks `register_agent_tool_plugins` to reserve, bind, activate, and mount the public `shell` tool through the official host path. `ShellManager` (`__init__.py:330`, aliased `BashManager` at `__init__.py:1467`) owns validation, manager semantics, durable-state rehydration, notification publication, and poll/cancel consumption; its `handle` dispatches `poll`/`cancel`/`run` only — `manual` is a family child and never reaches it. Its async start receipt and durable reminder body both teach the registered envelope call `shell(action="poll", input={"job_id": ...})`. `_augment_command_result` adds `ok`/`command_status`/`warning` fidelity fields (`__init__.py:191`). Sync `_run_sync` feeds a dialect's `stdin_script` through `subprocess.run(input=...)` so the PowerShell bootstrap receives the real command over UTF-8 stdin.
-- `bash/_tool_family.py` — the public/model-facing `shell` tool's LTP v2 envelope. `RUN_INPUT_SCHEMA`/`POLL_INPUT_SCHEMA`/`CANCEL_INPUT_SCHEMA`/`MANUAL_INPUT_SCHEMA` are four strict per-action schemas (run-only fields — `command`, `timeout`, `working_dir`, `async`, `reminder` — live only in `run`'s branch; `job_id` lives only in `poll`/`cancel`'s); `get_schema()` composes them via the generic `tool_family.ToolFamily` (root `allOf` correlation plus `input.oneOf` disclosure, same infra `web` uses), and `get_description()` here is the registered model-facing text documenting that action-separated call shape. Optional run fields are declared required-but-nullable per the strict-schema convention; `_strip_nulls` drops `null` (meaning *absent*) so `ShellManager`'s own runtime defaults apply, while falsy-but-present values (`timeout: 0`, `async: false`) pass through verbatim. `ShellFamilyDispatcher` is the per-agent, per-`ShellManager` handler registered by `setup()`: its `run`/`poll`/`cancel` child handlers flatten their own validated `input` (re-adding the matching `action` key) and delegate to the unchanged `ShellManager.handle` — the async lifecycle, durable state, and every existing `ShellManager` test keep exercising that exact code path. Its thin outer `handle()` adds exactly one Host normalization: narrowing the generic dispatcher's unknown-action message to Shell's own four actions. `manual` is registered directly from `tool_family.manual.build_manual_child`, the shared reserved-name contract, so it returns the canonical `content`/`structuredContent` shape; `MANUAL_INPUT_SCHEMA` is sourced from that same builder rather than re-declared, so the schema the wire advertises and the schema dispatch validates against are one definition. The engine has no manual branch at all — `manual` performs no shell operation and never reaches `ShellManager`.
+- `bash/__init__.py` — the execution engine plus policy, sync execution, and durable async manager orchestration. It declares no schema or description of its own: the package's single public pair is re-exported from `_tool_family.py` at `__init__.py:43` under the canonical `get_schema`/`get_description` names, so there is exactly one model-facing surface and no second flat one to drift against. `setup` is only composition wiring: it passes policy/dialect overrides as immutable configuration to the static `DECLARATION` in `_tool_family.py`, then asks `register_agent_tool_plugins` to reserve, bind, activate, and mount the public `shell` tool through the official host path. `ShellManager` (`__init__.py:330`, aliased `BashManager` at `__init__.py:1467`) owns validation, manager semantics, durable-state rehydration, notification publication, and poll/cancel consumption; its `handle` dispatches `poll`/`cancel`/`run` only — `settings` and `manual` are family children and never reach it. Its async start receipt and durable reminder body both teach the registered envelope call `shell(action="poll", input={"job_id": ...})`. `_augment_command_result` adds `ok`/`command_status`/`warning` fidelity fields (`__init__.py:191`). Sync `_run_sync` feeds a dialect's `stdin_script` through `subprocess.run(input=...)` so the PowerShell bootstrap receives the real command over UTF-8 stdin.
+- `bash/_tool_family.py` — the public/model-facing `shell` LTP v2 envelope. The static declaration opts Shell into the generic read-only `settings` child immediately before `manual`, so its five branches use `input.anyOf`; `_shell_setting_rows` reads seven existing manager/runtime facts into exact five-field rows and marks command policy for full private redaction without rendering its rules. `ShellFamilyDispatcher` otherwise keeps the existing run/poll/cancel flattening and raw-result delegation unchanged. Neither `settings` nor `manual` reaches `ShellManager`, and the exact owner procedures and setting semantics route to `bash/manual/SKILL.md`.
 - `bash/_shell_dialect.py` — the Bash-local `ShellDialect` port and serializable `ShellInvocation`; the POSIX extraction helper preserves the existing policy grammar. `ShellInvocation` gains an optional `stdin_script`: when set, the script is not placed on the child command line; spawners instead write it to the child's stdin as UTF-8 (PowerShell's ASCII-bootstrap transport).
 - `adapters/posix/bash.py` — `PosixBashDialect`, the first production adapter; it provides POSIX policy extraction and script-form shell invocation.
 - `adapters/shell.py` — `select_shell_dialect`, the outer selector for POSIX and PowerShell dialects; `adapters/bash.py` remains a private compatibility selector.
@@ -90,7 +92,7 @@ The canonical `shell` tool is a migrated LTP v2 family (`src/lingtai/tools/CONTR
 
 | Root field   | Type    | Description |
 |--------------|---------|-------------|
-| `action`     | string  | Required. One of `run`, `poll`, `cancel`, `manual`. No default. |
+| `action`     | string  | Required. One of `run`, `poll`, `cancel`, `settings`, `manual`. No default. |
 | `input`      | object  | Required. Strict, action-specific input; cross-action keys are rejected at dispatch. |
 | `reasoning`  | string  | Required. Host InvocationContext/audit metadata; never forwarded into `input`. |
 | `summarize`  | boolean | Optional root result post-processing control (default false); never forwarded into `input`. |
@@ -106,7 +108,13 @@ Per-action `input` (run-only fields exist only in `run`; `job_id` only in `poll`
 | `run`    | `reminder`     | number\|null | Last-resort async wake delay; `null` → default 1800. Consumed/validated only for async `run` |
 | `poll`   | `job_id`       | string  | Job ID returned by an async run |
 | `cancel` | `job_id`       | string  | Job ID returned by an async run |
+| `settings` | —             | —       | Strict empty `{}`; returns only read-only five-field setting rows |
 | `manual` | —              | —       | Strict empty `{}`; performs no shell operation |
+
+**Settings** (`action="settings"`): Reads fresh Shell-owned facts and returns
+only `key`, `current`, `default`, `configurable`, and an exact `shell-manual`
+section pointer. Provider failure is whole-action and command-policy values are
+fully redacted; there is no mutation API.
 
 **Manual** (`action="manual"`): Returns the shared ManualTool contract result — full `shell-manual` body at `content[0].text`, host-local path at `structuredContent.manual_path` — verbatim, with no double wrapping. It reaches no execution engine, spawns no process, and touches no job state, and it serves the installed manual body/path unchanged (`.library/intrinsic/capabilities/shell/SKILL.md`).
 
