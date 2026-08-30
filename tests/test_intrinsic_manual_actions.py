@@ -119,6 +119,7 @@ def _bound_file_handler(agent: _StubAgent):
                     last_traversal=getattr(file_io, "last_traversal", None),
                     max_result_chars=None,
                 ),
+                "configuration": SimpleNamespace(values={}),
             },
         )
     ).handler
@@ -159,14 +160,18 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     }
 
     # The five old file roots are gone; bind the one ``file`` declaration to
-    # only the two ports its family requires. This manual-only test deliberately
+    # only the three ports its family requires. This manual-only test deliberately
     # has no whole-Agent route through File setup.
     from lingtai.kernel.tool_plugin import ToolPluginHost
 
     file_handler = file_tool.DECLARATION.bind(
         ToolPluginHost(
             "file",
-            {"workdir": SimpleNamespace(path=tmp_path), "file_io": object()},
+            {
+                "workdir": SimpleNamespace(path=tmp_path),
+                "file_io": object(),
+                "configuration": SimpleNamespace(values={}),
+            },
         )
     ).handler
 
@@ -295,7 +300,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert len(web_schema["properties"]["input"]["oneOf"]) == 3
     file_schema = file_tool.get_schema()
     assert file_schema["required"] == ["action", "input", "reasoning"]
-    assert len(file_schema["properties"]["input"]["oneOf"]) == 6
+    assert len(file_schema["properties"]["input"]["anyOf"]) == 7
     vision_schema = vision_tool.get_schema()
     assert vision_schema["required"] == ["action", "input", "reasoning"]
     # analyze / check / list / manual — one branch per public action.
@@ -460,11 +465,13 @@ def test_file_action_modes_require_explicit_action_and_fail_loudly(tmp_path: Pat
 
     schema = file_tool.get_schema()
     assert schema["properties"]["action"]["enum"] == [
-        "read", "write", "edit", "glob", "grep", "manual",
+        "read", "write", "edit", "glob", "grep", "settings", "manual",
     ]
     assert schema["required"] == ["action", "input", "reasoning"]
     description = file_tool.get_description()
-    for action in ("read", "write", "edit", "glob", "grep", "manual"):
+    for action in (
+        "read", "write", "edit", "glob", "grep", "settings", "manual"
+    ):
         assert f"action='{action}'" in description
     assert "after the manual result" in description.lower()
     assert "error loop" in description
@@ -487,7 +494,7 @@ def test_file_action_modes_require_explicit_action_and_fail_loudly(tmp_path: Pat
     unsupported = call("unsupported")
     assert unsupported["status"] == "failed"
     assert unsupported["error_code"] == "ACTION_REQUIRED"
-    assert "read, write, edit, glob, grep, manual" in unsupported["message"]
+    assert "read, write, edit, glob, grep, settings, manual" in unsupported["message"]
 
     missing_action = agent.handlers["file"]({"input": {}, "reasoning": "no action"})
     assert missing_action["error_code"] == "ACTION_REQUIRED"

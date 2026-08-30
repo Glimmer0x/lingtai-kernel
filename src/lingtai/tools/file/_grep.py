@@ -14,7 +14,10 @@ from .._file_paths import resolve_workdir_path
 if TYPE_CHECKING:
     from lingtai.kernel.tool_plugin import FileIOPort, WorkdirPort
 
-__all__ = ["build_operation"]
+__all__ = ["DEFAULT_GREP_MAX_MATCHES", "build_operation"]
+
+
+DEFAULT_GREP_MAX_MATCHES: int = 200
 
 
 def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
@@ -31,7 +34,7 @@ def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
         if not pattern:
             return {"status": "error", "message": "pattern is required"}
         search_path = args.get("path", ".")
-        max_matches = args.get("max_matches", 200)
+        max_matches = args.get("max_matches", DEFAULT_GREP_MAX_MATCHES)
         glob_filter = args.get("glob", "*")
         try:
             search_path = resolve_workdir_path(workdir.path, search_path)

@@ -67,10 +67,10 @@ def test_file_declaration_is_static_and_derives_the_public_surface():
     assert "tool_mount" not in GRANTABLE_HOST_PORTS
     assert DECLARATION.name == "file"
     assert DECLARATION.manual == "file-manual"
-    assert DECLARATION.requires == ("workdir", "file_io")
+    assert DECLARATION.requires == ("workdir", "file_io", "configuration")
     assert DECLARATION.actions == ("read", "write", "edit", "glob", "grep")
     assert DECLARATION.public_actions == (
-        "read", "write", "edit", "glob", "grep", "manual"
+        "read", "write", "edit", "glob", "grep", "settings", "manual"
     )
     assert tuple(get_schema()["properties"]["action"]["enum"]) == DECLARATION.public_actions
 
@@ -82,11 +82,12 @@ def test_file_bind_accepts_only_its_narrow_ports(tmp_path):
         {
             "workdir": SimpleNamespace(path=tmp_path),
             "file_io": object(),
+            "configuration": SimpleNamespace(values={}),
         },
     )
     bound = DECLARATION.bind(host)
 
-    assert host.granted == ("workdir", "file_io")
+    assert host.granted == ("workdir", "file_io", "configuration")
     assert bound.name == "file"
     assert tuple(bound.schema["properties"]["action"]["enum"]) == DECLARATION.public_actions
 
@@ -322,7 +323,11 @@ def test_file_manual_uses_established_install_path(tmp_path):
 
     host = ToolPluginHost(
         "file",
-        {"workdir": SimpleNamespace(path=workdir), "file_io": object()},
+        {
+            "workdir": SimpleNamespace(path=workdir),
+            "file_io": object(),
+            "configuration": SimpleNamespace(values={}),
+        },
     )
     result = _manual_call(DECLARATION.bind(host).handler)
 

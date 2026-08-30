@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_READ_CAP_CHARS",
+    "DEFAULT_READ_LINE_LIMIT",
     "READ_HARD_CAP_CHARS",
     "build_operation",
 ]
@@ -27,6 +28,7 @@ __all__ = [
 # boundary remains a larger non-configurable hard ceiling. Callers may pass
 # ``max_chars`` per read call; values above the runtime ceiling are clamped.
 DEFAULT_READ_CAP_CHARS: int = 100_000
+DEFAULT_READ_LINE_LIMIT: int = 2_000
 READ_HARD_CAP_CHARS: int = PREVENTIVE_MAX_CHARS
 
 
@@ -127,7 +129,7 @@ def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
         if not path:
             return {"status": "error", "message": "file_path is required"}
         offset = args.get("offset", 1)
-        limit = args.get("limit", 2000)
+        limit = args.get("limit", DEFAULT_READ_LINE_LIMIT)
         max_chars = args.get("max_chars")
         try:
             path = resolve_workdir_path(workdir.path, path)

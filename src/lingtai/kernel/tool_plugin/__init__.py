@@ -101,7 +101,9 @@ def _settings_input_schema() -> dict[str, Any]:
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
 #: ``email``, ``file``, ``plugin``, ``notification``, ``shell``, ``soul``,
 #: ``system``, ``task_card``, ``vision``, or ``web``). Plugin
-#: consumes only the read-only ``plugin_catalog`` projection; Shell consumes
+#: consumes only the read-only ``plugin_catalog`` projection; File consumes
+#: ``workdir``/``file_io`` plus its factory-applied bounded
+#: ``configuration`` snapshot; Shell consumes
 #: ``workdir`` plus its explicit setup ``configuration`` and durable
 #: ``notifications`` ports; System consumes its ``system_runtime`` lifecycle
 #: vocabulary plus the durable naming ``identity`` port; Task Card consumes
@@ -537,8 +539,9 @@ class ConfigurationPort(Protocol):
     A declaration is static, while capability setup supplies its policy and
     platform overrides at boot.  This port exposes only that explicit copied
     mapping; it is not an Agent configuration API and does not permit writes.
-    Shell and Vision each consume it for their own setup snapshot; the kernel
-    gives the mapping no schema — the consuming family owns its interpretation.
+    File, Shell, and Vision each consume it for their own setup snapshot; the
+    kernel gives the mapping no schema — the consuming family owns its
+    interpretation.
     """
 
     @property

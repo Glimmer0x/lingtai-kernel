@@ -1,10 +1,11 @@
 """The declared official ``file`` host plugin.
 
-``file`` remains one public LTP-v2 family with the unchanged six actions
-``read``, ``write``, ``edit``, ``glob``, ``grep``, and ``manual``. This module
+``file`` remains one public LTP-v2 family with five operational actions, the
+generic opt-in ``settings`` action, and ``manual``. This module
 now declares that surface statically and binds it only through the kernel's
 least-privilege host facade: the current workdir, File's narrow I/O service
-port, and no whole Agent. The operation modules retain their real behavior and
+port, a bounded immutable File construction snapshot, and no whole Agent.
+The operation modules retain their real behavior and
 raw result shapes; this module only composes them and hands the bound plugin to
 the host-owned official registrar.
 """
@@ -19,6 +20,10 @@ from .._manual import load_installed_manual
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from . import _edit, _glob, _grep, _read, _write
+from .settings import (
+    FILE_IO_CONSTRUCTION_SNAPSHOT_KEY,
+    FileSettingsProvider,
+)
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -215,7 +220,18 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
         )
     else:
         children.append(_build_manual_child(host.workdir))
-    return ToolFamily(DECLARATION.name, children)
+    if host is None:
+        settings_provider = FileSettingsProvider(None, None)
+    else:
+        settings_provider = FileSettingsProvider(
+            host.file_io,
+            host.configuration.values.get(FILE_IO_CONSTRUCTION_SNAPSHOT_KEY),
+        )
+    return ToolFamily(
+        DECLARATION.name,
+        children,
+        settings_provider=settings_provider,
+    )
 
 
 def get_description(lang: str = "en") -> str:
@@ -235,6 +251,10 @@ def get_description(lang: str = "en") -> str:
         "file(action='glob', ...) to find files by pattern and "
         "file(action='grep', ...) to search file contents by regex. Text files "
         "only — this tool cannot read binary, images, or audio. Use "
+        "file(action='settings', input={}, reasoning='inspect File policy') to "
+        "show the exact five-field read/search limits, UTF-8 policy, and "
+        "applied backend owner inputs. This action is read-only; source, "
+        "precedence, and change procedures live only in file-manual. Use "
         "file(action='manual', input={}, reasoning='load file guidance') once "
         "for the installed file-manual. Read file-manual before non-UTF-8 files "
         "or a careful search/edit workflow; it also carries the nested "
@@ -282,8 +302,9 @@ DECLARATION = ToolPluginDeclaration(
     manual=_LEGACY_MANUAL_SKILL,
     description=get_description(),
     binder=_bind,
-    requires=("workdir", "file_io"),
+    requires=("workdir", "file_io", "configuration"),
     glossary_package=__package__,
+    settings=True,
 )
 
 # Compatibility aliases for internal callers; both are derived from the one
@@ -299,17 +320,21 @@ _FAMILY = _build_family(None)
 def setup(agent: "BaseAgent", **_ignored) -> None:
     """Register File through the official host-plugin route.
 
-    The registrar reserves ``file``, grants only its workdir and file-I/O
-    ports, binds this declaration, and mounts the resulting family. Re-running
-    setup on refresh is idempotent for this exact declaration.
+    The registrar reserves ``file``, grants only its workdir/file-I/O ports and
+    immutable factory snapshot, binds this declaration, and mounts the
+    resulting family. Re-running setup on refresh is idempotent for this exact
+    declaration.
     """
     from lingtai.adapters.tool_plugin_host import (
         AgentFileIOAdapter,
+        StaticConfigurationAdapter,
         register_agent_tool_plugins,
     )
+    from lingtai.services.file_io_sidecar import file_io_construction_snapshot
 
-    # Capture only the two concrete runtime objects File consumes. The adapter
-    # stores their bound operations and narrow fact readers, never the Agent.
+    # Capture only the concrete runtime objects and immutable construction fact
+    # File consumes. The adapters store bound operations/narrow facts, never
+    # the Agent; the private sidecar value is repr-hidden and SHOW-redacted.
     file_io = agent._file_io
     executor = getattr(agent, "_executor", None)
 
@@ -325,10 +350,19 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
         last_traversal=lambda: getattr(file_io, "last_traversal", None),
         max_result_chars=_max_result_chars,
     )
+    configuration = StaticConfigurationAdapter(
+        {
+            FILE_IO_CONSTRUCTION_SNAPSHOT_KEY: file_io_construction_snapshot(
+                file_io
+            )
+        }
+    )
     register_agent_tool_plugins(
         agent,
         [DECLARATION],
         extra_ports_for=lambda declaration: (
-            {"file_io": file_io_port} if declaration is DECLARATION else {}
+            {"file_io": file_io_port, "configuration": configuration}
+            if declaration is DECLARATION
+            else {}
         ),
     )

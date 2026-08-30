@@ -121,7 +121,8 @@ capability names and lazy adapters.
 - `file/` — sole owner of the public `file` capability: its static sixth
   official `DECLARATION`, composed schema/envelope dispatch, all five operation
   implementations in `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`,
-  and the one package manual body installed as `file-manual`
+  its exact source/snapshot-backed 13-row SHOW provider, and the one package
+  manual body installed as `file-manual`
   (`src/lingtai/tools/file/ANATOMY.md`).
 - `vision/` — public `vision` composition owner: one action-separated family
   with canonical `analyze`/`check`/`list`/`manual` children over the existing
@@ -248,8 +249,12 @@ emitted as a public name or a second schema.
 
 The public `file` row imports `lingtai.tools.file` lazily; that owner registers
 its static declaration, binds the five operation modules once per host grant,
-and reaches the working tree only through `WorkdirPort` plus the capability-native
-`FileIOPort` implemented by `AgentFileIOAdapter`. Unlike `bash`/`web_search`, the
+and reaches the working tree only through `WorkdirPort` plus the
+capability-native `FileIOPort` implemented by `AgentFileIOAdapter`. Its
+SHOW-only provider receives the canonical service factory's immutable,
+bounded backend snapshot through `ConfigurationPort`; the sidecar value is
+fully redacted, and no settings file or writer exists. Unlike
+`bash`/`web_search`, the
 file migration kept no configuration aliases: `read`, `write`, `edit`, `glob`, and
 `grep` are unknown capability names that fail loudly. Capability groups no
 longer exist at all — `file` was `_GROUPS`' only entry, so the map,
@@ -290,9 +295,10 @@ it owns `EmailRuntimeRequest`/`EmailRuntimePort`, creates or replaces the real
 EmailManager before using `extra_ports_for` to grant a call-time
 `AgentEmailRuntimeAdapter`, and remains a mandatory injected official family
 with no capability/manifest row. `src/lingtai/tools/file/__init__.py` is the
-sixth slice: its declaration composes the unchanged operations against
-`workdir`/`file_io`, and `setup` grants a typed `AgentFileIOAdapter` only through
-`extra_ports_for`; the adapter has no whole Agent, generic dispatch, or mount
+sixth slice: its declaration composes the unchanged operations plus generic
+SHOW against `workdir`/`file_io`/`configuration`, and `setup` grants a typed
+`AgentFileIOAdapter` plus immutable `StaticConfigurationAdapter` only through
+`extra_ports_for`; the adapters have no whole Agent, generic dispatch, or mount
 operation. The Agent installer maps the package-owned File manual body to the
 established `capabilities/file-manual` destination. `src/lingtai/tools/plugin/__init__.py`
 is the seventh slice: its

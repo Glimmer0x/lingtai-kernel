@@ -312,7 +312,7 @@ def test_read_schema_description_warns_about_cap():
         "description should tell the caller how to continue"
 
     read_branch = next(
-        branch for branch in get_schema()["properties"]["input"]["oneOf"]
+        branch for branch in get_schema()["properties"]["input"]["anyOf"]
         if branch["title"] == "read input"
     )
     max_chars_desc = read_branch["properties"]["max_chars"]["description"]

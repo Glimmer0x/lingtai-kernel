@@ -1,9 +1,9 @@
 ---
 name: file-manual
-description: "Operational guide for LingTai's built-in `file` tool: read, write, edit, glob, grep, manual; the UTF-8 policy and how to handle non-UTF-8 text via explicit bash/Python/iconv; safe write/edit discipline; search workflows. Points to `read-manual` for read pagination and truncation depth."
-version: 0.3.1
-tags: [files, read, write, edit, grep, glob, encoding, utf-8]
-last_changed_at: "2026-08-24T00:00:00Z"
+description: "Operational guide for LingTai's built-in `file` tool: read, write, edit, glob, grep, settings, manual; SHOW-only File policy discovery; the UTF-8 policy and explicit non-UTF-8 workflows; safe write/edit discipline; search workflows."
+version: 0.4.0
+tags: [files, read, write, edit, grep, glob, settings, encoding, utf-8]
+last_changed_at: "2026-08-29T00:00:00Z"
 related_files:
 - src/lingtai/tools/file/__init__.py
 - src/lingtai/tools/file/CONTRACT.md
@@ -12,6 +12,10 @@ related_files:
 - src/lingtai/tools/file/_edit.py
 - src/lingtai/tools/file/_glob.py
 - src/lingtai/tools/file/_grep.py
+- src/lingtai/tools/file/settings.py
+- src/lingtai/services/file_io.py
+- src/lingtai/services/file_io_sidecar.py
+- ENVIRONMENT_VARIABLES.md
 - src/lingtai/intrinsic_skills/read-manual/SKILL.md
 maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
@@ -22,7 +26,7 @@ maintenance: |
 Working guide for LingTai's built-in `file` tool. Use it for ordinary project
 text: source code, Markdown, JSON/YAML/TOML, logs, prompts, skills, and notes.
 
-`file` is one tool with six actions. Every call takes the same envelope:
+`file` is one tool with seven actions. Every call takes the same envelope:
 
 ```python
 file(action="read", input={"file_path": "/abs/path/x.py"}, reasoning="why you are calling")
@@ -43,6 +47,7 @@ rejected before anything is read or written.
 | Make a small exact change | `action="edit"` |
 | Find files by name/path | `action="glob"` |
 | Search file contents by regex | `action="grep"` |
+| Inspect effective File policy | `action="settings"` with strict `input={}` |
 | Decode non-UTF-8 text | `bash` + Python or `iconv` |
 | Inspect binary format, archive, media | `bash` or a domain skill/tool |
 | Analyze image content | `vision` |
@@ -146,8 +151,109 @@ durably before any summary replaces what you see.
 
 ## Settings
 
-`file` has no settings file at either the family or the action level. There is
-nothing to configure and nothing to read.
+`action="settings"` with `input={}` is a read-only SHOW operation. It returns
+the complete File-owned inventory as rows with exactly `key`, `current`,
+`default`, `configurable`, and `comment`, in that order. It has no set/reset
+form, writes nothing, and fails as one unavailable inventory if current truth
+cannot be obtained. The `comment` values below are stable anchors into this
+manual.
+
+File has no LTP settings file at either family or action scope. The first eleven
+rows are public immutable File policy (`configurable=false`): there is no File
+environment variable, file, or generic writer for changing them. A per-call
+argument can narrow one operation without changing the reported policy. The
+last two rows are construction-time selectors; changing their environment
+sources affects only a newly constructed File service/Agent.
+
+### read default line limit
+
+`read.default_line_limit` is `2000` now and by default. It is the source-backed
+default used when one `read` call omits or nulls `limit`. A call may supply its
+own limit, but File exposes no owner procedure that changes the default.
+
+### read default max chars
+
+`read.default_max_chars` is `100000` now and by default. It is the ordinary
+per-call page budget used when `max_chars` is absent or invalid. A valid
+per-call value may narrow that call; it does not reconfigure this policy.
+
+### read runtime max chars
+
+`read.runtime_max_chars` is the fresh effective ceiling
+`min(FileIOPort.max_result_chars, 200000)` when the Host supplies a positive
+cap, otherwise `200000`; its universal default is `200000`. This is observed
+from the bound runtime port on every SHOW call. File owns no change procedure
+for the Host cap.
+
+### glob max results
+
+`glob.max_results` is `2000` now and by default. The canonical File service
+uses it as the maximum result count for one glob traversal. It is immutable at
+the File family boundary.
+
+### grep default max matches
+
+`grep.default_max_matches` is `200` now and by default. An individual `grep`
+call may pass `max_matches`; that invocation value does not change the default.
+
+### grep max file bytes
+
+`grep.max_file_bytes` is `4194304` now and by default. Recursive grep skips a
+file larger than this immutable scan ceiling and reports that traversal fact.
+
+### search max visited
+
+`search.max_visited` is `20000` now and by default. It is the immutable maximum
+number of filesystem entries inspected by a canonical recursive traversal.
+
+### search walltime seconds
+
+`search.walltime_seconds` is `8.0` now and by default. It is the immutable
+wall-clock budget for a canonical recursive traversal.
+
+### search excluded directories
+
+`search.excluded_directories` is the sorted canonical
+`DEFAULT_EXCLUDED_DIRS` list now and by default. These names are pruned during
+ordinary recursive search. File has no owner-level writer for this list.
+
+### search sidecar timeout seconds
+
+`search.sidecar_timeout_seconds` is `30.0` now and by default. It is the
+standard timeout for one short-lived native sidecar request. Supplying a custom
+low-level adapter is not a File setting and does not change this row.
+
+### text encoding
+
+`text.encoding` is `utf-8` now and by default. It is File's immutable text I/O
+policy; use the explicit conversion workflow in § Encoding policy for other
+encodings.
+
+### backend mode
+
+`backend.mode` reports the normalized selection actually captured when the
+canonical File service was constructed: `auto`, `rust`, or `python`. The
+default is `auto`. An explicit factory/launcher `backend=` argument has
+precedence; otherwise `LINGTAI_FILE_IO_BACKEND` is read at construction, then
+`auto` is used. Any other mode fails service construction closed. To change it,
+set the environment before starting a new Agent or change the launcher's
+explicit argument and reconstruct the service. Later ambient environment
+changes do not alter the current row.
+
+### backend sidecar
+
+`backend.sidecar` is the one sensitive construction-time sidecar override. The
+factory consults executable candidates in this semantic precedence:
+`LINGTAI_FILE_IO_SIDECAR`, then the legacy alias
+`LINGTAI_SEARCH_SIDECAR`, then no explicit override (packaged/dev-tree
+automatic discovery). The canonical name wins when both are present; the
+legacy name is an alias, not another setting row. A nonempty unusable canonical
+value still shadows the legacy alias; packaged/dev-tree discovery then remains
+available, with `auto` falling back to Python if no source is usable and
+explicit `rust` failing construction. `python` mode does not apply a sidecar.
+Set or clear the canonical environment variable before starting a new Agent
+(retain the legacy name only for an older deployment). SHOW fully redacts both
+current and default, so no executable path is disclosed.
 
 ## Manual versus ordinary calls
 

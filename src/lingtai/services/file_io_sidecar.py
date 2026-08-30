@@ -54,7 +54,7 @@ import json
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -76,6 +76,9 @@ SIDECAR_ENV_VARS: tuple[str, ...] = (
     "LINGTAI_FILE_IO_SIDECAR",
     "LINGTAI_SEARCH_SIDECAR",
 )
+
+#: Standard timeout for one short-lived sidecar request.
+DEFAULT_SIDECAR_TIMEOUT_SECONDS: float = 30.0
 
 #: File name of the sidecar binary as bundled inside the wheel.
 _BINARY_NAME = "lingtai-search-sidecar.exe" if os.name == "nt" else "lingtai-search-sidecar"
@@ -175,7 +178,7 @@ class SidecarAdapter:
         self,
         binary_path: str | None = None,
         *,
-        timeout_s: float = 30.0,
+        timeout_s: float = DEFAULT_SIDECAR_TIMEOUT_SECONDS,
     ) -> None:
         self.binary_path = binary_path or _binary_from_env()
         self.timeout_s = timeout_s
@@ -185,7 +188,11 @@ class SidecarAdapter:
         self._discover: Callable[[], str | None] | None = None
 
     @classmethod
-    def autodiscover(cls, *, timeout_s: float = 30.0) -> "SidecarAdapter":
+    def autodiscover(
+        cls,
+        *,
+        timeout_s: float = DEFAULT_SIDECAR_TIMEOUT_SECONDS,
+    ) -> "SidecarAdapter":
         """Return an adapter that resolves automatic sources live per call.
 
         Each ``call``/``available`` walks only the packaged and dev-tree
@@ -258,12 +265,16 @@ class SidecarAdapter:
         return shutil.which(self.binary_path)
 
 
-def _binary_from_env() -> str | None:
+def _binary_from_env_with_source() -> tuple[str | None, str | None]:
     for name in SIDECAR_ENV_VARS:
         value = os.environ.get(name)
         if value:
-            return value
-    return None
+            return value, name
+    return None, None
+
+
+def _binary_from_env() -> str | None:
+    return _binary_from_env_with_source()[0]
 
 
 def _packaged_binary() -> str | None:
@@ -465,7 +476,7 @@ class RustFileIOBackend(FileIOBackend):
         *,
         binary_path: str | None = None,
         adapter: SidecarAdapter | None = None,
-        timeout_s: float = 30.0,
+        timeout_s: float = DEFAULT_SIDECAR_TIMEOUT_SECONDS,
     ) -> None:
         self._local = LocalFileIOBackend(root=root)
         self._adapter = adapter or SidecarAdapter(
@@ -639,6 +650,45 @@ BACKEND_ENV_VAR = "LINGTAI_FILE_IO_BACKEND"
 _VALID_BACKENDS = frozenset({"auto", "rust", "python"})
 
 
+@dataclass(frozen=True, slots=True)
+class FileIOConstructionSnapshot:
+    """File owner inputs captured by the canonical factory."""
+
+    backend_mode: str
+    sidecar_override: str | None = field(repr=False)
+    sidecar_override_source: str | None
+
+
+_CONSTRUCTION_SNAPSHOT_ATTRIBUTE = "_lingtai_file_io_construction_snapshot"
+
+
+def file_io_construction_snapshot(
+    service: object,
+) -> FileIOConstructionSnapshot | None:
+    """Return the factory-applied File settings snapshot, when available."""
+    snapshot = getattr(service, _CONSTRUCTION_SNAPSHOT_ATTRIBUTE, None)
+    return snapshot if isinstance(snapshot, FileIOConstructionSnapshot) else None
+
+
+def _attach_construction_snapshot(
+    service: Any,
+    *,
+    backend_mode: str,
+    sidecar_override: str | None,
+    sidecar_override_source: str | None,
+) -> Any:
+    setattr(
+        service,
+        _CONSTRUCTION_SNAPSHOT_ATTRIBUTE,
+        FileIOConstructionSnapshot(
+            backend_mode=backend_mode,
+            sidecar_override=sidecar_override,
+            sidecar_override_source=sidecar_override_source,
+        ),
+    )
+    return service
+
+
 def default_file_io_service(
     root: Path | str | None = None,
     *,
@@ -684,13 +734,26 @@ def default_file_io_service(
         )
 
     if selection == "python":
-        return LocalFileIOService(root=root)
+        return _attach_construction_snapshot(
+            LocalFileIOService(root=root),
+            backend_mode=selection,
+            sidecar_override=None,
+            sidecar_override_source=None,
+        )
 
     # Environment selection is a service-construction input: a valid value
     # stays strict and pinned for this service's lifetime. When it is absent
     # or invalid, retain the existing fallback to automatic sources; that
     # adapter re-resolves only packaged/dev-tree binaries per call.
-    env_binary = resolve_sidecar_binary(skip_packaged=True, skip_dev_tree=True)
+    env_value, env_source = _binary_from_env_with_source()
+    env_binary = resolve_sidecar_binary(
+        explicit=env_value,
+        skip_env=True,
+        skip_packaged=True,
+        skip_dev_tree=True,
+    )
+    if env_binary is None:
+        env_source = None
     binary = env_binary or resolve_sidecar_binary(skip_env=True)
     if binary is None:
         if selection == "rust":
@@ -702,10 +765,20 @@ def default_file_io_service(
                 code="not_configured",
             )
         # auto: soft fallback to pure Python.
-        return LocalFileIOService(root=root)
+        return _attach_construction_snapshot(
+            LocalFileIOService(root=root),
+            backend_mode=selection,
+            sidecar_override=None,
+            sidecar_override_source=None,
+        )
 
     if env_binary:
         rust_backend = RustFileIOBackend(root=root, binary_path=env_binary)
     else:
         rust_backend = RustFileIOBackend(root=root, adapter=SidecarAdapter.autodiscover())
-    return LocalFileIOService(backend=rust_backend)
+    return _attach_construction_snapshot(
+        LocalFileIOService(backend=rust_backend),
+        backend_mode=selection,
+        sidecar_override=env_binary,
+        sidecar_override_source=env_source,
+    )

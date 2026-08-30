@@ -1328,7 +1328,7 @@ def test_detached_lingtai_file_surface_executes_against_parent_workdir(tmp_path)
     assert {schema.name for schema in schemas}.issuperset({"file"})
     file_schema = next(s for s in schemas if s.name == "file")
     assert file_schema.parameters["properties"]["action"]["enum"] == [
-        "read", "write", "edit", "glob", "grep", "manual",
+        "read", "write", "edit", "glob", "grep", "settings", "manual",
     ]
 
     write_result = dispatch["file"]({

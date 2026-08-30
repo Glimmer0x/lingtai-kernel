@@ -83,6 +83,9 @@ DEFAULT_WALLTIME_S: float = 8.0
 #: Default max number of filesystem entries (files + dirs) inspected.
 DEFAULT_MAX_VISITED: int = 20_000
 
+#: Default maximum number of matches returned by one glob traversal.
+DEFAULT_GLOB_MAX_RESULTS: int = 2_000
+
 #: Default per-file size limit (bytes) read for grep. Files larger than this
 #: are skipped (counted in ``TraversalStats.files_skipped_size``).
 DEFAULT_MAX_FILE_BYTES: int = 4 * 1024 * 1024  # 4 MiB
@@ -173,7 +176,7 @@ class FileIOBackend(ABC):
         exclude_dirs: frozenset[str] | set[str] | None = None,
         walltime_s: float | None = DEFAULT_WALLTIME_S,
         max_visited: int | None = DEFAULT_MAX_VISITED,
-        max_results: int | None = 2000,
+        max_results: int | None = DEFAULT_GLOB_MAX_RESULTS,
     ) -> list[str]:
         """Find files matching a glob pattern."""
         ...
@@ -312,7 +315,7 @@ class LocalFileIOBackend(FileIOBackend):
         exclude_dirs: frozenset[str] | set[str] | None = None,
         walltime_s: float | None = DEFAULT_WALLTIME_S,
         max_visited: int | None = DEFAULT_MAX_VISITED,
-        max_results: int | None = 2000,
+        max_results: int | None = DEFAULT_GLOB_MAX_RESULTS,
     ) -> list[str]:
         """Find files matching ``pattern`` under ``root``.
 
@@ -508,7 +511,7 @@ class LocalFileIOService(FileIOService):
         exclude_dirs: frozenset[str] | set[str] | None = None,
         walltime_s: float | None = DEFAULT_WALLTIME_S,
         max_visited: int | None = DEFAULT_MAX_VISITED,
-        max_results: int | None = 2000,
+        max_results: int | None = DEFAULT_GLOB_MAX_RESULTS,
     ) -> list[str]:
         return self._backend.glob(
             pattern,

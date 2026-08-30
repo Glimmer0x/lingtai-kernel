@@ -507,11 +507,11 @@ class TestSchemaInvariance:
 
         base = get_schema()
         assert base["properties"]["action"]["enum"] == [
-            "read", "write", "edit", "glob", "grep", "manual",
+            "read", "write", "edit", "glob", "grep", "settings", "manual",
         ]
         assert base["required"] == ["action", "input", "reasoning"]
         read_props = next(
-            branch for branch in base["properties"]["input"]["oneOf"]
+            branch for branch in base["properties"]["input"]["anyOf"]
             if branch["title"] == "read input"
         )["properties"]
         assert "file_path" in read_props

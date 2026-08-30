@@ -1,7 +1,7 @@
 ---
 name: file-contract
 tool: file
-contract_version: 4
+contract_version: 5
 related_files:
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/manual/SKILL.md
@@ -13,17 +13,21 @@ related_files:
   - src/lingtai/tools/file/_edit.py
   - src/lingtai/tools/file/_glob.py
   - src/lingtai/tools/file/_grep.py
+  - src/lingtai/tools/file/settings.py
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/_file_paths.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/services/file_io_sidecar.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
   - tests/test_file_tool_family.py
   - tests/test_execution_workspace.py
   - tests/test_file_tool_plugin_package.py
+  - tests/test_file_settings.py
+  - tests/test_tool_settings_contract.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Contract is normative
   for interface and behavior; if verified implementation drifts, repair the code
@@ -39,12 +43,13 @@ maintenance: |
 
 `file` is the one public model-facing tool for reading, writing, editing, and
 searching the working tree. It is an LTP v2 family (`../CONTRACT.md`) composed
-from six canonical children through the generic `ToolFamily` infrastructure.
+from seven canonical children through the generic `ToolFamily` infrastructure.
 The implementation lives in `src/lingtai/tools/file/__init__.py`; Anatomy follows
 its verified structure, while this Contract is normative for the interface and
 behavior. `DECLARATION` is a static official host-plugin declaration:
-the kernel reserves `file`, the production host grants only `workdir` and
-`file_io`, and the registrar — not this package — mounts the bound family.
+the kernel reserves `file`, the production host grants only `workdir`,
+`file_io`, and an immutable setup-selected `configuration` snapshot, and the
+registrar — not this package — mounts the bound family.
 `FileIOPort` carries precisely File's text read/write/search and runtime-cap
 vocabulary; no operation receives a whole Agent or raw service object.
 
@@ -76,11 +81,12 @@ inputs/outputs/errors -> §Per-action behavior; caps and continuation ->
   are **not** aliases: `read`, `write`, `edit`, `glob`, and `grep` are unknown
   capability names and fail loudly with the registry's standard unknown-name
   error. `file` is a real capability, not a group.
-- Canonical children: `read | write | edit | glob | grep | manual`. Each child
+- Canonical children: `read | write | edit | glob | grep | settings | manual`.
+  Each child
   name is simultaneously the public `action` value and the dispatch key — one
   name, no mapping layer.
-- Non-goals: no second summarizer, no family-owned result envelope, no
-  settings surface, and no hidden prompt/context lifecycle side effect. In
+- Non-goals: no second summarizer, no family-owned result envelope, no settings
+  writer/file/overlay, and no hidden prompt/context lifecycle side effect. In
   particular, `write` and `edit` mutate only the requested durable file: they do
   not reload, recompose, or otherwise mutate the current system prompt. An
   explicit `context.rebuild` (or passive refresh/molt reconstruction) is the
@@ -98,10 +104,12 @@ Action/input correlation is enforced twice, both generated from the same child
 registry:
 
 1. **Schema level** — a root `allOf` of one `if`/`then` per child correlates
-   the `action` const with that exact child's `input` schema, and the retained
-   `input.oneOf` discloses every action's shape in one place. Both survive to
-   the Chat and Responses wires (`llm/openai/adapter.py:_scrub_responses_schema`
-   preserves root `oneOf`/`allOf`).
+   the `action` const with that exact child's `input` schema, and
+   `input.anyOf` discloses every action's shape in one place. `anyOf` is
+   required because the strict-empty `settings` and `manual` inputs overlap;
+   root correlation keeps them distinct. Both survive to the Chat and
+   Responses wires (`llm/openai/adapter.py:_scrub_responses_schema` preserves
+   root `anyOf`/`allOf`).
 2. **Dispatch** — `ToolFamily.handle` rejects an unknown action, a non-boolean
    `summarize`, an unknown root field, a non-object `input`, and any `input`
    key outside the selected child's own declared schema, all before the
@@ -114,6 +122,7 @@ registry:
 | `edit` | `file_path`, `old_string`, `new_string` | `replace_all` | `{status: "ok", replacements}` receipt |
 | `glob` | `pattern` | `path` | sorted `matches`, `count`, traversal block |
 | `grep` | `pattern` | `path`, `glob`, `max_matches` | `matches`, `count`, `truncated`, traversal block |
+| `settings` | — (strict empty) | — | complete five-field File inventory or one fixed failure |
 | `manual` | — (strict empty) | — | canonical `content`/`structuredContent` manual result |
 
 Optional fields use the provider-compatible nullable representation (declared
@@ -234,11 +243,56 @@ Errors: `pattern is required`; `Grep failed: <exc>`.
   handled through `bash` with an explicit encoding, per `file-manual` — the
   operations are not complicated to accommodate them.
 
+## Settings discovery
+
+Guarded by: [F002](BEHAVIORS.md#behavior-f002)
+
+`settings` is the generic SHOW-only action injected by File's explicit
+`ToolPluginDeclaration(settings=True)` plus its bound `FileSettingsProvider`.
+It accepts only `input={}`, appears immediately before `manual`, performs no
+write, and returns rows with exactly and in order `key`, `current`, `default`,
+`configurable`, `comment`. Provider or serialization defects fail the whole
+inventory with the shared fixed `SETTINGS_UNAVAILABLE` result; the shared
+65,536-byte bound fails whole with `SETTINGS_RESPONSE_TOO_LARGE`. Sensitive
+rows redact both current and default.
+
+The exact ordered owner inventory is:
+
+1. `read.default_line_limit` — `2000/2000`, immutable.
+2. `read.default_max_chars` — `100000/100000`, immutable.
+3. `read.runtime_max_chars` — fresh effective runtime cap, default `200000`,
+   immutable from File's owner boundary.
+4. `glob.max_results` — `2000/2000`, immutable.
+5. `grep.default_max_matches` — `200/200`, immutable.
+6. `grep.max_file_bytes` — `4194304/4194304`, immutable.
+7. `search.max_visited` — `20000/20000`, immutable.
+8. `search.walltime_seconds` — `8.0/8.0`, immutable.
+9. `search.excluded_directories` — sorted canonical default exclusions,
+   immutable.
+10. `search.sidecar_timeout_seconds` — `30.0/30.0`, immutable.
+11. `text.encoding` — `utf-8/utf-8`, immutable.
+12. `backend.mode` — normalized applied construction snapshot; default `auto`;
+    configurable through the existing explicit factory argument or
+    `LINGTAI_FILE_IO_BACKEND` before construction.
+13. `backend.sidecar` — one fully redacted applied sidecar-override row;
+    configurable before construction through canonical
+    `LINGTAI_FILE_IO_SIDECAR`, then legacy `LINGTAI_SEARCH_SIDECAR` alias.
+
+The first eleven rows are genuine public File policy and therefore
+`configurable=false`: per-call narrowing does not mutate their defaults and
+File exposes no owner change procedure. The construction snapshot is captured
+by `default_file_io_service` and passed through the existing immutable
+`ConfigurationPort`; SHOW never rereads ambient backend environments. The
+manual owns meaning, source, precedence, and change procedures. File has no
+LTP settings file, no generic set/reset, and no duplicate legacy-sidecar row.
+Execution-workspace presence, containment, and root are authority/runtime
+state, not settings, and must not appear.
+
 ## Risk posture
 
 `file` is a **mixed read/write family** and must be declared as such.
 
-- `read`, `grep`, `glob`, and `manual` are read-only.
+- `read`, `grep`, `glob`, `settings`, and `manual` are read-only.
 - `write` and `edit` mutate the working tree.
 
 Per `../CONTRACT.md` invariant 9, a family must not hide a stronger child
@@ -249,7 +303,8 @@ at the time of this migration — the enforcement owner is the operation itself
 before. Should an outer guard or annotation surface be introduced and prove
 unable to discriminate per action, the truthful family-level declaration is the
 **strongest** child posture — mutating, not read-only. Declaring `file`
-read-only because four of six children are would be a false posture.
+read-only merely because five of its seven children are read-only would be a
+false posture.
 
 `summarize` is honored for `file` through the single centralized summarizer
 (`kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES`); no second
@@ -275,14 +330,18 @@ carries the full body at `content[0].text` and the host-local path at
 points at for read pagination and truncation depth. It is not a second
 top-level manual action and is not reachable as its own `action`.
 
-`file` surfaces no LTP settings file at either the family or action level; the
-manual states this explicitly rather than staying silent.
+`file` surfaces no LTP settings file at either the family or action level. Its
+SHOW inventory is source/snapshot-backed and the manual states the owner
+procedures explicitly.
 
 ## State & storage
 
-None. The bound `ToolFamily` holds only operation closures over the granted
-`WorkdirPort` and `FileIOPort`. All I/O goes through the narrow port; the read
-cap's runtime ceiling is observed through that port, never stored.
+No mutable state. The bound `ToolFamily` holds operation closures over the
+granted `WorkdirPort` and `FileIOPort`, plus one immutable, bounded File
+construction snapshot through `ConfigurationPort`; its sensitive sidecar value
+is repr-hidden and projected only through full redaction. All I/O goes through
+the narrow port; the read cap's runtime ceiling is observed fresh through that
+port, never stored by File settings.
 
 ## Anchored claims
 
@@ -297,22 +356,25 @@ cap's runtime ceiling is observed through that port, never stored.
 | Write/edit receipts are returned verbatim | `file/_write.py`, `file/_edit.py` | `tests/test_file_tool_family.py::test_write_and_edit_receipts_are_verbatim` |
 | Chat and Responses wires keep the correlation | `llm/openai/adapter.py` | `tests/test_file_tool_family.py::test_chat_and_responses_wire_parity` |
 | `summarize` is honored and never reaches a handler | `kernel/tool_result_summary.py` | `tests/test_file_tool_family.py::test_summarize_is_recognized_and_stripped` |
+| Exact 13-row SHOW, redaction, anchors, snapshot and no mutation | `file/settings.py`, `services/file_io_sidecar.py` | `tests/test_file_settings.py` |
 
 ## Verification matrix
 
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
-| One public root, six actions | `tests/test_file_tool_family.py` | boot an agent, inspect `_tool_handlers` | duplicate/old model roots reappear |
+| One public root, seven actions | `tests/test_file_tool_family.py` | boot an agent, inspect `_tool_handlers` | duplicate/old model roots reappear |
 | Envelope closed and correlated | `tests/test_file_tool_family.py` | inspect `get_schema()` | model sends cross-action input |
 | Per-operation behavior unchanged | `tests/test_layers_file.py`, `tests/test_read_continuation.py` | read a large file, resume via `next_offset` | silent data loss on long reads |
 | Receipts not obscured | `tests/test_file_tool_family.py` | `write` then inspect the raw result | agent cannot confirm a mutation |
 | Manual is no-I/O | `tests/test_file_tool_family.py` | call `action="manual"` on a read-only tree | manual becomes a side-effecting call |
+| Settings is exact SHOW-only | `tests/test_file_settings.py`, `tests/test_tool_settings_contract.py` | call `settings` before/after ambient env change | stale, partial, or mutable inventory |
 
 Run before merging:
 
 ```bash
-python -m pytest tests/test_file_tool_family.py tests/test_layers_file.py \
-  tests/test_read_continuation.py tests/test_intrinsic_manual_actions.py -q
+python -m pytest tests/test_file_settings.py tests/test_file_tool_family.py \
+  tests/test_layers_file.py tests/test_read_continuation.py \
+  tests/test_intrinsic_manual_actions.py tests/test_tool_settings_contract.py -q
 ```
 
 ## Schema and glossary ownership
