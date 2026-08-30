@@ -1894,7 +1894,7 @@ class TestSoulConfig:
         # (post-migration they no longer sit at the flat root, where every
         # other action advertised them too).
         branch = next(
-            b for b in schema["properties"]["input"]["oneOf"]
+            b for b in schema["properties"]["input"]["anyOf"]
             if b["title"] == "config input"
         )
         props = branch["properties"]

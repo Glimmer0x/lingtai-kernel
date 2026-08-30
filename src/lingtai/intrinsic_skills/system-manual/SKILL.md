@@ -4,8 +4,8 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.19.0
-last_changed_at: "2026-08-28T00:00:00Z"
+version: 1.19.1
+last_changed_at: "2026-08-29T00:00:00Z"
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, settings, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
@@ -156,7 +156,7 @@ The router table is the routing authority; this list is the inventory.
 | LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |
 | Authorized external attach; macOS `/usr/bin/sample`; exact PID/agent-dir incarnation verification; bounded content-free stacks; guarded controlled external `mcp.*` burst; diagnostic privacy | `reference/external-attach-diagnostic/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `context-manual` |
-| Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
+| Soul tool; read-only Soul settings inventory; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |
 | Knowledge-entry layout and private durable memory | `knowledge-manual` |
 | MCP registration/activation/addon ownership | `mcp-manual` |

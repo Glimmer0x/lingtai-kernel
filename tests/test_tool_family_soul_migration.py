@@ -1,9 +1,10 @@
 """``soul``'s migration onto the generic ToolFamily infra: action separation
 without any change to what soul actually does.
 
-The public tool name (``soul``) and its six action values (``inquiry``,
-``flow``, ``config``, ``voice``, ``dismiss``, ``manual``) are unchanged. What
-moved is only the *argument shape*: the pre-migration flat root advertised
+The public tool name (``soul``) and its existing six action values (``inquiry``,
+``flow``, ``config``, ``voice``, ``dismiss``, ``manual``) are unchanged; the
+generic read-only ``settings`` action is additive. What moved in the original
+migration is only the *argument shape*: the pre-migration flat root advertised
 every action's parameters to every action at once (``inquiry`` sat next to
 ``delay_seconds`` next to ``prompt``), so nothing at the schema level said
 which parameter belonged to which action. Post-migration each action owns one
@@ -27,7 +28,9 @@ from lingtai.tools import soul
 from lingtai.tools.soul import handle
 from lingtai.tools.tool_family import ToolFamilyError
 
-_ACTIONS = ("inquiry", "flow", "config", "voice", "dismiss", "manual")
+_ACTIONS = (
+    "inquiry", "flow", "config", "voice", "dismiss", "settings", "manual",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -94,13 +97,14 @@ def _flow_disabled_by_default(monkeypatch):
 def _branch(action: str) -> dict:
     schema = soul.get_schema("en")
     return next(
-        b for b in schema["properties"]["input"]["oneOf"]
-        if b["title"] == f"{action} input"
+        b for b in schema["properties"]["input"]["anyOf"]
+        if b["title"]
+        == ("settings inventory input" if action == "settings" else f"{action} input")
     )
 
 
 # ---------------------------------------------------------------------------
-# Schemas — all six children, strict and action-scoped.
+# Schemas — all seven children, strict and action-scoped.
 # ---------------------------------------------------------------------------
 
 
@@ -118,14 +122,17 @@ def test_root_is_the_closed_ltp_v2_envelope():
     assert schema["properties"]["summarize"]["type"] == "boolean"
 
 
-def test_public_action_values_are_unchanged_by_the_migration():
+def test_public_actions_include_the_additive_settings_child():
     assert soul.get_schema("en")["properties"]["action"]["enum"] == list(_ACTIONS)
 
 
 def test_every_action_has_its_own_strict_closed_input_branch():
     schema = soul.get_schema("en")
-    branches = schema["properties"]["input"]["oneOf"]
-    assert [b["title"] for b in branches] == [f"{a} input" for a in _ACTIONS]
+    branches = schema["properties"]["input"]["anyOf"]
+    assert [b["title"] for b in branches] == [
+        "settings inventory input" if action == "settings" else f"{action} input"
+        for action in _ACTIONS
+    ]
     for branch in branches:
         assert branch["type"] == "object"
         assert branch["additionalProperties"] is False
@@ -148,7 +155,7 @@ def test_action_input_correlation_is_declared_at_the_schema_root():
         assert condition["if"]["properties"]["action"]["const"] == action
         assert condition["if"]["required"] == ["action"]
         then_input = condition["then"]["properties"]["input"]
-        # Same canonical child schema the ``oneOf`` branch discloses (the
+        # Same canonical child schema the ``anyOf`` branch discloses (the
         # branch only adds the presentational ``title``), so the correlation
         # layer and the disclosure layer cannot drift apart.
         assert then_input == {
@@ -172,7 +179,7 @@ def test_action_parameters_are_no_longer_advertised_to_every_action():
         assert leaked not in root_props
     assert set(_branch("inquiry")["properties"]) == {"inquiry"}
     assert set(_branch("voice")["properties"]) == {"set", "prompt"}
-    for no_input_action in ("flow", "dismiss", "manual"):
+    for no_input_action in ("flow", "dismiss", "settings", "manual"):
         assert _branch(no_input_action)["properties"] == {}
 
 
@@ -228,7 +235,7 @@ def test_no_action_or_input_field_can_enable_flow(agent):
     schema = soul.get_schema("en")
     every_input_field = {
         field
-        for branch in schema["properties"]["input"]["oneOf"]
+        for branch in schema["properties"]["input"]["anyOf"]
         for field in branch["properties"]
     }
     assert every_input_field == {
@@ -566,6 +573,7 @@ def test_manual_performs_no_soul_operation(agent, monkeypatch):
         ("voice", {"consultation_past_count": 1}),
         ("flow", {"delay_seconds": 300}),
         ("dismiss", {"inquiry": "hi"}),
+        ("settings", {"set": "voice"}),
         ("manual", {"inquiry": "hi"}),
     ],
 )
@@ -597,7 +605,7 @@ def test_unknown_action_preserves_souls_own_error(agent):
     assert result == {
         "error": (
             "Unknown soul action: meditate. Use inquiry, config, voice, "
-            "dismiss, manual, or wait for flow (mechanical)."
+            "dismiss, settings, manual, or wait for flow (mechanical)."
         )
     }
 
@@ -704,14 +712,17 @@ def test_flat_pre_migration_flow_args_are_now_rejected(agent):
 def test_schema_and_dispatch_come_from_one_registry(agent):
     """There is no second child list to drift: the module-level schema-only
     family and the per-call agent-bound family are built by the same
-    ``_build_children`` from the same ``_CHILD_SPECS`` + reserved manual."""
-    from lingtai.tools.tool_family import ToolFamily
+    declaration plus reserved settings/manual children."""
 
     schema_names = tuple(
-        b["title"].removesuffix(" input")
-        for b in soul.get_schema("en")["properties"]["input"]["oneOf"]
+        (
+            "settings"
+            if b["title"] == "settings inventory input"
+            else b["title"].removesuffix(" input")
+        )
+        for b in soul.get_schema("en")["properties"]["input"]["anyOf"]
     )
-    dispatch_names = ToolFamily("soul", soul._build_children(agent)).child_names
+    dispatch_names = tuple(child.name for child in soul._build_children(agent))
     assert schema_names == dispatch_names == _ACTIONS
 
 
@@ -774,7 +785,9 @@ def test_agent_composition_keeps_reasoning_required_on_both_wires(tmp_path):
         assert len(soul_schemas) == 1
         chat = _build_tools(soul_schemas)[0]["function"]["parameters"]
         responses = _build_responses_tools(soul_schemas)[0]["parameters"]
-        for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+        prompt = live._build_system_prompt()
+        assert isinstance(prompt, str) and prompt
+        for wire in (chat, responses):
             assert set(wire["properties"]) == {
                 "action", "input", "reasoning", "summarize",
             }
@@ -783,7 +796,10 @@ def test_agent_composition_keeps_reasoning_required_on_both_wires(tmp_path):
             # schema is what keeps it required.
             assert wire["required"] == ["action", "input", "reasoning"]
             assert wire["properties"]["action"]["enum"] == list(_ACTIONS)
-            branches = wire["properties"]["input"][combinator]
-            assert [b["title"] for b in branches] == [f"{a} input" for a in _ACTIONS]
+            branches = wire["properties"]["input"]["anyOf"]
+            assert [b["title"] for b in branches] == [
+                "settings inventory input" if action == "settings" else f"{action} input"
+                for action in _ACTIONS
+            ]
     finally:
         live.stop(timeout=1.0)

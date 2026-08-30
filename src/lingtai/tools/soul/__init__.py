@@ -60,6 +60,7 @@ from .flow import (
 )
 from .inquiry import _run_inquiry as _run_inquiry_impl
 from .inquiry import soul_inquiry as _soul_inquiry_impl
+from .settings import soul_settings_provider
 
 if TYPE_CHECKING:
     from lingtai.kernel.tool_plugin import SoulRuntimePort, ToolPluginHost, WorkdirPort
@@ -297,7 +298,7 @@ _DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 _DESCRIPTION = (
-    "Your inner voice. One tool, six actions, each with its own strict input "
+    "Your inner voice. One tool, seven actions, each with its own strict input "
     "object: soul(action=..., input={...}, reasoning='why'). flow is OPT-IN "
     "and DISABLED by default: it runs only when the operator sets env "
     "LINGTAI_SOUL_FLOW_ENABLED=1 (then refreshes). While disabled, "
@@ -310,7 +311,8 @@ _DESCRIPTION = (
     "yourself a question; answer returns in the tool result. config: tune flow "
     "knobs at runtime (delay_seconds, consultation_past_count) — does not enable "
     "flow. voice: read or choose how your own soul-flow voice sounds. dismiss: "
-    "clear the current flow notification. manual: return the installed "
+    "clear the current flow notification. settings: show Soul's five current "
+    "settings without changing them. manual: return the installed "
     "soul-manual skill without performing any soul operation. Results are "
     "small, so leave root summarize false (short-result profile); call manual "
     "with summarize=false so the exact procedure is not summarized away. See "
@@ -352,17 +354,21 @@ def _build_family(
     children = _build_declared_children(runtime)
     if runtime is None:
         children.append(ChildTool("manual", MANUAL_INPUT_SCHEMA, lambda _i: {}, title="manual input"))
+        settings_provider = tuple
     else:
         children.append(build_manual_child(manual_source, DECLARATION.manual))
-    return ToolFamily(DECLARATION.name, children)
+        settings_provider = soul_settings_provider(runtime)
+    return ToolFamily(
+        DECLARATION.name,
+        children,
+        settings_provider=settings_provider,
+    )
 
 
 def _build_children(agent: Any) -> list[ChildTool]:
     """Compatibility test/hook view of the same declaration-owned children."""
     if agent is None:
-        return _build_declared_children(None) + [
-            ChildTool("manual", MANUAL_INPUT_SCHEMA, lambda _i: {}, title="manual input")
-        ]
+        return list(_build_family(None)._children.values())
     runtime = _coerce_runtime(agent)
     return list(_build_family(runtime, runtime)._children.values())
 
@@ -386,7 +392,8 @@ def _handle_bound(runtime: "SoulRuntimePort", manual_source: Any, args: Mapping[
         return {
             "error": (
                 f"Unknown soul action: {action if action is not None else ''}. "
-                "Use inquiry, config, voice, dismiss, manual, or wait for flow (mechanical)."
+                "Use inquiry, config, voice, dismiss, settings, manual, or wait "
+                "for flow (mechanical)."
             )
         }
     return result
@@ -413,6 +420,7 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind,
     requires=("workdir", "soul_runtime"),
     glossary_package=__package__,
+    settings=True,
 )
 
 SOUL_ACTIONS: tuple[str, ...] = DECLARATION.public_actions
