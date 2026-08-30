@@ -254,8 +254,11 @@ exactly twenty grantable names: `workdir`, `prompt_section`, `avatar_parent`,
 `provider_identity`: `mcp`
 consumes the first two as its base reference; Avatar, Context, and Daemon
 consume their respective narrow runtime ports; Email consumes `workdir` plus its
-Email-owned `email_runtime`; File consumes exactly `workdir` plus kernel-owned
-`file_io`; and Plugin consumes `workdir`, its own `prompt_section`, and the
+Email-owned `email_runtime`; File consumes exactly `workdir`, kernel-owned
+`file_io`, and the setup-selected immutable `configuration` port carrying its
+bounded factory snapshot (the sensitive sidecar value is private and redacted
+before projection); and Plugin consumes `workdir`, its own
+`prompt_section`, and the
 read-only `plugin_catalog` projection; Shell consumes `workdir` plus
 `notifications` and `configuration` for its existing durable async execution
 semantics; Soul consumes `workdir` plus its explicit `soul_runtime`
@@ -535,8 +538,9 @@ preserve Notification Core delay/timer and Store behavior:
 - Email's static declaration, canonical package manual, one mounted schema, no
   capability/manifest manager row, null/disable parity, and a production adapter
   that observes a replaced manager at call time without intrinsic dispatch;
-- File's exact `workdir`/`file_io` grant, typed adapter without Agent/generic
-  dispatch/mount authority, unchanged five operations plus reserved manual,
+- File's exact `workdir`/`file_io`/`configuration` grant, typed adapters without
+  Agent/generic dispatch/mount authority, unchanged five operations plus
+  generic SHOW-only settings immediately before reserved manual,
   established `file-manual` runtime destination with no second `file` install,
   and one live registrar mount.
 - Notification's static `DECLARATION`, exact `workdir`/`notification_state`

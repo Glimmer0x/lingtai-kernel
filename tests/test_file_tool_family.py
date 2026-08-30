@@ -1,7 +1,7 @@
 """Focused evidence for the unified ``file`` LTP v2 family migration.
 
 Covers the migration's own promises: exactly one public ``file`` root with the
-six canonical children, the closed root envelope, exact action/input
+seven canonical children, the closed root envelope, exact action/input
 correlation on both the Chat and Responses wires, per-child dispatch/result/
 error behavior, the family-owned no-I/O manual, read continuation and
 line-truncation through the family, verbatim write/edit receipts, grep/glob,
@@ -24,7 +24,9 @@ from lingtai.kernel.tool_result_summary import summary_requested
 from lingtai.tools.file import get_description, get_schema
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
-CANONICAL_ACTIONS = ["read", "write", "edit", "glob", "grep", "manual"]
+CANONICAL_ACTIONS = [
+    "read", "write", "edit", "glob", "grep", "settings", "manual"
+]
 
 
 @pytest.fixture
@@ -109,7 +111,7 @@ def test_schema_root_is_closed_action_input_reasoning_summarize():
 def test_no_branch_admits_envelope_fields():
     """``reasoning``/``_reasoning``/``summarize`` never leak into child input."""
     schema = get_schema()
-    for branch in schema["properties"]["input"]["oneOf"]:
+    for branch in schema["properties"]["input"]["anyOf"]:
         for leaked in ("reasoning", "_reasoning", "summarize", "action"):
             assert leaked not in branch["properties"], f"{branch['title']} leaks {leaked}"
         assert branch["additionalProperties"] is False
@@ -126,9 +128,10 @@ def test_every_child_schema_is_exact():
         ),
         "glob input": ({"pattern", "path"}, {"pattern"}),
         "grep input": ({"pattern", "path", "glob", "max_matches"}, {"pattern"}),
+        "settings inventory input": (set(), set()),
         "manual input": (set(), set()),
     }
-    branches = {b["title"]: b for b in get_schema()["properties"]["input"]["oneOf"]}
+    branches = {b["title"]: b for b in get_schema()["properties"]["input"]["anyOf"]}
     assert set(branches) == set(expected)
     for title, (properties, non_nullable) in expected.items():
         branch = branches[title]
@@ -148,7 +151,7 @@ def test_root_allof_correlates_each_action_to_its_input():
     schema = get_schema()
     conditions = schema["allOf"]
     assert len(conditions) == len(CANONICAL_ACTIONS)
-    branches = {b["title"]: b for b in schema["properties"]["input"]["oneOf"]}
+    branches = {b["title"]: b for b in schema["properties"]["input"]["anyOf"]}
 
     for action, condition in zip(CANONICAL_ACTIONS, conditions):
         assert condition["if"]["properties"]["action"]["const"] == action
@@ -156,7 +159,10 @@ def test_root_allof_correlates_each_action_to_its_input():
         # is what makes the correlation real.
         assert condition["if"]["required"] == ["action"]
         then_input = condition["then"]["properties"]["input"]
-        branch = branches[f"{action} input"]
+        title = (
+            "settings inventory input" if action == "settings" else f"{action} input"
+        )
+        branch = branches[title]
         assert set(then_input["properties"]) == set(branch["properties"])
         assert then_input["additionalProperties"] is False
 
@@ -164,8 +170,8 @@ def test_root_allof_correlates_each_action_to_its_input():
 def test_schema_branches_do_not_share_mutable_state():
     """Two calls, and the two surfaces, never alias one container."""
     first, second = get_schema(), get_schema()
-    first["properties"]["input"]["oneOf"][0]["properties"].pop("file_path")
-    assert "file_path" in second["properties"]["input"]["oneOf"][0]["properties"]
+    first["properties"]["input"]["anyOf"][0]["properties"].pop("file_path")
+    assert "file_path" in second["properties"]["input"]["anyOf"][0]["properties"]
     assert "file_path" in first["allOf"][0]["then"]["properties"]["input"]["properties"]
 
 
@@ -181,15 +187,17 @@ def test_chat_and_responses_wire_parity():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+    for wire in (chat, responses):
         assert wire["type"] == "object"
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["action"]["enum"] == CANONICAL_ACTIONS
-        # Nested ``oneOf`` is rewritten to ``anyOf`` on the Responses wire only.
-        branches = wire["properties"]["input"][combinator]
-        assert [b["title"] for b in branches] == [f"{a} input" for a in CANONICAL_ACTIONS]
+        branches = wire["properties"]["input"]["anyOf"]
+        assert [b["title"] for b in branches] == [
+            "read input", "write input", "edit input", "glob input",
+            "grep input", "settings inventory input", "manual input",
+        ]
         # Root ``allOf`` correlation survives on both wires.
         assert len(wire["allOf"]) == len(CANONICAL_ACTIONS)
         for action, condition in zip(CANONICAL_ACTIONS, wire["allOf"]):
@@ -375,7 +383,7 @@ def test_unknown_action_fails_with_stable_typed_error(file_agent):
     result = _call(file_agent, "delete", {})
     assert result["status"] == "failed"
     assert result["error_code"] == "ACTION_REQUIRED"
-    assert "read, write, edit, glob, grep, manual" in result["message"]
+    assert "read, write, edit, glob, grep, settings, manual" in result["message"]
 
 
 @pytest.mark.parametrize(

@@ -218,12 +218,17 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   The adapter flattens an already-normalized request into one manager call and
   reads the manager at call time; Email has no dynamic `setup()` bridge.
 - `src/lingtai/tools/file/__init__.py` is the sixth accepted vertical slice. Its
-  static `DECLARATION` preserves `read | write | edit | glob | grep | manual`
-  and binds only `workdir` plus the earned `file_io` port. `setup(agent)` captures
+  static `DECLARATION` preserves `read | write | edit | glob | grep`, opts into
+  generic `settings` immediately before `manual`, and binds only `workdir`, the
+  earned `file_io` port, and a setup-selected `configuration` snapshot.
+  `setup(agent)` captures
   the live File service and executor as separate narrow objects, builds
-  `AgentFileIOAdapter`, and grants it only through `extra_ports_for`; the adapter
-  owns no Agent, `Any` surface, generic dispatch, or mount authority. The package
-  manual is the sole body and installs at the established `file-manual` path.
+  `AgentFileIOAdapter`, captures the canonical File factory's bounded backend
+  construction snapshot in `StaticConfigurationAdapter`, and grants both only
+  through `extra_ports_for`; the adapters
+  own no Agent, `Any` surface, generic dispatch, or mount authority. The package
+  manual is the sole body and installs at the established `file-manual` path;
+  no File settings file or writer is introduced.
 - `src/lingtai/tools/plugin/__init__.py` is the seventh accepted vertical slice.
   Its static `DECLARATION` preserves the read-only `info | manual` family and
   binds only `workdir`, its own `prompt_section`, and the earned

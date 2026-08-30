@@ -307,7 +307,8 @@ accepted vertical slices with their narrow earned ports. The kernel's closed
 `shutdown`, `task_card_lifecycle`, `task_card_notifications`,
 `active_provider`, `web_runtime`, and `provider_identity`. Email retains its
 call-time manager port,
-File retains `workdir`/`file_io`, Plugin retains its protected prompt section and
+File retains `workdir`/`file_io` plus a setup-selected immutable
+`configuration` snapshot, Plugin retains its protected prompt section and
 read-only `plugin_catalog` projection, and always-on Notification retains
 `workdir`/`notification_state` with Core-bound callbacks, Soul retains
 `workdir` plus its explicit `soul_runtime` live-self port, and System retains
@@ -628,9 +629,11 @@ non-goal for third-party-versus-third-party mounts.
   `soul-manual`. Email's declaration
   binds only `workdir`/`email_runtime`; its focused suite proves the typed port,
   one mount/no capability row, canonical manual, and call-time replacement
-  manager. File's declaration binds only `workdir`/`file_io`; its focused suites
-  prove the typed adapter, exact grant, preserved operations, one mount, sole
-  package body at `file-manual`, and wheel/sdist package-data route. Task Card's
+  manager. File's declaration binds only
+  `workdir`/`file_io`/`configuration`; its focused suites prove the typed
+  adapters, exact grant, preserved operations, exact source/snapshot-backed
+  13-row SHOW with no writer/file, one mount, sole package body at
+  `file-manual`, and wheel/sdist package-data route. Task Card's
   declaration binds only
   `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications`; its
   focused suites (`tests/test_task_card_controller.py`,
@@ -751,9 +754,12 @@ call time without intrinsic or official-handler dispatch (see
 `src/lingtai/tools/email/CONTRACT.md`).
 
 `file` is the sixth declared vertical slice. Its declaration binds exactly
-`workdir` and kernel-owned `file_io`; `AgentFileIOAdapter` exposes only typed
-text/search operations plus traversal and result-cap facts, and setup supplies it
-only through `extra_ports_for`. The package manual is the one operational body,
+`workdir`, kernel-owned `file_io`, and an immutable `configuration` snapshot;
+`AgentFileIOAdapter` exposes only typed text/search operations plus traversal
+and result-cap facts, and setup supplies it together with the factory-applied
+bounded backend snapshot only through `extra_ports_for`; the sensitive sidecar
+value is fully redacted before projection. The package manual
+is the one operational body,
 installed at `capabilities/file-manual` (see
 `src/lingtai/tools/file/CONTRACT.md`).
 
@@ -770,7 +776,7 @@ global runtime table, and no automatic provider/browser fallback beyond the
 family's one documented OpenAI→DuckDuckGo runtime fallback (see
 `src/lingtai/tools/web_search/CONTRACT.md`).
 
-Separately, `file` (`read | write | edit | glob | grep | manual`) is the fourth family
+Separately, `file` (`read | write | edit | glob | grep | settings | manual`) is the fourth family
 migrated to the LTP envelope contract, and the first aggregation of several former public
 roots into one: its final model-facing root is exactly `action`, `input`,
 `reasoning`, and `summarize`. The migration was a clean break rather than an
@@ -778,7 +784,9 @@ adapter layer — the five old model-facing roots, their implementation packages
 their per-operation contracts and glossaries, and their capability names were
 all deleted, with the behavior folded into the single `lingtai.tools.file`
 owner. Those five capability names are now unknown and fail loudly; `file`
-surfaces no settings file at either level and says so in its manual (see
+surfaces no settings file at either level. Its `settings` action is strict,
+SHOW-only, provider-bound, and immediately before `manual`; it exposes exactly
+the File owner's 13 policy/selector rows without adding set/reset (see
 `src/lingtai/tools/file/CONTRACT.md`).
 
 `vision` (`analyze | check | list | manual`) is the fifth: it keeps its public
@@ -1036,11 +1044,14 @@ required — see its own
 binding on it exactly as it is on every family.
 
 `file` is that illustration realized: one family with actions
-`read | write | edit | glob | grep | manual` whose six implementations remain
-fully independent, sharing nothing but the family name and the wire envelope —
+`read | write | edit | glob | grep | settings | manual` whose five operation
+implementations remain fully independent, sharing nothing but the family name
+and the wire envelope —
 co-located in one package as `_read.py`, `_write.py`, `_edit.py`, `_glob.py`,
 and `_grep.py`, where none imports another. Single ownership is not shared
 implementation.
+The generic settings child and package manual remain separate reserved siblings;
+neither couples the five operation modules.
 It is also the worked example of the family-boundary rule above — the five
 operations are one family because they act on one working tree through one
 authority (the injected `FileIOService`) under one sandbox, not because their

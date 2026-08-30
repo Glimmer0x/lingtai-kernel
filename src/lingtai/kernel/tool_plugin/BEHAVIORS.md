@@ -96,8 +96,9 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 
    Expect `mcp ('info',) ('info', 'settings', 'manual') ('workdir', 'prompt_section')` and
    `file ('read', 'write', 'edit', 'glob', 'grep') ('read', 'write', 'edit',
-   'glob', 'grep', 'manual') ('workdir', 'file_io')`. No `Agent` was constructed;
-   each reserved `manual` action is appended, not declared.
+   'glob', 'grep', 'settings', 'manual') ('workdir', 'file_io',
+   'configuration')`. No `Agent` was constructed; reserved generic `settings`
+   and `manual` actions are injected/appended, not declared as operations.
 
    Then prove the twelfth slice's declaration the same way:
 
@@ -146,7 +147,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 3. Prove a declaration is granted exactly its `requires` and nothing more:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.file import DECLARATION; h = ToolPluginHost.grant(DECLARATION, {'workdir': object(), 'file_io': object(), 'prompt_section': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.file import DECLARATION; h = ToolPluginHost.grant(DECLARATION, {'workdir': object(), 'file_io': object(), 'configuration': object(), 'prompt_section': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
    ```
 
    Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime',
@@ -154,11 +155,12 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    'notification_state', 'notifications', 'configuration', 'soul_runtime',
    'system_runtime', 'identity', 'shutdown', 'task_card_lifecycle',
    'task_card_notifications', 'active_provider', 'web_runtime',
-   'provider_identity') ('workdir', 'file_io')` printed,
+   'provider_identity') ('workdir', 'file_io', 'configuration')` printed,
    then an `AttributeError` whose message says the plugin *did not require host
    port* `'prompt_section'`. Confirm `tool_mount` is absent from
-   `GRANTABLE_HOST_PORTS`: File receives exactly `WorkdirPort` plus `FileIOPort`,
-   even when the host table contains another grantable port. The same rule
+   `GRANTABLE_HOST_PORTS`: File receives exactly `WorkdirPort`, `FileIOPort`,
+   and its immutable setup-selected `ConfigurationPort`, even when the host
+   table contains another grantable port. The same rule
    covers the ports `agent_host_ports` always builds — `avatar_parent` and
    `plugin_catalog` — so run:
 
