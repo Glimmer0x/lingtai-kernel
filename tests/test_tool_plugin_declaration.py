@@ -246,12 +246,24 @@ def test_official_task_card_mount_keeps_the_current_agent_lifecycle(task_card_ag
     assert not hasattr(manager, "_agent")
     handler = task_card_agent._tool_handlers["task_card"]
     assert handler.__self__ is manager
+    settings = handler({"action": "settings", "input": {}, "reasoning": "inspect"})
+    assert [row["key"] for row in settings["settings"]] == [
+        "interval_s", "timeout_s", "max_refreshes", "reminder_turns", "max_body_chars"
+    ]
+    assert not manager._config_path.exists()
     manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
     assert manual["status"] == "ok"
     assert manual["content"][0]["text"]
     assert manual["structuredContent"]["manual_path"].endswith(
         "capabilities/task_card/SKILL.md"
     )
+    task_card_agent.start()
+    prompt = task_card_agent._build_system_prompt()
+    batches = task_card_agent._build_system_prompt_batches()
+    schemas = task_card_agent._build_tool_schemas()
+    assert isinstance(prompt, str) and prompt
+    assert batches and all(isinstance(batch, str) for batch in batches)
+    assert "task_card" in {schema.name for schema in schemas}
 
 
 def test_official_task_card_manager_holds_only_the_native_notification_operations(

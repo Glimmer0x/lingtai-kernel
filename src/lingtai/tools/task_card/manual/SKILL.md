@@ -3,7 +3,7 @@ name: task_card-manual
 description: >
   Manual for the intrinsic `task_card` capability: the declarative Task Card
   artifact, its renderer watch lifecycle, and the one-card-per-agent contract.
-last_changed_at: 2026-08-01T00:00:00Z
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
 - src/lingtai/tools/task_card/__init__.py
 - src/lingtai/tools/task_card/ANATOMY.md
@@ -11,10 +11,10 @@ related_files:
 - src/lingtai/kernel/tool_plugin/CONTRACT.md
 maintenance: |
   Keep this manual aligned with the intrinsic task_card capability's actual
-  action surface, the exact taskcard/status and taskcard/taskcard.md file
-  contract, and the one-card-per-agent lifecycle. Update it with the paired
-  Anatomy/Contract whenever the renderer contract, file paths, or stop/order
-  semantics change.
+  action/settings surface, the exact taskcard/status and taskcard/taskcard.md
+  file contract, and the one-card-per-agent lifecycle. Update it with the
+  paired Anatomy/Contract whenever the renderer contract, settings, file paths,
+  or stop/order semantics change.
 ---
 
 # task_card manual
@@ -50,7 +50,8 @@ a stale descriptor (renderer gone, budget exhausted, corrupt file) is cleared
 on boot and leaves the card `inactive` rather than silently resurrecting a
 dead watch.
 
-Actions are `start`, `inspect`, `retry`, `stop`, `remove`, and `manual`.
+Actions are `start`, `inspect`, `retry`, `stop`, `remove`, `settings`, and
+`manual`. The declaration inserts `settings` immediately before `manual`.
 
 ## Call shape and packaged manual
 
@@ -62,6 +63,78 @@ installed `capabilities/task_card/SKILL.md` through the granted workdir port;
 it does not enter the watch manager or require a whole Agent. The declaration
 also fixes the public action inventory, so the schema, dispatch family, and
 manual cannot silently drift.
+
+## Settings
+
+Call `settings` with exact `input={}` to SHOW the five numeric policies owned
+by `taskcard/taskcard.json`. Every row contains only `key`, `current`,
+`default`, `configurable`, and `comment`; the comment points back to one exact
+section below for meaning, source, validation, application timing, and change
+procedure.
+
+SHOW is read-only. It never creates or changes `taskcard/taskcard.json`, never
+runs the one-time migration, and has no set/reset form. A `configurable: true`
+row means an authorized owner may create the JSON object when absent or edit it
+with File or Shell outside SHOW, preserving all other fields; it does not grant
+that authority. After an authorized change, call `settings(input={})` again to
+verify the fresh effective value. An invalid or missing field falls back
+independently to its built-in default. If effective truth is unavailable, the
+whole inventory fails with no partial rows or raw exception detail.
+
+### interval-s
+
+- Meaning: default polling cadence in seconds for a newly started or resumed
+  watch. An explicit `start.interval_s` replaces it, subject to the same
+  one-second floor.
+- Source/default: valid `taskcard/taskcard.json` `interval_s`, otherwise `5`.
+  It must be a non-boolean finite number at least `1`.
+- Application/change: read for each `start` and persisted-watch resume; an
+  already-running watch keeps its captured cadence. An authorized owner edits
+  only `interval_s` in the owner document, preserves sibling fields, then
+  verifies with a second SHOW.
+
+### timeout-s
+
+- Meaning: per-render execution ceiling in seconds for a newly started or
+  resumed watch. An explicit `start.timeout_s` may lower but never raise it.
+- Source/default: valid `taskcard/taskcard.json` `timeout_s`, otherwise `10`.
+  It must be a non-boolean finite number at least `0.1`.
+- Application/change: read for each `start` and persisted-watch resume; an
+  already-running watch keeps its captured ceiling. An authorized owner edits
+  only `timeout_s`, preserves sibling fields, then verifies with a second SHOW.
+
+### max-refreshes
+
+- Meaning: refresh ceiling for a newly started or resumed watch. An explicit
+  `start.max_refreshes` may lower but never raise it.
+- Source/default: valid positive integer `taskcard/taskcard.json`
+  `max_refreshes`, otherwise `2000`. Before the intrinsic document exists, a
+  genuinely customized positive legacy Telegram ceiling is the effective
+  one-time migration preview; the untouched legacy default `1000` is ignored.
+- Application/change: read for each `start` and persisted-watch resume; an
+  existing watch keeps its captured budget. SHOW previews the migration result
+  without writing it. An authorized owner edits only `max_refreshes`, preserves
+  sibling fields, then verifies with a second SHOW.
+
+### reminder-turns
+
+- Meaning: completed text turns between absent-or-stale Task Card reminders.
+- Source/default: valid positive integer `taskcard/taskcard.json`
+  `reminder_turns`, otherwise `10`.
+- Application/change: read on every completed text turn. An authorized owner
+  edits only `reminder_turns`, preserves sibling fields, then verifies with a
+  second SHOW.
+
+### max-body-chars
+
+- Meaning: maximum rendered Task Card body accepted by the producer;
+  oversized bodies are refused rather than truncated.
+- Source/default: integer `taskcard/taskcard.json` `max_body_chars` at least
+  `100`, otherwise `2000`.
+- Application/change: read on every body publication. An authorized owner
+  edits only `max_body_chars`, preserves sibling fields, then verifies with a
+  second SHOW. Body content, renderer paths, and unrelated document fields are
+  never settings rows.
 
 ## Typed notification boundary
 

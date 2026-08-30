@@ -34,7 +34,7 @@ from lingtai.kernel import notifications
 from lingtai.kernel._fsutil import atomic_write_json, read_json
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
-from ..tool_family import ChildTool, ToolFamily
+from ..tool_family import ChildTool, SettingRow, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
 if TYPE_CHECKING:
@@ -295,14 +295,14 @@ _DESCRIPTION = (
     "and current. Restart a new watch when one expires mid-task. Use stop to "
     "pause a watch while preserving its last body, and remove once the work is "
     "completed, cancelled, or abandoned so the artifact cannot mislead a consumer "
-    "as stale. Actions: start, inspect, retry, stop, remove, manual."
+    "as stale. Actions: start, inspect, retry, stop, remove, settings, manual."
 )
 
 _ACTION_DESCRIPTION = (
     "Declarative Task Card action. start keeps one renderer watch writing the "
     "agent-local taskcard/status and taskcard/taskcard.md files; inspect, retry, "
     "and stop read or control that one artifact; remove is the terminal lifecycle "
-    "cleanup; manual explains the full contract."
+    "cleanup; settings shows current owner policy; manual explains the full contract."
 )
 
 
@@ -1175,6 +1175,10 @@ class TaskCardManager:
         """
         if not self._config_path.is_file():
             return self._migrate_legacy_config()
+        return self._read_owner_config()
+
+    def _read_owner_config(self) -> _Config:
+        """Read the intrinsic owner document with the runtime's per-field fallbacks."""
         try:
             data = read_json(self._config_path, expect=dict)
         except (OSError, ValueError, TypeError):
@@ -1185,6 +1189,72 @@ class TaskCardManager:
             self._config_max_refreshes(data.get("max_refreshes")),
             self._config_reminder_turns(data.get("reminder_turns")),
             self._config_max_body_chars(data.get("max_body_chars")),
+        )
+
+    def _legacy_config(self) -> _Config:
+        """Resolve the one-time legacy ceiling without writing intrinsic state."""
+        try:
+            legacy = read_json(self._legacy_config_path, expect=dict)
+        except (OSError, ValueError, TypeError):
+            legacy = None
+        legacy_max = legacy.get("max_refreshes") if legacy is not None else None
+        if (
+            type(legacy_max) is not int
+            or legacy_max <= 0
+            or legacy_max == _LEGACY_UNTOUCHED_MAX_REFRESHES
+        ):
+            return _BUILTIN_CONFIG
+        return _Config(
+            _DEFAULT_INTERVAL_S,
+            _DEFAULT_TIMEOUT_S,
+            legacy_max,
+            _DEFAULT_REMINDER_TURNS,
+            _MAX_BODY_CHARS,
+        )
+
+    def settings_rows(self) -> tuple[SettingRow, ...]:
+        """Return fresh five-field owner facts without triggering migration."""
+        config = (
+            self._read_owner_config()
+            if self._config_path.is_file()
+            else self._legacy_config()
+        )
+        return (
+            SettingRow(
+                "interval_s",
+                config.interval_s,
+                _DEFAULT_INTERVAL_S,
+                True,
+                "task_card-manual#interval-s",
+            ),
+            SettingRow(
+                "timeout_s",
+                config.timeout_s,
+                _DEFAULT_TIMEOUT_S,
+                True,
+                "task_card-manual#timeout-s",
+            ),
+            SettingRow(
+                "max_refreshes",
+                config.max_refreshes,
+                _DEFAULT_MAX_REFRESHES,
+                True,
+                "task_card-manual#max-refreshes",
+            ),
+            SettingRow(
+                "reminder_turns",
+                config.reminder_turns,
+                _DEFAULT_REMINDER_TURNS,
+                True,
+                "task_card-manual#reminder-turns",
+            ),
+            SettingRow(
+                "max_body_chars",
+                config.max_body_chars,
+                _MAX_BODY_CHARS,
+                True,
+                "task_card-manual#max-body-chars",
+            ),
         )
 
     def _migrate_legacy_config(self) -> _Config:
@@ -1210,25 +1280,7 @@ class TaskCardManager:
         again for this agent, so a later change to the Telegram-owned file
         cannot alter intrinsic policy.
         """
-        try:
-            legacy = read_json(self._legacy_config_path, expect=dict)
-        except (OSError, ValueError, TypeError):
-            legacy = None
-        legacy_max = legacy.get("max_refreshes") if legacy is not None else None
-        if (
-            type(legacy_max) is not int
-            or legacy_max <= 0
-            or legacy_max == _LEGACY_UNTOUCHED_MAX_REFRESHES
-        ):
-            resolved = _BUILTIN_CONFIG
-        else:
-            resolved = _Config(
-                _DEFAULT_INTERVAL_S,
-                _DEFAULT_TIMEOUT_S,
-                legacy_max,
-                _DEFAULT_REMINDER_TURNS,
-                _MAX_BODY_CHARS,
-            )
+        resolved = self._legacy_config()
         try:
             atomic_write_json(
                 self._config_path,
@@ -1362,6 +1414,7 @@ def _build_family(
             ),
             manual_child,
         ],
+        settings_provider=manager.settings_rows if manager is not None else tuple,
     )
 
 
@@ -1404,6 +1457,7 @@ DECLARATION = ToolPluginDeclaration(
     # Every requirement is exercised by the current lifecycle: workdir-owned
     # artifacts/manual, shutdown polling, the retained manager, and its notices.
     requires=("workdir", "shutdown", "task_card_lifecycle", "task_card_notifications"),
+    settings=True,
 )
 
 # Retain the producer's existing notification channel, derived from the one

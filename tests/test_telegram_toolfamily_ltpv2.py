@@ -193,15 +193,20 @@ def test_taskcard_refresh_setting_positive_value_round_trips(tmp_path):
 def test_intrinsic_task_card_schema_is_a_strict_ltp_v2_family():
     schema = task_card_schema()
     names = schema["properties"]["action"]["enum"]
-    branches = schema["properties"]["input"]["oneOf"]
+    branches = schema["properties"]["input"]["anyOf"]
 
     assert schema["required"] == ["action", "input", "reasoning"]
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
     assert schema["additionalProperties"] is False
-    assert names == ["start", "inspect", "retry", "stop", "remove", "manual"]
+    assert names == [
+        "start", "inspect", "retry", "stop", "remove", "settings", "manual"
+    ]
     assert len(schema["allOf"]) == len(names) == len(branches)
     for action, branch, condition in zip(names, branches, schema["allOf"]):
-        assert branch["title"] == f"{action} input"
+        expected_title = (
+            "settings inventory input" if action == "settings" else f"{action} input"
+        )
+        assert branch["title"] == expected_title
         assert condition["if"]["properties"]["action"]["const"] == action
 
 

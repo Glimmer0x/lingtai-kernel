@@ -138,7 +138,7 @@ def test_public_export_and_only_this_owner_opts_in():
         name: importlib.import_module(f"lingtai.tools.{modules.get(name, name)}").DECLARATION
         for name in OFFICIAL_TOOL_PLUGIN_NAMES
     }
-    expected_official = {"avatar", "plugin", "system"}
+    expected_official = {"avatar", "plugin", "system", "task_card"}
     assert {name for name, item in declarations.items() if item.settings} == expected_official
     for name, item in declarations.items():
         assert ("settings" in item.public_actions) is (name in expected_official)

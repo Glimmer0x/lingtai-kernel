@@ -1,6 +1,6 @@
 ---
 name: task-card-behavior-tests
-behavior_version: 1
+behavior_version: 2
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -11,7 +11,9 @@ related_files:
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/mcp_servers/task_card/resident.py
+  - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
+  - tests/test_tool_settings_contract.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -22,8 +24,8 @@ maintenance: |
 
 Self-contained agent behavior tasks guarding the observable behavior clauses of
 `src/lingtai/tools/task_card/CONTRACT.md` (start writes body then exact active,
-second start fails closed, stop/remove semantics, watch persistence, and the
-typed notification boundary). Pinned
+second start fails closed, stop/remove semantics, watch persistence, the
+read-only settings provider, and the typed notification boundary). Pinned
 pytest commands must run from the repo root with the project's Python.
 
 ## Behavior TK001 — start writes the body atomically before exact active, and a second start fails closed
@@ -71,3 +73,27 @@ Pass when the suites pass and the ordering/idempotency observations hold. Fail o
 
 ### Pass / Fail
 Pass when the typed suite passes, all three event forms retain their exact wire parity, and every foreign-field/source/channel attempt fails before publication at both boundaries. Fail if a caller can choose a source/channel, inject arbitrary publisher metadata, reach a generic publisher through the granted port, or alter the established event identity.
+
+## Behavior TK003 — settings SHOW stays exact, read-only, and owner-bounded
+
+- **id**: TK003
+- **title**: settings SHOW stays exact, read-only, and owner-bounded
+- **guards**: `intrinsic-task-card` § Behavior rule 15
+- **runner**: any LingTai agent with `shell` access to this repository
+- **prerequisites**: a clean checkout of `<repo>` and the focused Task Card fixtures
+- **estimate**: ≈ 10 minutes
+
+### Steps
+1. From `<repo>`, run `PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_task_card_controller.py tests/test_tool_settings_contract.py` and capture every outcome.
+2. Inspect the five rows and verify exact key order, fresh current/default values, configurable flags, five-field-only projection, and exact owner-manual anchors.
+3. Change valid and invalid owner-document fields, preview a customized legacy ceiling before migration, force the provider to fail, and attempt a nonempty settings input.
+4. Verify SHOW creates or changes no owner document, returns no partial inventory on failure, omits paths/body/watch/unknown fields, and leaves ordinary Task Card lifecycle behavior unchanged.
+
+### Expected evidence
+- [ ] Step 1: the owner and generic settings suites pass with the exact cumulative production opt-in set.
+- [ ] Step 2: every row is exactly `key`/`current`/`default`/`configurable`/`comment`, and every comment names a real Task Card manual heading.
+- [ ] Step 3: current values follow the runtime's owner-document validation and built-in fallback, while a pre-migration custom legacy ceiling is previewed without a write; invalid input and unavailable truth fail closed.
+- [ ] Step 4: no write, migration, operational-state leak, partial row, or ordinary lifecycle change is observed.
+
+### Pass / Fail
+Pass when the five rows remain exact and truthful, change procedures stay outside SHOW, failure is bounded and whole-action, and existing Task Card behavior is unchanged. Fail on an extra field, stale value, writer, path/body leak, missing manual target, unrelated owner opt-in, or lifecycle regression.
