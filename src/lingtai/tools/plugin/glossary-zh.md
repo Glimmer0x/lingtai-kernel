@@ -16,5 +16,5 @@ maintenance: |
 **术语对照**
 
 - `plugin`：Agent Plugins（agent-plugins.org v1.0.0）标准名，原 locale catalog 未定义 model-facing 本地化别名；调用名、action 枚举值和参数名均保持上方 canonical English。
-- `action` / `input` / `reasoning` / `summarize`：LTP v2 信封四字段，字面量不本地化；`info`、`manual` 两个 action 取值同样保持 canonical English。
+- `action` / `input` / `reasoning` / `summarize`：LTP v2 信封四字段，字面量不本地化；`info`、`settings`、`manual` 三个 action 取值同样保持 canonical English。
 - `plugin.json` / `mcp.json` / `skills/`：Agent Plugins 标准文件名与目录名，属规范字面量，不译。

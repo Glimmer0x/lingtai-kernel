@@ -5,13 +5,16 @@ description: >
   (agent-plugins.org, v1.0.0) catalog and registration snapshot. Covers what a
   plugin is, the difference between a registered and a merely discovered one,
   how installing and uninstalling actually work, and how to read a skipped
-  component.
+  component. Explains the redacted five-field settings inventory and the
+  existing owner procedure it points to.
 
   Reach for this manual when:
     - The human asks what plugins this agent has, or asks to install, add, or
       remove an Agent Plugin.
     - You want the current snapshot
       (`plugin(action="info", input={}, reasoning="list plugins")`).
+    - You need the declaration policy without exposing configured local paths
+      (`plugin(action="settings", input={}, reasoning="inspect policy")`).
     - You are authoring a `plugin.json` or `mcp.json` and need the required
       fields, the `name` grammar, or the `./`-prefixed path containment rule.
     - A plugin you expect is missing from `<registered_plugin>`, a skill you
@@ -25,10 +28,11 @@ description: >
   capability's manual), or the Agent Plugins specification prose itself (fetch
   https://agent-plugins.org/specification.md with web when you need normative
   wording this router does not carry).
-version: 2.1.0
-last_changed_at: 2026-08-23T00:00:00Z
+version: 2.2.0
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
 - src/lingtai/tools/plugin/__init__.py
+- src/lingtai/tools/plugin/settings.py
 - src/lingtai/tools/plugin/ANATOMY.md
 - src/lingtai/tools/plugin/CONTRACT.md
 - src/lingtai/services/plugin_registry.py
@@ -295,12 +299,11 @@ every rejection carries the label, the offending path, and the reason.
 
 ## Tool surface
 
-Two actions, called through the standard envelope
+Three actions, called through the standard envelope
 `plugin(action=..., input={}, reasoning="...")`. `action`, `input`, and
-`reasoning` are all required; neither action takes any arguments, so `input` is
-always the empty object `{}` — passing any field inside it is rejected before
-the tool does anything. The optional root `summarize` boolean is presentation
-only.
+`reasoning` are all required, and every action requires the empty object `{}`.
+Passing any field inside `input` is rejected before the tool does anything. The
+optional root `summarize` boolean is presentation only.
 
 - `plugin(action="info", input={}, reasoning="...")` returns
   `{status, declared, registered_count, registered, discovered_count,
@@ -313,22 +316,55 @@ only.
     the vanilla `skills` catalog. The protected Plugin field is their namespace.
   - `discovered` is the discovery-only tier.
   - `paths` is a per-configured-path report (`resolved`, `exists`, `plugins`).
+- `plugin(action="settings", input={}, reasoning="inspect plugin policy")`
+  returns one `manifest.plugins` row with exactly `key`, `current`, `default`,
+  `configurable`, and `comment`. Both path-list values are `<redacted>` and the
+  comment is `plugin-manual#plugin-registration-roots`.
 - `plugin(action="manual", input={}, reasoning="...")` returns this manual body
   on demand, without re-scanning.
 
-**Both actions are read-only.** `info` re-scans and reports; it does not
-register. Registration happens at boot, so a plugin you just declared needs
-`system(action="refresh")` before it appears as `registered`.
+**All three actions are model-facing read-only.** `info` re-scans and reports;
+settings reads only the detached boot snapshot and exposes no set, reset, or
+other mutation form. Registration happens at boot, so a plugin you just
+declared needs `system(action="refresh")` before it appears as `registered`.
 
 Every worked call in this manual is written in this full form; there is no
 shorthand to expand.
 
-## Settings and result size
+## Plugin registration roots
 
 This capability owns **no** `<agent-dir>/settings/plugin.json` or
-`settings/plugin.<action>.json` file. Plugin declarations are init.json
-configuration, not tool settings: use `manifest.plugins` and refresh as described
-above.
+`settings/plugin.<action>.json` file, process-environment peer, or generic
+configuration writer. The setting means the ordered list of Agent Plugin roots
+authorized for registration. Accepted values are strings naming absolute,
+tilde-prefixed, or agent-workdir-relative plugin/collection directories.
+`manifest.plugins` is the canonical init.json key;
+`manifest.capabilities.plugin.paths` is its retained compatibility alias, and
+there is no environment peer. The current value comes from the last successful
+boot/refresh registration snapshot, canonical declaration first and alias
+entries de-duplicated; the meaningful default is the empty list `[]`.
+
+Plugin roots are a third-party registration trust boundary and may expose local
+filesystem layout, so SHOW redacts both `current` and `default`. It excludes the
+derived automatic `<workdir>/plugin` registration root and inherited Skills
+discovery paths. Inventory performs no scan and does not inspect `plugin.json`
+or `mcp.json`. `configurable: true` means an authorized configuration owner can
+use the existing init.json procedure outside this action; it does not grant the
+caller write authority.
+
+To change it, an authorized owner uses the existing `file` or `shell` procedure
+to edit canonical `manifest.plugins` in `init.json`, then calls
+`system(action="refresh")`. The new declaration applies during that refresh.
+Call `plugin(action="settings", input={}, reasoning="verify plugin roots")`
+again to verify the refreshed snapshot. The SHOW action itself never edits
+init.json, changes the process environment, registers a plugin, or refreshes the
+agent.
+
+## Result size
+
+The complete `settings` response shares the generic 65,536-byte UTF-8 bound.
+Unavailable or malformed current truth fails the whole action with no rows and
+without private error detail.
 
 `info` is usually small, so leave root `summarize` absent or false when you need
 exact plugin names, source paths, skipped-component reasons, or registry facts.
