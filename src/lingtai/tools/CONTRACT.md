@@ -675,8 +675,9 @@ non-goal for third-party-versus-third-party mounts.
   protected-field skill projection, the closed vanilla-skills namespace, and the
   detached per-read catalog projection, while
   `tests/test_tool_plugin_declaration.py` proves its one mount, its real
-  `info`/`manual` dispatch, and that a standard-table port stays unreachable for
-  a declaration that did not name it. MCP public behavior remains guarded by its
+  `info`/`settings`/`manual` dispatch, and that a standard-table port stays
+  unreachable for a declaration that did not name it. MCP public behavior
+  remains guarded by its
   parity/capability suites; Avatar's static declaration, restricted ports, local
   manual, behavior, and registrar path remain guarded by
   `tests/test_tool_family_avatar_migration.py`.
@@ -963,8 +964,9 @@ See `src/lingtai/tools/mcp/CONTRACT.md`.
 
 `plugin` is `mcp`'s deliberate twin and the only family born on this envelope
 rather than migrated onto it: public tool name `plugin`, actions `info |
-manual`, both taking the canonical strict-empty `input`, same read-only surface
-in the same shape. It renders the per-agent Agent Plugins (agent-plugins.org,
+settings | manual`, all taking the canonical strict-empty `input`. The generic
+provider seam injects settings immediately before manual and offers no mutation
+form. It renders the per-agent Agent Plugins (agent-plugins.org,
 v1.0.0) catalog and boot registration snapshot into the protected `plugin`
 prompt section. The *tool* owns no state and writes no file; mounting a declared
 plugin — composing its `skills/` into the skills catalog and appending its

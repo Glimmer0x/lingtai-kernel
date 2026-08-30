@@ -2,7 +2,7 @@
 
 This official model-facing ``plugin`` family reports third-party Agent Plugins
 (agent-plugins.org v1.0.0); it is not itself an Agent Plugin.  Its public
-``info``/``manual`` surface is read-only presentation:
+``info``/``settings``/``manual`` surface is read-only presentation:
 
 - **Declared → registered.** ``manifest.plugins`` and its compatibility alias
   name package directories.  The Agent registers those packages at boot, before
@@ -32,6 +32,7 @@ from lingtai.kernel.tool_plugin import BoundToolPlugin, PluginCatalogState, Tool
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .settings import plugin_setting_rows
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -159,7 +160,9 @@ def _flatten_manual_result(plugin_result: dict) -> dict:
 _DESCRIPTION = (
     "READ-ONLY: this tool itself installs and runs nothing. `info` re-scans the "
     "configured plugin paths and returns the boot registration snapshot; "
-    "`manual` returns the plugin-manual body. Neither action mounts, "
+    "`settings` shows the redacted manifest.plugins registration roots and "
+    "routes changes to the plugin manual; `manual` returns the plugin-manual "
+    "body. No action mounts, "
     "unmounts, or launches anything. "
     "Your protected per-agent Agent Plugins catalog (agent-plugins.org, v1.0.0). The "
     "<registered_plugin> section in your system prompt lists every visible "
@@ -188,15 +191,17 @@ _ACTION_DESCRIPTION = (
     "info: read-only action; re-scans the configured plugin paths and returns "
     "the boot registration snapshot (registered plugins, their registration "
     "facts, skipped reasons, discovered-only plugins, per-path report, "
-    "problems) without the manual body. manual: return only the plugin-manual "
-    "skill body. Neither action registers or unregisters anything — registration "
+    "problems) without the manual body. settings: show the redacted "
+    "manifest.plugins declaration and its exact manual guidance. manual: "
+    "return only the plugin-manual skill body. No action registers or "
+    "unregisters anything — registration "
     "happens at boot from init.json manifest.plugins, so a newly declared "
     "plugin needs system(action=\"refresh\")."
 )
 
 
 def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
-    """Build the fixed ``info``/``manual`` family from :data:`DECLARATION`."""
+    """Build the fixed ``info``/``settings``/``manual`` declared family."""
     info_input = DECLARATION.input_schemas["info"]
     manual_input = DECLARATION.manual_input_schema
     if host is None:
@@ -214,6 +219,9 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
             ChildTool("info", info_input, info_handler, title="info input"),
             manual_child,
         ],
+        settings_provider=lambda: plugin_setting_rows(
+            host.plugin_catalog if host is not None else None
+        ),
     )
 
 
@@ -270,6 +278,7 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind,
     requires=("workdir", "prompt_section", "plugin_catalog"),
     glossary_package=__package__,
+    settings=True,
 )
 
 

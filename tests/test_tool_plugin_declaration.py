@@ -561,6 +561,7 @@ def test_official_plugin_mount_uses_only_catalog_state_and_real_dispatch(plugin_
     from lingtai.tools.plugin import DECLARATION
 
     assert DECLARATION.requires == ("workdir", "prompt_section", "plugin_catalog")
+    assert DECLARATION.public_actions == ("info", "settings", "manual")
     assert plugin_agent.official_tool_plugins["plugin"] is DECLARATION
     assert [schema.name for schema in plugin_agent._tool_schemas].count("plugin") == 1
 

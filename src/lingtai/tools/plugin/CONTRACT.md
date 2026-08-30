@@ -4,6 +4,7 @@ tool: plugin
 contract_version: 1
 related_files:
   - src/lingtai/tools/plugin/__init__.py
+  - src/lingtai/tools/plugin/settings.py
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/plugin/BEHAVIORS.md
   - src/lingtai/tools/plugin/manual/SKILL.md
@@ -21,10 +22,10 @@ maintenance: |
   contract disagree, the code is the source of truth — fix the contract in the
   same change and bump contract_version on breaking contract edits. plugin's
   schema composition and envelope dispatch build on the generic tool_family
-  package, and its surface is deliberately the twin of mcp's; keep both links
-  current when either side's boundary changes. The Agent Plugins version this
-  kernel understands is pinned in the service as a canonical identifier — bump
-  it here and there together, never independently.
+  package, while its five-field settings opt-in is Plugin-specific; keep the
+  shared mcp links current when either side's common boundary changes. The
+  Agent Plugins version this kernel understands is pinned in the service as a
+  canonical identifier — bump it here and there together, never independently.
 ---
 
 # Plugin capability contract
@@ -32,7 +33,9 @@ maintenance: |
 `plugin` is a read-only tool: it renders the per-agent **Agent Plugins**
 (agent-plugins.org, v1.0.0) catalog and boot registration snapshot into the
 protected `plugin` system-prompt section, and reports what was registered,
-what was not represented, and why. **The tool itself mutates nothing.** Registration happens once, at
+what was not represented, and why. Its reserved `settings` action inventories
+the declaration policy without exposing local paths and has no mutation API.
+**The tool itself mutates nothing.** Registration happens once, at
 boot/refresh, in `services.plugin_registry.register_plugins`, which `Agent` calls
 before capability setup — no model-facing action can reach it. The tool slice
 lives in `src/lingtai/tools/plugin/__init__.py`; the scanning, registration, and
@@ -117,8 +120,9 @@ composition/dispatch infrastructure -> `src/lingtai/tools/tool_family/CONTRACT.m
 - Registered via `capabilities=["plugin"]` or via init.json. Default-on
   (`CORE_DEFAULTS`), which is safe precisely because the capability is pure
   presentation with zero side effects.
-- Symmetric to `mcp`: a per-agent presentation capability with a protected
-  prompt section and exactly the same two actions.
+- Symmetric to `mcp` as a per-agent presentation capability with a protected
+  prompt section; Plugin additionally opts into the generic reserved `settings`
+  action for its redacted registration roots.
 - `registered[].skills` and the protected `<registered_plugin>` field are the
   Plugin namespace. `skills_mounted` is a result flag: it is true only when
   validated plugin skills are present and the skills capability is enabled; it
@@ -132,22 +136,26 @@ composition/dispatch infrastructure -> `src/lingtai/tools/tool_family/CONTRACT.m
 - Non-goals: this *tool* never writes any file. It never copies a plugin's
   skills into `.library/` or the vanilla `skills` catalog (registration retains
   validated skill facts for the protected Plugin field instead — nothing is
-  copied or injected anywhere), never appends to
-  `mcp_registry.jsonl` from an action, and never spawns a process. It is purely
-  `info` (re-scan + report the boot snapshot) and `manual` (return the
-  plugin-manual body).
+  copied or injected anywhere), never appends to `mcp_registry.jsonl` from an
+  action, never mutates `manifest.plugins` or creates a shadow settings
+  document, never changes `os.environ`, and never spawns a process. Its
+  model-facing actions are `info` (re-scan + report the boot snapshot),
+  `settings` (redacted inventory with no mutation form), and `manual` (return
+  the plugin-manual body).
 - Ownership boundary: the module is the agent-callable tool slice only. The
   scanning service is imported lazily inside `_reconcile`, per the
   `lingtai.tools → lingtai` lazy-back-edge rule.
 
 ## Tool surface
+Guarded by: [PL001](BEHAVIORS.md#behavior-pl001)
 
 `plugin` is an LTP v2 action-separated family (`src/lingtai/tools/CONTRACT.md`
 "Envelope") built on the generic `src/lingtai/tools/tool_family/`
 infrastructure. The public tool name is `plugin` and the public action values
-are `info` / `manual`. Exactly two read-only actions; the handler is
-`handle_plugin`, which delegates envelope validation and dispatch to a per-Agent
-`ToolFamily`.
+are `info` / `settings` / `manual`, in that order. The generic seam inserts
+`settings` immediately before `manual`; `handle_plugin` preserves Plugin's
+unknown-action/manual envelopes while delegating envelope validation and
+dispatch to a per-Agent `ToolFamily`.
 
 **Envelope.** The model-facing schema is `get_schema()` =
 `ToolFamily.build_schema()` with a family-specific `action` description. Root
@@ -156,19 +164,20 @@ properties are exactly `action`, `input`, `reasoning`, and `summarize`;
 (`additionalProperties: false`). `reasoning` is required Host
 InvocationContext/audit metadata declared by the family itself, never action
 input. `summarize` is the optional root presentation control, validated as
-boolean and stripped before dispatch. Both actions take **no arguments**, so
-both share the one canonical strict-empty `input`
+boolean and stripped before dispatch. All three actions take **no arguments**;
+`info` and `manual` share the one canonical strict-empty `input`
 (`{type: object, properties: {}, additionalProperties: false}`) — the
 `MANUAL_INPUT_SCHEMA` literal exported by `tool_family.manual` and reused here
-as `_EMPTY_INPUT`, rather than hand-copied per action, so the schema-only and
-dispatching families cannot advertise different shapes. The root
+as `_EMPTY_INPUT`, rather than hand-copied per action. `settings` uses the
+merged generic contract's strict empty-object SHOW schema. The root
 `allOf`/`if`/`then` correlates each `action` const with its own `input` branch,
-and `input.oneOf` discloses both branches with titles
-`info input` / `manual input`.
+and `input.anyOf` discloses all three branches with titles
+`info input` / `settings inventory input` / `manual input`.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `info` | `action="info"`, `input={}`, `reasoning` | `summarize` | re-scans the configured paths, re-injects prompt XML, returns `{status: "ok", declared, registered_count, registered, discovered_count, discovered, mcp_appended, mcp_pruned, paths, problems}` | see below |
+| `settings` | `action="settings"`, `input={}`, `reasoning` | `summarize` | exactly `{"settings":[{"key":"manifest.plugins","current":"<redacted>","default":"<redacted>","configurable":true,"comment":"plugin-manual#plugin-registration-roots"}]}` | fixed generic unavailable/oversize failures |
 | `manual` | `action="manual"`, `input={}`, `reasoning` | `summarize` | `{status: "ok", plugin_manual, manual_path}` | degraded shape below |
 
 `registered` is the boot registration snapshot, one entry per declared plugin:
@@ -198,8 +207,9 @@ Host-owned `_flatten_manual_result` strictly *after* dispatch returns, never
 inside a registered child. `manual` performs no scan.
 
 **Error shapes** (plain dicts):
-- Unknown action: `{"status": "error", "message": "unknown action: <action>, only 'info' or 'manual' is supported"}`. This envelope is Host-owned and rendered by `handle_plugin` *before* delegating, for the two reasons `mcp` established: a missing `action` key renders the empty-string default (not `None`), and an unhashable `action` (`[]` / `{}` from invalid JSON — issue #513) must not reach `ToolFamily.handle`'s dict lookup. Membership is tested against `child_names`, a tuple, whose `in` compares by `==` and never hashes. An unknown action is rejected before any input validation or filesystem I/O.
-- Invalid envelope/input (from the generic dispatcher, canonical and unwrapped): `{"status": "failed", "error_code": "INVALID_ARGUMENT", "message": ...}` for a non-object `input` (`input must be an object`), an unknown root field (`unsupported plugin argument`), a non-boolean `summarize` (`summarize must be a boolean`), or any `input` key outside the selected action's strict-empty schema (`unsupported plugin input field`). Because both actions declare an empty `input`, any extra input field fails **before** the paths are re-scanned or the manual is loaded.
+- Unknown action: `{"status": "error", "message": "unknown action: <action>, only 'info' or 'settings' or 'manual' is supported"}`. This envelope is Host-owned and rendered by `handle_plugin` *before* delegating, for the two reasons `mcp` established: a missing `action` key renders the empty-string default (not `None`), and an unhashable `action` (`[]` / `{}` from invalid JSON — issue #513) must not reach `ToolFamily.handle`'s dict lookup. Membership is tested against `child_names`, a tuple, whose `in` compares by `==` and never hashes. An unknown action is rejected before any input validation or filesystem I/O.
+- Invalid envelope/input (from the generic dispatcher, canonical and unwrapped): `{"status": "failed", "error_code": "INVALID_ARGUMENT", "message": ...}` for a non-object `input` (`input must be an object`), an unknown root field (`unsupported plugin argument`), a non-boolean `summarize` (`summarize must be a boolean`), or any action input key (`unsupported plugin input field`). Malformed calls fail **before** paths are re-scanned, settings are read, or the manual is loaded.
+- Provider unavailable/malformed/unserializable: the generic fixed `SETTINGS_UNAVAILABLE` failure, with no row or private detail. A complete response over 65,536 UTF-8 bytes becomes the fixed `SETTINGS_RESPONSE_TOO_LARGE` failure with no partial rows.
 
 ## State & storage
 
@@ -218,6 +228,11 @@ cache. It only reads:
 write, never touches a record it does not own, and never writes anything under
 `.library/`.
 
+The successful registration snapshot retains `configured_declared` separately
+from operational `declared`. The former is the exact de-duplicated
+canonical-plus-alias input used by settings; the latter may additionally contain
+the derived automatic `<workdir>/plugin` root used by registration and `info`.
+
 Declaration paths come from `init.json` `manifest.plugins` (canonical) and
 `manifest.capabilities.plugin.paths` (alias), canonical-first and de-duplicated.
 The **discovery** scan additionally unions in `manifest.capabilities.skills.paths`,
@@ -233,8 +248,9 @@ directory whose immediate children are plugin roots; a directory carrying
 Do not change any of the following; documented for reviewers only.
 
 - **No model-facing side effects:** no action writes, copies, registers,
-  unregisters, or executes anything. Registration is boot-only and unreachable from
-  the tool surface, which is what keeps the capability safe in `CORE_DEFAULTS`.
+  unregisters, or executes anything. Settings has no set/reset or mutation
+  input. Registration is boot-only and unreachable from the
+  tool surface, which is what keeps the capability safe in `CORE_DEFAULTS`.
 - **Declaration gates registration:** an inherited skills path is scanned and listed
   but never registers anything. Only `manifest.plugins` and its alias mount.
 - **Registration never executes:** a registered MCP server holds a registry
@@ -298,12 +314,13 @@ Do not change any of the following; documented for reviewers only.
 
 | Claim | Source | Test |
 |---|---|---|
-| The static official declaration is reserved, uses only the three narrow ports, and preserves real info/manual dispatch | `src/lingtai/tools/plugin/__init__.py` (`DECLARATION`, `_bind`) | `tests/test_tool_plugin_declaration.py::test_official_plugin_mount_uses_only_catalog_state_and_real_dispatch` |
+| The static official declaration is reserved, uses only the three narrow ports, and preserves real info/settings/manual dispatch | `src/lingtai/tools/plugin/__init__.py` (`DECLARATION`, `_bind`) | `tests/test_tool_plugin_declaration.py::test_official_plugin_mount_uses_only_catalog_state_and_real_dispatch` |
 | The capability renders discovered plugins into the `plugin` prompt section | `src/lingtai/tools/plugin/__init__.py` (`_reconcile`) | `tests/test_plugin_tool.py::test_plugin_capability_renders_catalog_into_prompt` |
 | `info` returns a health snapshot without the manual body | `src/lingtai/tools/plugin/__init__.py` (`_reconcile`) | `tests/test_plugin_tool.py::test_info_returns_catalog_snapshot` |
 | Unknown actions return a `{status: error}` dict, including the unhashable case | `src/lingtai/tools/plugin/__init__.py` (`handle_plugin`) | `tests/test_plugin_tool.py::test_unknown_action_returns_error_envelope` |
 | Public name/actions and the LTP v2 envelope are exact | `src/lingtai/tools/plugin/__init__.py` (`get_schema`) | `tests/test_plugin_tool.py::test_schema_exposes_exact_public_actions_and_envelope` |
-| Both actions declare a strict-empty `input`; extra input fails before I/O | `src/lingtai/tools/plugin/__init__.py` (`_EMPTY_INPUT`, `_build_family`) | `tests/test_plugin_tool.py::test_extra_input_field_is_rejected`, `::test_schema_only_and_dispatching_families_declare_identical_children` |
+| All three actions remain strict-empty | `src/lingtai/tools/plugin/__init__.py` (`_EMPTY_INPUT`, `_build_family`) | `tests/test_plugin_tool.py::test_all_actions_declare_strict_empty_input`, `::test_schema_only_and_dispatching_families_declare_identical_children` |
+| Settings exposes one exact redacted five-field `manifest.plugins` row from configured roots, leaves registry state unchanged, and fails whole-action when current truth is unavailable | `src/lingtai/tools/plugin/settings.py` (`plugin_setting_rows`) | `tests/test_plugin_tool.py::test_settings_exact_redacted_inventory_failure_and_unchanged_info` |
 | A `../` escape is rejected under §4.1 | `src/lingtai/services/plugin_registry.py` (`resolve_contained`) | `tests/test_plugin_tool.py::test_containment_rejects_dotdot_escape` |
 | A symlink escape is rejected under §4.1 | `src/lingtai/services/plugin_registry.py` (`resolve_contained`) | `tests/test_plugin_tool.py::test_containment_rejects_symlink_escape` |
 | A missing/invalid `plugin.json` rejects the whole plugin | `src/lingtai/services/plugin_registry.py` (`read_plugin`) | `tests/test_plugin_tool.py::test_invalid_manifest_rejects_whole_plugin` |

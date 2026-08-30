@@ -3,8 +3,9 @@
 Mirrors ``tests/test_mcp_capability.py`` and
 ``tests/test_tool_family_mcp_migration_parity.py``: the plugin capability is the
 structural twin of ``mcp``, so the same facts are pinned here — family schema,
-``info`` snapshot, unknown-action envelope, strict-empty input, manual
-adaptation — plus the facts unique to this standard: §4.1 path containment
+``info`` snapshot, unknown-action envelope, strict-empty action input, manual
+adaptation — plus Plugin's redacted settings inventory and the facts unique to
+this standard: §4.1 path containment
 (``../`` and symlink escapes) and the two-tier mount contract.
 
 That contract is the thing to keep straight while reading this file. A plugin
@@ -118,6 +119,14 @@ def _registry_lines(workdir: Path) -> list[dict]:
 def _info(agent) -> dict:
     return agent._tool_handlers["plugin"]({
         "action": "info", "input": {}, "reasoning": "inspect plugin state",
+    })
+
+
+def _settings(agent, action_input: dict | None = None) -> dict:
+    return agent._tool_handlers["plugin"]({
+        "action": "settings",
+        "input": {} if action_input is None else action_input,
+        "reasoning": "inspect plugin settings",
     })
 
 
@@ -514,27 +523,35 @@ def test_schema_exposes_exact_public_actions_and_envelope():
     from lingtai.tools.plugin import get_schema
 
     schema = get_schema()
-    assert schema["properties"]["action"]["enum"] == ["info", "manual"]
+    assert schema["properties"]["action"]["enum"] == [
+        "info", "settings", "manual",
+    ]
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema.get("additionalProperties") is False
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
-    assert [b["title"] for b in schema["properties"]["input"]["oneOf"]] == [
-        "info input", "manual input",
+    assert [b["title"] for b in schema["properties"]["input"]["anyOf"]] == [
+        "info input", "settings inventory input", "manual input",
     ]
     action_desc = schema["properties"]["action"]["description"]
     assert "info: read-only action" in action_desc
-    assert "Neither action registers or unregisters anything" in action_desc
+    assert "No action registers or unregisters anything" in action_desc
 
 
-def test_both_actions_declare_the_canonical_strict_empty_input():
+def test_all_actions_declare_strict_empty_input():
     from lingtai.tools.plugin import get_schema
     from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
     schema = get_schema()
-    for branch in schema["properties"]["input"]["oneOf"]:
+    branches = {
+        branch["title"]: branch
+        for branch in schema["properties"]["input"]["anyOf"]
+    }
+    for title in ("info input", "settings inventory input", "manual input"):
+        branch = branches[title]
         assert branch["type"] == "object"
         assert branch.get("properties", {}) == MANUAL_INPUT_SCHEMA.get("properties", {})
         assert branch.get("additionalProperties") is False
+    assert branches["settings inventory input"]["required"] == []
 
 
 def test_schema_only_and_dispatching_families_declare_identical_children(tmp_path):
@@ -546,7 +563,9 @@ def test_schema_only_and_dispatching_families_declare_identical_children(tmp_pat
     host = ToolPluginHost.grant(
         DECLARATION, agent_host_ports(agent, DECLARATION.name)
     )
-    assert _build_family(host).child_names == _FAMILY.child_names == ("info", "manual")
+    assert _build_family(host).child_names == _FAMILY.child_names == (
+        "info", "settings", "manual",
+    )
 
 
 def test_plugin_catalog_state_is_detached_per_read():
@@ -572,6 +591,89 @@ def test_plugin_catalog_state_is_detached_per_read():
     assert second.configured_paths == ("./plugins",)
     assert second.skill_paths == ("./skills",)
     assert second.skills_enabled is True
+
+
+def test_settings_exact_redacted_inventory_failure_and_unchanged_info(
+    tmp_path, monkeypatch,
+):
+    from lingtai.adapters.tool_plugin_host import AgentPluginCatalogAdapter
+    from lingtai.services import plugin_registry
+    from lingtai.tools.plugin.settings import plugin_setting_rows
+    from lingtai.tools.tool_family import SettingRow
+
+    workdir = tmp_path / "agent"
+    _write_plugin(workdir / "plugin", "automatic")
+    canonical = _write_plugin(
+        tmp_path / "packages",
+        "canonical",
+        mcp_servers={
+            "canonical-server": {"type": "stdio", "command": "node"},
+        },
+    )
+    alias = _write_plugin(tmp_path / "aliases", "alias")
+    agent, _workdir = _mk_agent(
+        tmp_path,
+        plugin_paths=[str(canonical), str(alias)],
+        plugins=[str(canonical)],
+        workdir=workdir,
+    )
+    registry_before = _registry_lines(workdir)
+
+    catalog = AgentPluginCatalogAdapter(
+        lambda: agent._plugin_registration,
+        lambda: agent._capabilities,
+    )
+    expected_configured = [str(canonical), str(alias)]
+    assert plugin_setting_rows(catalog) == (
+        SettingRow(
+            "manifest.plugins",
+            expected_configured,
+            [],
+            True,
+            "plugin-manual#plugin-registration-roots",
+            _sensitive=True,
+        ),
+    )
+
+    with monkeypatch.context() as patch:
+        def unexpected_scan(*_args, **_kwargs):
+            raise AssertionError("settings must not scan plugin paths")
+
+        patch.setattr(plugin_registry, "read_plugins", unexpected_scan)
+        result = _settings(agent)
+
+    expected_row = {
+        "key": "manifest.plugins",
+        "current": "<redacted>",
+        "default": "<redacted>",
+        "configurable": True,
+        "comment": "plugin-manual#plugin-registration-roots",
+    }
+    assert result == {"settings": [expected_row]}
+    assert list(result["settings"][0]) == [
+        "key", "current", "default", "configurable", "comment",
+    ]
+    assert agent._plugin_registration["configured_declared"] == expected_configured
+    assert str(workdir / "plugin") in agent._plugin_registration["declared"]
+    assert _registry_lines(workdir) == registry_before
+
+    info = _info(agent)
+    assert info["status"] == "ok"
+    assert {item["name"] for item in info["registered"]} == {
+        "automatic", "canonical", "alias",
+    }
+
+    invalid = _settings(agent, {"set": "manifest.plugins"})
+    assert invalid["status"] == "failed"
+    assert invalid["error_code"] == "INVALID_ARGUMENT"
+
+    agent._plugin_registration = {"declared": [str(canonical)]}
+    assert _settings(agent) == {
+        "status": "failed",
+        "error_code": "SETTINGS_UNAVAILABLE",
+        "message": "settings inventory is unavailable",
+    }
+    assert _registry_lines(workdir) == registry_before
 
 
 def test_info_returns_catalog_snapshot(tmp_path):
@@ -601,6 +703,7 @@ def test_manual_returns_the_installed_body(tmp_path):
     assert result["status"] == "ok"
     assert result["plugin_manual"]
     assert "declaration is what registers" in result["plugin_manual"]
+    assert "## Plugin registration roots" in result["plugin_manual"]
     assert result["manual_path"] == str(
         workdir / ".library" / "intrinsic" / "capabilities" / "plugin" / "SKILL.md"
     )
@@ -614,22 +717,22 @@ def test_unknown_action_returns_error_envelope(tmp_path):
 
     assert handler({"action": "install"}) == {
         "status": "error",
-        "message": "unknown action: 'install', only 'info' or 'manual' is supported",
+        "message": "unknown action: 'install', only 'info' or 'settings' or 'manual' is supported",
     }
     # Missing action key renders the empty-string default, not None.
     assert handler({}) == {
         "status": "error",
-        "message": "unknown action: '', only 'info' or 'manual' is supported",
+        "message": "unknown action: '', only 'info' or 'settings' or 'manual' is supported",
     }
     # Invalid JSON can make `action` unhashable (issue #513): the router must
     # render the unknown-action envelope, not raise TypeError.
     assert handler({"action": []}) == {
         "status": "error",
-        "message": "unknown action: [], only 'info' or 'manual' is supported",
+        "message": "unknown action: [], only 'info' or 'settings' or 'manual' is supported",
     }
     assert handler({"action": {}}) == {
         "status": "error",
-        "message": "unknown action: {}, only 'info' or 'manual' is supported",
+        "message": "unknown action: {}, only 'info' or 'settings' or 'manual' is supported",
     }
 
 
@@ -1370,6 +1473,7 @@ def test_manual_ships_with_the_package():
     assert "### Uninstalling" in body
     assert "### Canonical config key" in body
     assert "`manifest.plugins` is the **canonical** declaration key" in body
+    assert "## Plugin registration roots" in body
 
 
 def test_default_plugin_root_is_scanned_without_declaration(tmp_path):

@@ -807,7 +807,11 @@ def register_plugins(working_dir: Path, declared: list[str]) -> dict:
     from lingtai.services.mcp_registry import _append_record, read_registry
 
     working_dir = Path(working_dir)
-    declared = list(declared or [])
+    # Preserve the authored canonical-plus-alias roots separately from the
+    # automatic <workdir>/plugin registration root. Operational ``declared``
+    # continues to report every scanned registration root.
+    configured_declared = list(declared or [])
+    declared = list(configured_declared)
     # Default plugin root: <workdir>/plugin/ is scanned automatically when it
     # exists, so dropping a plugin directory there needs no init.json entry.
     # Explicit declarations still come first and win duplicate names.
@@ -915,6 +919,7 @@ def register_plugins(working_dir: Path, declared: list[str]) -> dict:
 
     return {
         "declared": declared,
+        "configured_declared": configured_declared,
         "plugins": plugins,
         "skill_paths": skill_paths,
         "mcp_appended": appended,
