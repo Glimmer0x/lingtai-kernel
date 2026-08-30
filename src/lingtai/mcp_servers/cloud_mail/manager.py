@@ -1,11 +1,15 @@
 """CloudMailManager — omnibus ``cloud_mail`` tool + polling coordinator.
 
-One MCP tool, five actions:
+One MCP tool whose business manager handles six operational actions:
   * ``check``    — recent public emails (optional filters).
   * ``search``   — public emailList filters (toEmail/sendEmail/subject/...).
   * ``read``     — one email by compound id ``<account>:<emailId>``.
   * ``send``     — send via user /login + /email/send (needs user creds).
   * ``accounts`` — redacted per-account status (no tokens/passwords).
+  * ``add_user`` — create a Cloud Mail user with admin credentials.
+
+The public family also composes owner-only ``settings`` and packaged ``manual``
+without routing either reserved action through this manager.
 
 Inbound mail is discovered by a per-account polling thread and pushed into
 the host agent's inbox via LICC. Watermarks (highest delivered ``emailId``)
@@ -46,7 +50,9 @@ DESCRIPTION = (
     "(Cloudflare Workers, https://github.com/maillab/cloud-mail). Actions: "
     "check (recent inbound mail), search (filter by sender/recipient/subject/"
     "content), read (full content by compound id '<account>:<emailId>'), send "
-    "(requires user credentials in config), accounts (redacted status). "
+    "(requires user credentials in config), accounts (redacted status), "
+    "add_user (admin operation), settings (redacted owner inventory), and "
+    "manual (packaged guidance). "
     "Inbound mail also arrives automatically in your inbox via polling."
 )
 
@@ -165,10 +171,12 @@ class CloudMailManager:
         accounts: list[dict],
         *,
         working_dir: Path | str | None = None,
+        config_path: Path | str | None = None,
         on_inbound: Callable[[dict], bool | None] | None = None,
         transport=None,
     ) -> None:
         self._working_dir = Path(working_dir) if working_dir else None
+        self._config_path = Path(config_path) if config_path is not None else None
         self._on_inbound = on_inbound
         self._accounts: list[CloudMailAccount] = [
             CloudMailAccount(cfg, working_dir=self._working_dir, transport=transport)
@@ -183,6 +191,11 @@ class CloudMailManager:
                 self._by_alias.setdefault(acct.admin_email.lower(), acct)
         self._poll_stop = threading.Event()
         self._poll_threads: list[threading.Thread] = []
+
+    @property
+    def config_path(self) -> Path | None:
+        """The exact configuration path successfully loaded at startup."""
+        return self._config_path
 
     # -- account resolution --
 

@@ -147,11 +147,54 @@ async def test_resource_server_lists_and_reads_a_resource(build, tool_name):
 async def test_provider_failure_stays_a_readable_tool_error():
     """A not-initialized manager is a recoverable tool error, not -32603."""
     async with Client(build_cloud_mail(None)) as client:
-        result = await client.call_tool("cloud_mail", {"action": "status"})
+        result = await client.call_tool(
+            "cloud_mail",
+            {"action": "accounts", "input": {}, "reasoning": "inspect accounts"},
+        )
 
     assert result.is_error is True
     assert result.structured_content["status"] == "error"
     assert json.loads(result.content[0].text) == result.structured_content
+
+
+async def test_cloud_mail_startup_failure_keeps_operational_behavior_and_strict_settings():
+    async with Client(build_cloud_mail(None)) as client:
+        operational = await client.call_tool(
+            "cloud_mail",
+            {"action": "status", "input": {}, "reasoning": "invalid probe"},
+        )
+        invalid_settings = await client.call_tool(
+            "cloud_mail",
+            {
+                "action": "settings",
+                "input": {"set": "config_path"},
+                "reasoning": "invalid probe",
+            },
+        )
+        settings = await client.call_tool(
+            "cloud_mail",
+            {"action": "settings", "input": {}, "reasoning": "diagnose startup"},
+        )
+
+    assert operational.is_error is True
+    assert operational.structured_content["status"] == "error"
+    startup_guidance = operational.structured_content["error"]
+    assert "manager not initialized" in startup_guidance
+    assert "stderr for the exception class" in startup_guidance
+    assert "verify the environment and configuration" in startup_guidance
+    assert "underlying exception" not in startup_guidance
+    assert invalid_settings.is_error is True
+    assert invalid_settings.structured_content == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": "invalid cloud_mail input",
+    }
+    assert settings.is_error is True
+    assert settings.structured_content == {
+        "status": "failed",
+        "error_code": "SETTINGS_UNAVAILABLE",
+        "message": "settings inventory is unavailable",
+    }
 
 
 async def test_wechat_startup_failure_detail_survives_into_the_tool_result():

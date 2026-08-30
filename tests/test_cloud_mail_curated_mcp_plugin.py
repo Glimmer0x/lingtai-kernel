@@ -74,12 +74,19 @@ def test_catalog_loading_is_unchanged_and_still_the_runtime_source():
 
 
 # ---------------------------------------------------------------------------
-# `manual` is mandatory, reserved, and sourced from the packaged skill
+# `settings`/`manual` are reserved and composed in canonical order
 # ---------------------------------------------------------------------------
 
-def test_package_does_not_declare_manual_and_the_plugin_appends_it_last():
+def test_package_declares_neither_reserved_action_and_plugin_orders_them_last():
+    assert "settings" not in CLOUD_MAIL_DECLARED_ACTIONS
     assert _plugin.MANUAL_ACTION not in CLOUD_MAIL_DECLARED_ACTIONS
-    assert CLOUD_MAIL_ACTIONS == (*CLOUD_MAIL_DECLARED_ACTIONS, "manual")
+    assert CLOUD_MAIL_PLUGIN.settings is True
+    assert CLOUD_MAIL_ACTIONS == (
+        *CLOUD_MAIL_DECLARED_ACTIONS,
+        "settings",
+        "manual",
+    )
+    assert CLOUD_MAIL_ACTIONS[-2:] == ("settings", "manual")
     assert CLOUD_MAIL_ACTIONS[-1] == "manual"
 
 
@@ -107,8 +114,16 @@ def test_a_package_cannot_declare_re_schema_or_rebind_the_reserved_manual(compos
         compose()
 
 
-def test_composed_actions_and_schema_always_carry_a_strict_empty_manual():
+def test_composed_actions_and_schema_carry_settings_then_strict_empty_manual():
     assert _family.CLOUD_MAIL_ACTIONS == CLOUD_MAIL_ACTIONS
+    handlers, schemas = _family.build_cloud_mail_family(_RecordingManager())
+    assert tuple(handlers) == CLOUD_MAIL_ACTIONS
+    assert tuple(schemas) == CLOUD_MAIL_ACTIONS
+    assert _family._cloud_mail_input_schemas()["settings"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
     assert _family._cloud_mail_input_schemas()["manual"] == {
         "type": "object",
         "properties": {},

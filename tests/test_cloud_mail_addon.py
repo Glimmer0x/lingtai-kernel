@@ -510,14 +510,22 @@ def test_failed_allowed_row_stops_batch_and_retries_next_poll(tmp_path, caplog):
 
 def test_build_manager_propagates_false_inbox_result(tmp_path, monkeypatch):
     monkeypatch.setenv("LINGTAI_AGENT_DIR", str(tmp_path))
-    monkeypatch.setattr(cm_server, "load_config", lambda: {
-        "accounts": [{
-            "alias": "cloudmail",
-            "base_url": "https://mail.example.com",
-            "admin_email": "admin@example.com",
-            "admin_password": "adminpw",
-        }],
-    })
+    config_path = tmp_path / "cloud-mail.json"
+    monkeypatch.setattr(
+        cm_server,
+        "_load_config_with_path",
+        lambda: (
+            {
+                "accounts": [{
+                    "alias": "cloudmail",
+                    "base_url": "https://mail.example.com",
+                    "admin_email": "admin@example.com",
+                    "admin_password": "adminpw",
+                }],
+            },
+            config_path,
+        ),
+    )
     monkeypatch.setattr(cm_server, "push_inbox_event", lambda **_kwargs: False)
 
     mgr, _ = cm_server.build_manager()
@@ -528,6 +536,7 @@ def test_build_manager_propagates_false_inbox_result(tmp_path, monkeypatch):
         "metadata": {"email_id": 1},
         "wake": True,
     }
+    assert mgr.config_path == config_path
     assert mgr._on_inbound(event) is False
     mgr.stop()
 
@@ -557,7 +566,10 @@ def test_load_config_resolves_relative_to_agent_dir(tmp_path, monkeypatch):
     (tmp_path / "cm.json").write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setenv("LINGTAI_AGENT_DIR", str(tmp_path))
     monkeypatch.setenv("LINGTAI_CLOUD_MAIL_CONFIG", "cm.json")
+    loaded_with_path, resolved_path = cm_server._load_config_with_path()
     loaded = cm_server.load_config()
+    assert loaded_with_path == loaded
+    assert resolved_path == tmp_path / "cm.json"
     assert loaded == cfg
     accts = cm_server.accounts_from_config(loaded)
     assert accts[0]["base_url"] == "https://m.example.com"
