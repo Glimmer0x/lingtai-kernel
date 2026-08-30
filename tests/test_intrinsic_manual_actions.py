@@ -303,8 +303,8 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert len(file_schema["properties"]["input"]["anyOf"]) == 7
     vision_schema = vision_tool.get_schema()
     assert vision_schema["required"] == ["action", "input", "reasoning"]
-    # analyze / check / list / manual — one branch per public action.
-    assert len(vision_schema["properties"]["input"]["oneOf"]) == 4
+    # analyze / check / list / settings / manual — one branch per public action.
+    assert len(vision_schema["properties"]["input"]["anyOf"]) == 5
     task_card_schema = task_card_tool.get_schema()
     assert task_card_schema["required"] == ["action", "input", "reasoning"]
     assert len(task_card_schema["properties"]["input"]["anyOf"]) == 7

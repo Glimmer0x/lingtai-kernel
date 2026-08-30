@@ -1,6 +1,6 @@
 ---
 name: vision-behavior-tests
-behavior_version: 2
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -14,6 +14,7 @@ related_files:
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_vision_migration.py
   - tests/test_vision_capability.py
+  - tests/test_vision_settings.py
   - tests/test_inherit_fallback.py
 maintenance: |
   Keep this file reciprocal with CONTRACT.md and ANATOMY.md (tridirectional
@@ -24,14 +25,14 @@ maintenance: |
 # Vision Capability Behavior Tests
 
 These self-contained LingTai Agent Behavior Tasks (LABTs) guard the observable
-four-action Vision contract. Pinned pytest commands run from the repository root
+five-action Vision contract. Pinned pytest commands run from the repository root
 with the project's Python, `PYTHONDONTWRITEBYTECODE=1`, and pytest's cache
 provider disabled.
 
-## Behavior VN001 — declaration exposes four strict correlated actions
+## Behavior VN001 — declaration exposes five strict correlated actions
 
 - **id**: VN001
-- **title**: declaration exposes analyze/check/list/manual with strict correlated input branches
+- **title**: declaration exposes analyze/check/list/settings/manual with strict correlated input branches
 - **guards**: `vision-contract` § Scope and declaration
 - **runner**: any LingTai agent with shell and file access to this repository
 - **prerequisites**: a clean checkout of `<repo>`
@@ -40,20 +41,21 @@ provider disabled.
 ### Steps
 1. From `<repo>`, run:
    `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:cacheprovider tests/test_tool_family_vision_migration.py -k 'public_actions or root_schema or child_input_schemas or correlated'`.
-2. Inspect `vision.get_schema()` and record the action enum and the four input
+2. Inspect `vision.get_schema()` and record the action enum and the five input
    branch titles.
 3. Send an unknown action, a non-object input, and a cross-action field through
    the manager; record that each fails before handler/provider work.
 
 ### Expected evidence
 - [ ] The action enum and branch titles are exactly `analyze`, `check`, `list`,
-  `manual`; `analyze` contains `image_path`, `question`, `preset`; `check`
-  contains only `preset`; `list` and `manual` are strict empty objects.
+  `settings`, `manual`; `analyze` contains `image_path`, `question`, `preset`;
+  `check` contains only `preset`; `list`, `settings`, and `manual` are strict
+  empty objects.
 - [ ] Root `action`/`input` correlations survive schema composition and invalid
   envelopes return an error before any provider I/O.
 
 ### Pass / Fail
-Pass when all four actions, strict branches, and correlation guards are present
+Pass when all five actions, strict branches, and correlation guards are present
 and invalid/cross-action calls are rejected before a child runs.
 
 ## Behavior VN002 — analyze uses one explicit route and fails closed
@@ -194,3 +196,39 @@ has no provider/configuration side effects.
 Pass when the local tests prove the narrow Vision-side contract. The shared
 registrar fixture and cumulative port/name union remain serialized integration
 gates, not parallel-lane evidence.
+
+## Behavior VN007 — settings is exact, applied, redacted, and read-only
+
+- **id**: VN007
+- **title**: settings shows one exact five-field applied snapshot without exposing private routing
+- **guards**: `vision-contract` § Settings discovery; § Results, errors, and state
+- **runner**: any LingTai agent with shell and file access to this repository
+- **prerequisites**: a disposable workdir and clearly fake private sentinels
+- **estimate**: ≈ 15 minutes
+
+### Steps
+1. Run:
+   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:cacheprovider tests/test_vision_settings.py tests/test_tool_settings_contract.py`.
+2. Bind a valid local route, change its owner file afterward, and record the
+   exact 13-key order, five-field order, applied current/default values, and
+   unchanged second SHOW.
+3. Bind fake OpenAI and Codex routes carrying endpoint, key pointer/value,
+   header, token-path, and instructions sentinels; verify none renders.
+4. Call settings with a set/reset-shaped input and compare the owner file bytes;
+   then bind an invalid/manual-only route and record the fixed no-row failure.
+5. Run one ordinary analyze call through a recording service.
+
+### Expected evidence
+- [ ] `DECLARATION.settings is True`; `settings` appears exactly once immediately
+  before `manual` on the internal, Chat, and Responses schemas.
+- [ ] Each row is exactly key/current/default/configurable/comment in that order,
+  each comment resolves to its owner heading, and current stays the applied bind
+  snapshot until refresh.
+- [ ] Sensitive inputs never render or remain in the provider snapshot; non-empty
+  input writes nothing; unavailable truth yields no partial rows.
+- [ ] The generic 65,536-byte gate and an ordinary analyze result remain intact.
+
+### Pass / Fail
+Pass when focused tests prove exact order and values, manual anchors, complete
+redaction, all-or-nothing failure, no writer/client construction on SHOW, and
+ordinary-action non-regression.

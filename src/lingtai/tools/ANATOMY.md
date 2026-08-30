@@ -125,8 +125,9 @@ capability names and lazy adapters.
   manual body installed as `file-manual`
   (`src/lingtai/tools/file/ANATOMY.md`).
 - `vision/` — public `vision` composition owner: one action-separated family
-  with canonical `analyze`/`check`/`list`/`manual` children over the existing
-  direct provider routing, declared as the thirteenth official host-plugin
+  with canonical `analyze`/`check`/`list`/`settings`/`manual` children over the
+  existing direct provider routing and one bind-time settings snapshot,
+  declared as the thirteenth official host-plugin
   slice against `workdir`/`active_provider`/`configuration`
   (`src/lingtai/tools/vision/ANATOMY.md`).
 - `browser/` — internal static browse Core/Port used by `web`
@@ -330,14 +331,14 @@ bind, the family-local `TaskCardNotificationsAdapter` consumes only the five
 native notification operations, and the producer stays channel-neutral (it
 writes the `taskcard/` artifact and never calls Telegram/Feishu).
 `src/lingtai/tools/vision/__init__.py` is the thirteenth slice: its
-`DECLARATION` owns the public `analyze | check | list | manual` family and
-binds `VisionManager` against `workdir`, the live read-through
+`DECLARATION` owns the public `analyze | check | list | settings | manual`
+family and binds `VisionManager` against `workdir`, the live read-through
 `active_provider`, and one `configuration` snapshot (`VisionConfiguration`,
 carried as the same `StaticConfigurationAdapter` mapping Shell uses and granted
 to `vision` alone through `extra_ports_for`); default routing uses only the
 active provider, an explicitly allowed `preset` resolves only that preset's own
-credential for the one requested call, `check`/`list`/`manual` make no
-image/provider request, and no provider/credential/MCP fallback is automatic.
+credential for the one requested call, `check`/`list`/`settings`/`manual` make
+no image/provider request, and no provider/credential/MCP fallback is automatic.
 `src/lingtai/tools/web_search/__init__.py` is the fourteenth slice: its
 `DECLARATION` owns the public `search | browse | manual` family and binds
 `WebManager` against `workdir`, the Web-owned typed `web_runtime` composition

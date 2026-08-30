@@ -26,23 +26,25 @@ value, so a placeholder is synthesized. Configure it with
 ``vision`` is migrated to the LingTai Tool Protocol v2 action-separated shape
 (``src/lingtai/tools/CONTRACT.md``): one public ``vision`` tool whose canonical
 children are ``analyze``/``check``/``list`` plus the family-owned reserved
-``manual``, composed and dispatched by the generic
-``lingtai.tools.tool_family`` infrastructure. The public tool name and action
-values are unchanged; only the call envelope moved from flat arguments to
-``action``/``input``/``reasoning``/``summarize``.
+``settings``/``manual`` actions, composed and dispatched by the generic
+``lingtai.tools.tool_family`` infrastructure. The public tool name and
+operational action values are unchanged; generic composition adds the new
+reserved ``settings`` action immediately before ``manual``. The call envelope
+moved from flat arguments to ``action``/``input``/``reasoning``/``summarize``.
 Provider routing, credential/identity resolution, and every action result
 shape are untouched by that migration.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any, Mapping
 
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration, ToolPluginDeclarationError
 
-from ..tool_family import ChildTool, ToolFamily
+from ..tool_family import ChildTool, SettingRow, SettingsProvider, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .settings import DEFAULT_LOCAL_BASE_URL, LocalVisionSettings, SettingsError
 
 
 if TYPE_CHECKING:
@@ -87,6 +89,72 @@ _CODEX_FAMILY = {"codex"} | _CODEX_POOL_ALIASES
 # vision-route alias alongside the LLM registry's two canonical adapter
 # spellings (``claude-code``/``claude_code``).
 _CLAUDE_CLI_FAMILY = {"claude-p", "claude-code", "claude_code"}
+
+_VISION_SETTING_KEYS = (
+    "provider",
+    "base_url",
+    "model",
+    "api_key",
+    "api_key_env",
+    "max_tokens",
+    "api_compat",
+    "wire_api",
+    "default_headers",
+    "token_path",
+    "instructions",
+    "max_output_tokens",
+    "timeout",
+)
+_VISION_SENSITIVE_SETTINGS = {
+    "base_url",
+    "api_key",
+    "api_key_env",
+    "default_headers",
+    "token_path",
+    "instructions",
+}
+_MODEL_DEFAULTS = {
+    "mlx": "mlx-community/paligemma2-3b-ft-docci-448-8bit",
+}
+_BASE_URL_DEFAULTS = {
+    "local": DEFAULT_LOCAL_BASE_URL,
+    "mimo": "https://api.xiaomimimo.com/v1",
+    "codex": "https://chatgpt.com/backend-api/codex",
+    "codex-pool": "https://chatgpt.com/backend-api/codex",
+    "codex_pool": "https://chatgpt.com/backend-api/codex",
+}
+_MAX_TOKENS_DEFAULTS = {
+    "local": 1024,
+    "openai": 1024,
+    "openrouter": 1024,
+    "custom": 1024,
+    "deepseek": 1024,
+    "zhipu": 1024,
+    "glm": 1024,
+    "grok": 1024,
+    "qwen": 1024,
+    "kimi": 1024,
+    "anthropic": 1024,
+    "minimax": 1024,
+    "mimo": 1024,
+    "mlx": 512,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _VisionSettingsSnapshot:
+    """One applied bind snapshot containing no raw sensitive values."""
+
+    current: tuple[Any, ...]
+    default: tuple[Any, ...]
+    sensitive: tuple[bool, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _VisionRouteProvenance:
+    """Resolver-produced protocol provenance for the successfully bound route."""
+
+    api_compat: str | None = None
 
 
 def _same_codex_family(requested: str, active: str) -> bool:
@@ -202,6 +270,260 @@ def _effective_openai_wire(
     elif normalized is None:
         return "responses" if use_responses_api and not base_url else "chat_completions"
     return None
+
+
+def _plain_service_value(service: Any, *names: str) -> Any:
+    """Read one already-applied scalar without reaching into a client."""
+    for name in names:
+        try:
+            value = getattr(service, name)
+        except (AttributeError, TypeError):
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            return value
+    return None
+
+
+def _model_is_path_like(value: str) -> bool:
+    """Return whether a model value has an explicit filesystem-path shape."""
+    candidate = value.strip()
+    return (
+        candidate.startswith(("~/", "~\\", "./", ".\\", "../", "..\\", "file://"))
+        or PurePosixPath(candidate).is_absolute()
+        or PureWindowsPath(candidate).is_absolute()
+    )
+
+
+def _vision_service_kind(provider: str, api_compat: str | None) -> str:
+    """Name the concrete Vision service boundary selected by the resolver."""
+    if provider in _CODEX_FAMILY:
+        return "codex"
+    if provider in {"mlx", "local", "anthropic", "gemini", "mimo", "openai"}:
+        return provider
+    if provider == "minimax" or api_compat == "anthropic":
+        return "anthropic"
+    return "openai"
+
+
+def _vision_settings_snapshot(
+    configuration: VisionConfiguration,
+    provider: str | None,
+    active_service: Any,
+    vision_service: Any,
+    local_settings: LocalVisionSettings | None,
+    route_provenance: _VisionRouteProvenance,
+) -> _VisionSettingsSnapshot:
+    """Project the exact successful bind inputs without retaining secrets."""
+    if vision_service is None or not isinstance(provider, str) or not provider.strip():
+        raise SettingsError("vision route is unavailable")
+
+    provider = provider.strip()
+    provider_key = provider.lower()
+    kwargs = dict(configuration.kwargs)
+    active_name = getattr(active_service, "provider", "")
+    active_key = active_name.lower() if isinstance(active_name, str) else ""
+    same_provider = _same_provider_identity(provider_key, active_key)
+    defaults = getattr(active_service, "_provider_defaults", None) if same_provider else None
+    bucket = defaults.get(active_key) if isinstance(defaults, dict) else None
+    bucket = bucket if isinstance(bucket, dict) else {}
+
+    api_compat = route_provenance.api_compat
+    service_kind = _vision_service_kind(provider_key, api_compat)
+    active_model = _plain_service_value(active_service, "_model") if same_provider else None
+    active_base_url = (
+        _plain_service_value(active_service, "_base_url") if same_provider else None
+    )
+
+    if provider_key == "local":
+        base_url = (
+            kwargs.get("base_url")
+            or (local_settings.base_url if local_settings is not None else None)
+            or DEFAULT_LOCAL_BASE_URL
+        )
+        model = (
+            kwargs.get("model")
+            or (local_settings.model if local_settings is not None else None)
+        )
+        max_tokens = kwargs.get("max_tokens")
+        if max_tokens is None and local_settings is not None:
+            max_tokens = local_settings.max_tokens
+    else:
+        base_url = (
+            kwargs.get("base_url")
+            or active_base_url
+            or bucket.get("base_url")
+            or _BASE_URL_DEFAULTS.get(provider_key)
+        )
+        model = kwargs.get("model") or active_model or bucket.get("model")
+        max_tokens = kwargs.get("max_tokens")
+
+    applied_model = _plain_service_value(
+        vision_service, "_model_name", "_model", "model"
+    )
+    model = applied_model or model or _MODEL_DEFAULTS.get(provider_key)
+    if not isinstance(model, str) or not model.strip():
+        raise SettingsError("vision model is unavailable")
+    model = model.strip()
+    model_is_sensitive = _model_is_path_like(model)
+    if model_is_sensitive:
+        model = True
+
+    applied_base_url = _plain_service_value(vision_service, "_base_url")
+    if applied_base_url is not None:
+        base_url = applied_base_url
+
+    applied_max_tokens = _plain_service_value(vision_service, "_max_tokens")
+    if applied_max_tokens is not None:
+        max_tokens = applied_max_tokens
+    if max_tokens is None:
+        max_tokens = _MAX_TOKENS_DEFAULTS.get(provider_key)
+        if max_tokens is None:
+            max_tokens = _MAX_TOKENS_DEFAULTS.get(service_kind)
+
+    applied_wire = _plain_service_value(vision_service, "_wire_api")
+    if isinstance(applied_wire, str):
+        wire_api = applied_wire
+    elif service_kind == "codex":
+        wire_api = "responses"
+    elif service_kind == "mimo":
+        wire_api = "chat_completions"
+    elif service_kind == "openai" or provider_key == "local":
+        wire_api = _effective_openai_wire(
+            kwargs.get("wire_api") or bucket.get("wire_api"),
+            use_responses_api=bucket.get("use_responses_api") is True,
+            base_url=base_url,
+        )
+    else:
+        wire_api = None
+
+    token_manager = getattr(vision_service, "_token_manager", None)
+    token_path = (
+        kwargs.get("token_path")
+        or bucket.get("codex_auth_path")
+        or _plain_service_value(token_manager, "_path")
+    )
+    instructions = (
+        _plain_service_value(vision_service, "_instructions")
+        or kwargs.get("instructions")
+    )
+    max_output_tokens = _plain_service_value(
+        vision_service, "_max_output_tokens"
+    )
+    if max_output_tokens is None:
+        max_output_tokens = kwargs.get("max_output_tokens")
+    timeout = _plain_service_value(vision_service, "_timeout")
+    if timeout is None:
+        timeout = kwargs.get("timeout")
+
+    uses_api_key = service_kind in {"openai", "anthropic", "gemini", "mimo"}
+    if provider_key == "local":
+        uses_api_key = True
+    uses_headers = service_kind in {"openai", "anthropic"}
+    current = {
+        "provider": provider,
+        "base_url": bool(base_url) if service_kind not in {"gemini", "mlx"} else None,
+        "model": model,
+        "api_key": True if uses_api_key else None,
+        "api_key_env": True if uses_api_key and configuration.api_key_env else None,
+        "max_tokens": max_tokens if service_kind != "codex" else None,
+        "api_compat": api_compat,
+        "wire_api": wire_api,
+        "default_headers": (
+            True
+            if uses_headers
+            and bool(kwargs.get("default_headers") or bucket.get("default_headers"))
+            else None
+        ),
+        "token_path": True if service_kind == "codex" and token_path else None,
+        "instructions": True if service_kind == "codex" and instructions else None,
+        "max_output_tokens": max_output_tokens if service_kind == "codex" else None,
+        "timeout": timeout if service_kind == "codex" else None,
+    }
+    default_wire = None
+    if service_kind == "codex":
+        default_wire = "responses"
+    elif service_kind in {"openai", "mimo"} or provider_key == "local":
+        default_wire = "chat_completions"
+    default = {
+        "provider": None,
+        "base_url": bool(_BASE_URL_DEFAULTS.get(provider_key)) or None,
+        "model": _MODEL_DEFAULTS.get(provider_key),
+        "api_key": True if provider_key == "local" else None,
+        "api_key_env": None,
+        "max_tokens": (
+            None
+            if service_kind == "codex"
+            else _MAX_TOKENS_DEFAULTS.get(
+                provider_key, _MAX_TOKENS_DEFAULTS.get(service_kind)
+            )
+        ),
+        "api_compat": None,
+        "wire_api": default_wire,
+        "default_headers": None,
+        "token_path": None,
+        "instructions": True if service_kind == "codex" else None,
+        "max_output_tokens": None,
+        "timeout": 120.0 if service_kind == "codex" else None,
+    }
+    return _VisionSettingsSnapshot(
+        current=tuple(current[key] for key in _VISION_SETTING_KEYS),
+        default=tuple(default[key] for key in _VISION_SETTING_KEYS),
+        sensitive=tuple(
+            key in _VISION_SENSITIVE_SETTINGS
+            or (key == "model" and model_is_sensitive)
+            for key in _VISION_SETTING_KEYS
+        ),
+    )
+
+
+def _vision_settings_provider(
+    configuration: VisionConfiguration,
+    provider: str | None,
+    active_service: Any,
+    vision_service: Any,
+    local_settings: LocalVisionSettings | None,
+    route_provenance: _VisionRouteProvenance,
+    failure: Exception | None,
+) -> SettingsProvider:
+    """Bind one SHOW-only provider to the already-applied Vision route."""
+    try:
+        if failure is not None:
+            raise failure
+        snapshot = _vision_settings_snapshot(
+            configuration,
+            provider,
+            active_service,
+            vision_service,
+            local_settings,
+            route_provenance,
+        )
+    except Exception:
+        return _unavailable_vision_settings
+
+    def provide() -> tuple[SettingRow, ...]:
+        return tuple(
+            SettingRow(
+                key=key,
+                current=current,
+                default=default,
+                configurable=True,
+                comment=f"vision-manual#setting-{key.replace('_', '-')}",
+                _sensitive=sensitive,
+            )
+            for key, current, default, sensitive in zip(
+                _VISION_SETTING_KEYS,
+                snapshot.current,
+                snapshot.default,
+                snapshot.sensitive,
+            )
+        )
+
+    return provide
+
+
+def _unavailable_vision_settings() -> tuple[SettingRow, ...]:
+    """Fail closed when no complete applied owner snapshot was bound."""
+    raise RuntimeError("vision settings unavailable")
 
 
 PROVIDERS = {
@@ -337,7 +659,9 @@ _DESCRIPTION = (
     "borrows another allowed preset's vision service (e.g. 'codex-pool'). "
     "Use vision(action='check', input={'preset': null}, reasoning='verify "
     "the vision route') to resolve which preset's vision service actually "
-    "works without sending an image. A real request failure returns a "
+    "works without sending an image. Use vision(action='settings', input={}, "
+    "reasoning='inspect the bound Vision route') for its read-only five-field "
+    "inventory. A real request failure returns a "
     "sanitized error and points to vision(action='manual', input={}, "
     "reasoning='load vision guidance') for read-only alternatives. No "
     "provider, model, credential, or MCP fallback is automatic."
@@ -349,6 +673,7 @@ def _build_family(
     check_handler: Any = _unused,
     list_handler: Any = _unused,
     manual_child: ChildTool | None = None,
+    settings_provider: SettingsProvider = _unavailable_vision_settings,
 ) -> ToolFamily:
     """Build Vision's declared family from its one static declaration.
 
@@ -376,6 +701,7 @@ def _build_family(
             manual_child
             or ChildTool("manual", DECLARATION.manual_input_schema, _unused, title="manual input")
         ],
+        settings_provider=settings_provider,
     )
 
 
@@ -398,6 +724,7 @@ class VisionManager:
         active_provider: "ActiveProviderPort",
         vision_service: "VisionService | None",
         manual_reason: str = "",
+        settings_provider: SettingsProvider = _unavailable_vision_settings,
     ) -> None:
         self._workdir = workdir
         self._active_provider = active_provider
@@ -410,6 +737,7 @@ class VisionManager:
             self._dispatch_check,
             self._dispatch_list,
             build_manual_child(workdir, DECLARATION.manual),
+            settings_provider,
         )
 
     def __call__(self, args: dict | None) -> dict:
@@ -488,7 +816,7 @@ class VisionManager:
         # ``provider`` is passed positionally below; drop the capability copy so
         # ``_resolve_direct_service`` never receives it twice (TypeError).
         kwargs.pop("provider", None)
-        service, service_reason = _resolve_direct_service(
+        service, service_reason, _route_provenance = _resolve_direct_service(
             self._workdir,
             self._active_provider,
             provider,
@@ -735,7 +1063,11 @@ class VisionManager:
         result = self._family.handle(args)
         if action == "manual" and "content" in result:
             return self._adapt_manual_result(result)
-        if result.get("status") == "failed" and "error_code" in result:
+        if (
+            action != "settings"
+            and result.get("status") == "failed"
+            and "error_code" in result
+        ):
             return {"status": "error", "message": result["message"]}
         return result
 
@@ -754,18 +1086,41 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
     vision_service = configuration.vision_service
     provider = configuration.provider
     manual_reason = ""
+    active_service = host.active_provider.service if vision_service is None else None
     if vision_service is None and provider is None:
-        active_service = host.active_provider.service
         active_name = getattr(active_service, "provider", "")
         if isinstance(active_name, str) and active_name.strip():
             provider = active_name
+
+    local_settings: LocalVisionSettings | None = None
+    settings_failure: Exception | None = None
+    resolved_api_key = configuration.api_key
+    resolved_route = vision_service is None
+    route_provenance = _VisionRouteProvenance()
+    if resolved_route and configuration.api_key_env:
+        from lingtai.kernel.config_resolve import resolve_env
+
+        resolved_api_key = resolve_env(
+            configuration.api_key, configuration.api_key_env
+        )
+    if resolved_route and isinstance(provider, str) and provider.lower() == "local":
+        from .settings import read_local_settings
+
+        try:
+            local_settings = read_local_settings(host.workdir)
+        except SettingsError as exc:
+            settings_failure = exc
     if vision_service is None and provider is not None:
-        vision_service, manual_reason = _resolve_direct_service(
+        vision_service, manual_reason, route_provenance = _resolve_direct_service(
             host.workdir,
             host.active_provider,
             provider,
-            api_key=configuration.api_key,
-            api_key_env=configuration.api_key_env,
+            api_key=resolved_api_key,
+            identity_service=active_service,
+            local_settings=local_settings,
+            local_settings_error=(
+                settings_failure if isinstance(settings_failure, SettingsError) else None
+            ),
             **dict(configuration.kwargs),
         )
     elif vision_service is None:
@@ -778,6 +1133,15 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
         host.active_provider,
         vision_service=vision_service,
         manual_reason=manual_reason,
+        settings_provider=_vision_settings_provider(
+            configuration,
+            provider if resolved_route else None,
+            active_service,
+            vision_service,
+            local_settings,
+            route_provenance,
+            settings_failure,
+        ),
     )
     return BoundToolPlugin(
         name=DECLARATION.name,
@@ -805,6 +1169,7 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind,
     requires=("workdir", "active_provider", "configuration"),
     glossary_package=__package__,
+    settings=True,
 )
 
 
@@ -822,8 +1187,10 @@ def _resolve_direct_service(
     api_key_env: str | None = None,
     *,
     identity_service: Any = None,
+    local_settings: LocalVisionSettings | None = None,
+    local_settings_error: SettingsError | None = None,
     **kwargs: Any,
-) -> tuple["VisionService | None", str]:
+) -> tuple["VisionService | None", str, _VisionRouteProvenance]:
     """Resolve a direct VisionService from provider + kwargs.
 
     ``identity_service`` overrides the active-provider port's service used for
@@ -834,6 +1201,7 @@ def _resolve_direct_service(
     """
     vision_service: "VisionService | None" = None
     manual_reason = ""
+    applied_api_compat: str | None = None
     if api_key_env:
         from lingtai.kernel.config_resolve import resolve_env
         api_key = resolve_env(api_key, api_key_env)
@@ -875,13 +1243,12 @@ def _resolve_direct_service(
         # guided setup steps instead. api_key is optional: local servers
         # ignore it, so a placeholder satisfies the OpenAI SDK.
         from lingtai.services.vision.openai import OpenAIVisionService
-        from .settings import (
-            DEFAULT_LOCAL_BASE_URL,
-            SettingsError,
-            read_local_settings,
-        )
+        from .settings import read_local_settings
         try:
-            local_settings = read_local_settings(workdir)
+            if local_settings_error is not None:
+                raise local_settings_error
+            if local_settings is None:
+                local_settings = read_local_settings(workdir)
         except SettingsError as exc:
             manual_reason = (
                 f"Local vision settings are invalid: {exc}; fix "
@@ -967,6 +1334,7 @@ def _resolve_direct_service(
         )
 
         if api_compat == "openai":
+            applied_api_compat = "openai"
             from lingtai.services.vision.openai import OpenAIVisionService
             svc_kwargs: dict = {
                 "api_key": api_key,
@@ -991,6 +1359,7 @@ def _resolve_direct_service(
                 except Exception as exc:
                     manual_reason = _setup_failure(provider, exc)
         elif api_compat == "anthropic":
+            applied_api_compat = "anthropic"
             from lingtai.services.vision.anthropic import AnthropicVisionService
             svc_kwargs = {
                 "api_key": api_key,
@@ -1123,10 +1492,13 @@ def _resolve_direct_service(
                 use_responses_api=isinstance(bucket, dict) and bucket.get("use_responses_api") is True,
                 base_url=kwargs.get("base_url") or active_base_url,
             )
-            if service_provider in {"openrouter", "deepseek", "zhipu", "glm", "grok", "qwen", "kimi"}:
+            if service_provider in {
+                "openrouter", "custom", "deepseek", "zhipu", "glm", "grok",
+                "qwen", "kimi",
+            }:
                 service_provider = "anthropic" if active_compat.lower() == "anthropic" else "openai"
-            elif service_provider == "custom":
-                service_provider = "anthropic" if active_compat.lower() == "anthropic" else "openai"
+                if active_compat.lower() in {"openai", "anthropic"}:
+                    applied_api_compat = active_compat.lower()
 
             # Provider-specific kwarg injection. Each branch is opt-in because
             # vision services have heterogeneous constructor signatures.
@@ -1184,7 +1556,11 @@ def _resolve_direct_service(
                     )
                 except Exception as exc:
                     manual_reason = _setup_failure(provider, exc)
-    return vision_service, manual_reason
+    return (
+        vision_service,
+        manual_reason,
+        _VisionRouteProvenance(api_compat=applied_api_compat),
+    )
 
 
 def setup(

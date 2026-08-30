@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/BEHAVIORS.md
+  - src/lingtai/tools/vision/settings.py
   - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -14,6 +15,7 @@ related_files:
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_vision_migration.py
   - tests/test_vision_capability.py
+  - tests/test_vision_settings.py
   - tests/test_inherit_fallback.py
 maintenance: |
   Keep this contract aligned with the Vision declaration, owner Anatomy,
@@ -25,18 +27,20 @@ maintenance: |
 # Vision capability contract
 
 `vision` is an always-registered, action-separated capability. It has one public
-root and four canonical children: `analyze`, `check`, `list`, and the reserved
-family-owned `manual`. Direct provider setup, unsupported routes, and request
-failures fail closed with sanitized guidance; the capability never changes the
-active preset or automatically invokes another provider or MCP.
+root and five canonical children: `analyze`, `check`, `list`, the opted-in
+reserved `settings`, and the reserved family-owned `manual`. Direct provider
+setup, unsupported routes, and request failures fail closed with sanitized
+guidance; the capability never changes the active preset or automatically
+invokes another provider or MCP.
 
 ## Scope and declaration
 
 Guarded by: [VN001](BEHAVIORS.md#behavior-vn001)
 
-The static `DECLARATION` owns the three operational actions and their input
-schemas; the generic manual builder contributes the final reserved `manual`
-child. The public root is the strict Tool Protocol v2 envelope:
+The static `DECLARATION` owns the three operational actions, their input schemas,
+and the Vision settings opt-in; generic composition contributes `settings`
+immediately before the manual builder's final reserved `manual` child. The
+public root is the strict Tool Protocol v2 envelope:
 
 ```text
 action + input + reasoning + optional summarize
@@ -61,6 +65,8 @@ The exact child schemas are:
   borrowed route without sending an image.
 - `list`: strict empty object (`properties: {}`, `required: []`,
   `additionalProperties: false`).
+- `settings`: strict empty input; it shows the applied bind snapshot and has no
+  set/reset/write form.
 - `manual`: the generic strict empty manual input schema and the installed
   Vision manual body/path result.
 
@@ -91,6 +97,35 @@ registrar. The registrar owns claim/authorization/mount lifecycle; `_bind`
 creates the `VisionManager` and returns the one public plugin. The serialized
 host/registry/port implementation and its shared fixture are integration-owned;
 this family contract only specifies the Vision-side requirements above.
+
+## Settings discovery
+
+Guarded by: [VN007](BEHAVIORS.md#behavior-vn007)
+
+Vision inventories exactly these owner-route facts, in order: `provider`,
+`base_url`, `model`, `api_key`, `api_key_env`, `max_tokens`, `api_compat`,
+`wire_api`, `default_headers`, `token_path`, `instructions`,
+`max_output_tokens`, and `timeout`. A success row is exactly `key`, `current`,
+`default`, `configurable`, and `comment`; every comment is a stable
+`vision-manual#setting-...` pointer.
+
+The provider is bound to the same immutable `VisionConfiguration`, local-file
+snapshot, active-provider facts, and successfully constructed service used by
+the running manager. SHOW creates fresh row objects from that applied snapshot;
+it does not reread files or environment, inspect provider clients, or construct
+a service. A later owner-file or launcher change is prospective until the
+existing refresh/relaunch bind. A failed/manual-only route, an invalid local
+document, or an opaque injected `vision_service` outside the owner resolver
+makes the whole inventory unavailable rather than fabricating values.
+
+`base_url`, `api_key`, `api_key_env`, `default_headers`, `token_path`,
+`instructions`, and any path-like `model` are reduced to private presence
+markers before becoming `SettingRow(..., _sensitive=True)`. Generic projection
+therefore replaces both current and default with `<redacted>` and never projects
+the marker. Every row is `configurable: true` because an existing Vision owner
+procedure can change it through capability/preset composition, the local owner
+file where supported, or the launcher/secret route named by `api_key_env`; that
+never grants SHOW mutation authority.
 
 ## Routing and preset authorization
 
@@ -159,10 +194,14 @@ Guarded by: [VN002](BEHAVIORS.md#behavior-vn002),
   `degraded` with an empty body, truthful host-local path, and loader error.
   The canonical manual child result is flattened once by the host; it is never
   nested or double-wrapped.
+- `settings` success is `{"settings": [...]}` with only the five projected row
+  fields. Non-empty input fails before provider invocation. Unavailable,
+  malformed, or non-JSON truth yields the generic fixed no-row failure, and the
+  complete response is incrementally bounded to 65,536 UTF-8 bytes.
 
 ## Invariants and evidence
 
-- [VN001](BEHAVIORS.md#behavior-vn001) guards the four-action declaration,
+- [VN001](BEHAVIORS.md#behavior-vn001) guards the five-action declaration,
   strict branches, action/input correlation, and pre-handler rejection:
   `tests/test_tool_family_vision_migration.py`.
 - [VN002](BEHAVIORS.md#behavior-vn002) guards analyze success/failure shapes,
@@ -179,6 +218,11 @@ Guarded by: [VN002](BEHAVIORS.md#behavior-vn002),
 - [VN006](BEHAVIORS.md#behavior-vn006) guards the active-provider/configuration
   port seam and allowed-preset credential identity: declaration and migration
   tests, plus serialized shared-host tests at integration time.
+- [VN007](BEHAVIORS.md#behavior-vn007) guards exact settings order and field
+  order, effective current/default values, configurable semantics, stable manual
+  anchors, complete redaction, no-write behavior, whole-inventory failure, and
+  ordinary analyze non-regression: `tests/test_vision_settings.py` plus the
+  shared generic settings contract test.
 
 Run the focused Vision capability, service, migration, preset-routing, and
 manual-contract tests with bytecode and pytest cache disabled; run the shared

@@ -319,8 +319,9 @@ operation-native `task_card_notifications` port (five scalar operations, no
 generic publisher), keeping one manager across refresh and its channel-neutral
 `taskcard/` artifact ownership, and Vision retains `workdir` plus its live
 read-through `active_provider` and one setup-selected `configuration`
-snapshot, keeping its `analyze | check | list | manual` surface, active-provider
-default routing, allowed-preset own-credential borrowing, and no automatic
+snapshot plus a bind-time settings projection, keeping its
+`analyze | check | list | settings | manual` surface, active-provider default
+routing, allowed-preset own-credential borrowing, and no automatic
 provider/credential/MCP fallback, and Web retains `workdir` plus its Web-owned
 typed `web_runtime` composition (browser transport, immutable engine specs,
 and default provenance, granted by its own `setup` through `extra_ports_for`)
@@ -648,10 +649,11 @@ non-goal for third-party-versus-third-party mounts.
   `tests/test_vision_capability.py`, `tests/test_inherit_fallback.py`, the
   Vision case in `tests/test_tool_plugin_declaration.py`, and the strict
   controlled-host manual proof in `tests/test_intrinsic_manual_actions.py`)
-  prove the four-action schema/dispatch surface, active-provider default
+  plus `tests/test_vision_settings.py` prove the five-action schema/dispatch
+  and read-only settings surface, active-provider default
   routing, allowed-preset own-credential borrowing with no automatic
-  provider/MCP fallback, `check`/`list`/`manual` no-request boundaries, and the
-  package-owned manual. Web's declaration binds only
+  provider/MCP fallback, `check`/`list`/`settings`/`manual` no-request
+  boundaries, and the package-owned manual. Web's declaration binds only
   `workdir`/`web_runtime`/`provider_identity`; its focused suites
   (`tests/test_web_official_plugin.py`, `tests/test_web_composition_port.py`,
   the Web case in `tests/test_tool_plugin_declaration.py`, the strict
@@ -789,16 +791,17 @@ SHOW-only, provider-bound, and immediately before `manual`; it exposes exactly
 the File owner's 13 policy/selector rows without adding set/reset (see
 `src/lingtai/tools/file/CONTRACT.md`).
 
-`vision` (`analyze | check | list | manual`) is the fifth: it keeps its public
+`vision` (`analyze | check | list | settings | manual`) is the fifth: it keeps its public
 tool name and action values while moving to the same root envelope, with
 `analyze` owning the direct image request (default route: the active provider
 only; an explicitly allowed `preset` borrows only that preset's own route for
 the one call), `check` resolving the selected route without any image/provider
-request, `list` enumerating only authorized preset declarations, and `manual`
-the family-owned reserved child (see `src/lingtai/tools/vision/CONTRACT.md`).
-Its only settings surface is the fixed workdir-relative `settings/vision.json`
-endpoint file for the generic `local` provider; the two-level settings
-addressing rules do not apply to it.
+request, `list` enumerating only authorized preset declarations, `settings`
+showing one read-only applied bind snapshot, and `manual` the family-owned
+reserved child (see `src/lingtai/tools/vision/CONTRACT.md`). The fixed
+workdir-relative `settings/vision.json` remains the only Vision-owned document
+and configures only the generic `local` provider. SHOW adds no settings file,
+parser, writer, or generic control plane.
 
 `avatar` (`spawn | rules | manual`) is the sixth family migrated, keeping its
 public name and action values unchanged (see
