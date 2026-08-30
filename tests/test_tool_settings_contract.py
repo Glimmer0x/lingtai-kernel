@@ -122,17 +122,26 @@ def test_complete_response_bound_stops_without_partial_rows():
         "SETTINGS_RESPONSE_TOO_LARGE", 65_536)
 
 
-def test_public_export_and_only_this_owner_opts_in():
+def test_public_export_and_exact_production_opt_ins():
     assert public_family.SettingRow is settings_module.SettingRow is SettingRow
     assert public_family.SettingsProvider is settings_module.SettingsProvider
     assert not hasattr(importlib.import_module("lingtai.kernel.tool_plugin"),
                        "ToolSettingsContract")
-    curated = {
-        name: getattr(importlib.import_module(f"lingtai.mcp_servers.{name}.plugin"), f"{name.upper()}_PLUGIN")
-        for name in ("telegram", "imap", "feishu", "wechat", "whatsapp", "cloud_mail")
-    }
-    expected_curated = set()
-    assert {name for name, plugin in curated.items() if plugin.settings} == expected_curated
+    curated = {}
+    for name in ("telegram", "imap", "feishu", "wechat", "whatsapp", "cloud_mail"):
+        module = importlib.import_module(f"lingtai.mcp_servers.{name}.plugin")
+        curated[name] = (
+            getattr(module, f"{name.upper()}_PLUGIN"),
+            getattr(module, f"{name.upper()}_ACTIONS"),
+        )
+    expected_curated = {"imap"}
+    assert {
+        name for name, (plugin, _actions) in curated.items() if plugin.settings
+    } == expected_curated
+    assert all(
+        ("settings" in actions) is (name in expected_curated)
+        for name, (_plugin, actions) in curated.items()
+    )
     modules = {"shell": "bash._tool_family", "web": "web_search"}
     declarations = {
         name: importlib.import_module(f"lingtai.tools.{modules.get(name, name)}").DECLARATION
@@ -140,6 +149,9 @@ def test_public_export_and_only_this_owner_opts_in():
     }
     expected_official = {"avatar", "plugin", "system", "task_card"}
     assert {name for name, item in declarations.items() if item.settings} == expected_official
+    assert expected_curated | expected_official == {
+        "avatar", "imap", "plugin", "system", "task_card"
+    }
     for name, item in declarations.items():
         assert ("settings" in item.public_actions) is (name in expected_official)
     psyche_actions = importlib.import_module(

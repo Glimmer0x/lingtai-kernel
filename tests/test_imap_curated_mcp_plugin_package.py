@@ -2,9 +2,9 @@
 
 Mirrors ``tests/test_curated_mcp_plugin_package.py`` (the Telegram reference
 slice) for IMAP: the shipped ``mcp_catalog.json`` entry must equal
-``IMAP_PLUGIN.mcp_declaration()``, the reserved ``manual`` action must be
-appended by the plugin rather than declared by the package, and the server
-must advertise the packaged identity rather than a hand-copied one.
+``IMAP_PLUGIN.mcp_declaration()``, the reserved ``settings``/``manual`` actions
+must be composed by the plugin rather than declared by the package, and the
+server must advertise the packaged identity rather than a hand-copied one.
 """
 from __future__ import annotations
 
@@ -60,17 +60,24 @@ def test_catalog_loading_is_unchanged_and_still_the_runtime_source():
 # `manual` is mandatory, reserved, and sourced from the packaged skill
 # ---------------------------------------------------------------------------
 
-def test_package_does_not_declare_manual_and_the_plugin_appends_it_last():
+def test_package_declares_neither_reserved_action_and_plugin_orders_both():
+    assert "settings" not in IMAP_DECLARED_ACTIONS
     assert _plugin.MANUAL_ACTION not in IMAP_DECLARED_ACTIONS
-    assert IMAP_ACTIONS == (*IMAP_DECLARED_ACTIONS, "manual")
+    assert IMAP_ACTIONS == (*IMAP_DECLARED_ACTIONS, "settings", "manual")
+    assert IMAP_ACTIONS[-2] == "settings"
     assert IMAP_ACTIONS[-1] == "manual"
 
 
-def test_composed_family_always_carries_a_manual_child_with_a_strict_empty_input():
+def test_composed_family_carries_both_reserved_children_with_strict_empty_input():
     family = _family.build_imap_family(None)
     assert family.has_manual()
     assert family.child_names == IMAP_ACTIONS
     assert _family._imap_input_schemas()["manual"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    assert _family._imap_input_schemas()["settings"] == {
         "type": "object",
         "properties": {},
         "additionalProperties": False,

@@ -233,9 +233,11 @@ DESCRIPTION = (
     "do not attempt to configure or reconfigure this MCP — your orchestrator "
     "manages it, and if the network needs this MCP to reach you the wiring "
     "is propagated to your session automatically. "
-    "Every response includes account and tcp_alias fields. "
-    "Actions: send, check, read, reply, search, delete, move, flag, folders, "
-    "contacts, add_contact, remove_contact, edit_contact, accounts. "
+    "Every operational response includes account and tcp_alias fields. "
+    "Operational actions: send, check, read, reply, search, delete, move, "
+    "flag, folders, contacts, add_contact, remove_contact, edit_contact, "
+    "accounts. The public family also provides plugin-owned settings and "
+    "manual actions. "
     "Email IDs use compound key format: account:folder:uid.\n"
     "REPLY POLICY: "
     "When a human contacts you via internal email (email tool), reply via internal email. "
@@ -282,9 +284,14 @@ class IMAPMailManager:
         working_dir: Path,
         tcp_alias: str,
         on_inbound: "Callable[[dict], None]",
+        config_path: Path | str | None = None,
     ) -> None:
         self._service = service
         self._working_dir = Path(working_dir)
+        # Production composition supplies the successfully loaded, resolved
+        # authority path. Optional only for legacy direct constructors; SHOW
+        # fails closed when that applied startup fact is unavailable.
+        self._config_path = Path(config_path) if config_path is not None else None
         self._tcp_alias = tcp_alias
         self._on_inbound = on_inbound
         self._bridge = None  # set by setup() before start()

@@ -89,7 +89,7 @@ def test_imap_actions_match_exact_public_inventory():
         "send", "check", "read", "reply", "search",
         "delete", "move", "flag", "folders",
         "contacts", "add_contact", "remove_contact", "edit_contact",
-        "accounts", "manual",
+        "accounts", "settings", "manual",
     )
     assert list(IMAP_SCHEMA["properties"]["action"]["enum"]) == list(IMAP_ACTIONS)
 
