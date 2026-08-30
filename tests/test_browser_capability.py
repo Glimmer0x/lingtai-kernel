@@ -81,7 +81,7 @@ def test_web_browse_vertical_slice(tmp_path):
             "reasoning" not in branch["properties"]
             and "_reasoning" not in branch["properties"]
             and "summarize" not in branch["properties"]
-            for branch in web_schema.parameters["properties"]["input"]["oneOf"]
+            for branch in web_schema.parameters["properties"]["input"]["anyOf"]
         )
         first = agent._tool_handlers["web"]({
             "action": "browse",
@@ -292,12 +292,14 @@ def test_browser_policy_and_cursor_failures_are_typed_and_sanitized():
 
 def test_web_schema_includes_strict_action_input():
     schema = get_schema()
-    assert schema["properties"]["action"]["enum"] == ["search", "browse", "manual"]
+    assert schema["properties"]["action"]["enum"] == [
+        "search", "browse", "settings", "manual",
+    ]
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
-    branches = schema["properties"]["input"]["oneOf"]
+    branches = schema["properties"]["input"]["anyOf"]
     assert [branch["title"] for branch in branches] == [
-        "search input", "browse input", "manual input",
+        "search input", "browse input", "settings inventory input", "manual input",
     ]
     for branch in branches:
         assert branch["additionalProperties"] is False
@@ -305,4 +307,4 @@ def test_web_schema_includes_strict_action_input():
     browse = branches[1]["properties"]
     assert browse["url"]["type"] == ["string", "null"]
     assert browse["extract"]["enum"] == ["article", None]
-    assert branches[2]["properties"] == {}
+    assert branches[3]["properties"] == {}

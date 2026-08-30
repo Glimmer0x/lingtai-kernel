@@ -129,9 +129,9 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.web_search import DECLARATION as w; print(w.name, w.actions, w.public_actions, w.requires)"
    ```
 
-   Expect `web ('search', 'browse') ('search', 'browse', 'manual') ('workdir',
+   Expect `web ('search', 'browse') ('search', 'browse', 'settings', 'manual') ('workdir',
    'web_runtime', 'provider_identity')`. No `Agent` was constructed; the
-   static declaration appends rather than declares the reserved action, and
+   static declaration opts into generic `settings`, appends both reserved actions, and
    its typed `web_runtime` composition is not in existence yet — only
    `setup` composes and grants it.
 
@@ -276,7 +276,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    installed `capabilities/vision/SKILL.md` body and path after a real
    registrar claim/mount.
    Web's focused suites prove its exact three-port grant, the
-   `search | browse | manual` surface, the fail-closed typed `web_runtime`
+   `search | browse | settings | manual` surface, the fail-closed typed `web_runtime`
    bind, the standard-table `provider_identity` label, exact-match canonical
    provider gating for the explicit Anthropic/Gemini opt-in, and — through the
    same strict controlled official host in

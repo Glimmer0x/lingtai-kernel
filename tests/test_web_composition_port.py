@@ -73,7 +73,7 @@ def test_web_composition_port_is_narrow_and_publishes_one_manager(tmp_path):
 
 def test_web_declaration_requires_exactly_its_three_ports():
     assert DECLARATION.requires == ("workdir", "web_runtime", "provider_identity")
-    assert DECLARATION.public_actions == ("search", "browse", "manual")
+    assert DECLARATION.public_actions == ("search", "browse", "settings", "manual")
 
 
 def test_web_bind_missing_host_port_fails_closed(tmp_path):

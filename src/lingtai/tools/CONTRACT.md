@@ -326,7 +326,8 @@ provider/credential/MCP fallback, and Web retains `workdir` plus its Web-owned
 typed `web_runtime` composition (browser transport, immutable engine specs,
 and default provenance, granted by its own `setup` through `extra_ports_for`)
 and the narrow read-only `provider_identity` label, keeping its
-`search | browse | manual` surface, `settings/web.search.json` ownership,
+`search | browse | settings | manual` surface, Web's read-only SHOW owner,
+`settings/web.search.json` ownership,
 spill/settings behavior, canonical provider gates, and search-vs-browse
 isolation, with a fail-closed bind on a missing or mistyped `web_runtime`. The
 former later-family target register is now empty; the reserved list is never a
@@ -712,10 +713,11 @@ proven for every family, curated ones included.
 ### Relationship to current runtime
 
 Nothing here describes shipped behavior beyond what each migrated family already
-documents. `web` (`search | browse | manual`) is the first family migrated to
+documents. `web` (`search | browse | settings | manual`) is the first family migrated to
 this contract: its final model-facing root is exactly `action`, `input`,
-`reasoning`, and `summarize`; its `search` action reads the action-owned
-`settings/web.search.json` (see `src/lingtai/tools/web_search/CONTRACT.md`).
+`reasoning`, and `summarize`; its `search` action resolves
+`LINGTAI_WEB_ENGINE` before the action-owned `settings/web.search.json` (see
+`src/lingtai/tools/web_search/CONTRACT.md`).
 `knowledge` (`info | manual`) is the third: the migration is envelope-only —
 its public tool name and both public action values are unchanged, both children
 take the canonical strict-empty `input`, and it supports no settings file (see

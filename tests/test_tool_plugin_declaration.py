@@ -199,7 +199,7 @@ def test_official_web_mount_keeps_provider_identity_and_packaged_manual(tmp_path
     )
     try:
         assert DECLARATION.requires == ("workdir", "web_runtime", "provider_identity")
-        assert DECLARATION.public_actions == ("search", "browse", "manual")
+        assert DECLARATION.public_actions == ("search", "browse", "settings", "manual")
         assert agent.official_tool_plugins["web"] is DECLARATION
         assert [schema.name for schema in agent._tool_schemas].count("web") == 1
 

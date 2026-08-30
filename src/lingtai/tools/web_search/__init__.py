@@ -1,4 +1,4 @@
-"""Unified ``web`` capability: search, static browse, and its manual.
+"""Unified ``web`` capability: search, static browse, settings, and manual.
 
 This retained package is the composition owner.  Search providers remain lazy
 internal adapters, while the tested browser Core/Port stays in
@@ -26,6 +26,9 @@ from ._spill import spill_if_over_threshold
 from .settings import (
     OutputSettingsSnapshot,
     SettingsSnapshot,
+    WEB_ENGINE_ENV,
+    WEB_MAX_CHARS_ENV,
+    build_settings_provider,
     current_setting,
     read_output_settings,
     read_settings,
@@ -77,8 +80,8 @@ class SettingsOnlyProviderError(ValueError):
     Raised when ``provider=``/``default_engine=`` (or an ``engines={}``-only
     engine set with no ``duckduckgo``/``openai`` fallback) would otherwise
     select Anthropic or Gemini — both fully active, canonical, currently
-    admitted providers, just restricted to explicit opt-in through a valid
-    hot-read ``settings/web.search.json`` selection plus canonical-backend
+    admitted providers, just restricted to explicit opt-in through the
+    hot-read ``search.engine`` environment/document setting plus canonical-backend
     eligibility (never this composition-time route). Distinct from
     :class:`RetiredProviderError`, which is reserved for a provider retired
     from admission entirely (MiniMax, Zhipu) — Anthropic/Gemini are never
@@ -87,8 +90,8 @@ class SettingsOnlyProviderError(ValueError):
     """
 
 
-# Explicit-opt-in engines: admitted only through a valid hot-read
-# settings/web.search.json selection, and only when the current Agent's LLM
+# Explicit-opt-in engines: admitted only through the hot-read search.engine
+# environment/document setting, and only when the current Agent's LLM
 # backend truthfully IS that same canonical provider. Never selectable via
 # the flat ``provider=``/``default_engine=`` composition kwargs — those are
 # rejected outright at composition time (see ``_specs_from_kwargs``).
@@ -168,12 +171,13 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# The single source of truth for web's own children: one ``(name, schema,
+# The single source of truth for web's operational children: one ``(name, schema,
 # title)`` triple per child, consumed both by the module-level schema-only
 # family below and by ``WebManager.__init__``, which binds real handlers to
-# the same specs. The reserved ``manual`` child is not listed here: its schema
-# is the owner-exported ``MANUAL_INPUT_SCHEMA`` and its real child comes from
-# ``build_manual_child``.
+# the same specs. The reserved ``settings`` and ``manual`` children are not
+# listed here: settings is injected only through the read-only provider seam;
+# manual's schema is the owner-exported ``MANUAL_INPUT_SCHEMA`` and its real
+# child comes from ``build_manual_child``.
 _CHILD_SPECS: tuple[tuple[str, dict[str, Any], str], ...] = (
     ("search", _SEARCH_INPUT_SCHEMA, "search input"),
     ("browse", _BROWSE_INPUT_SCHEMA, "browse input"),
@@ -182,7 +186,7 @@ _CHILD_SPECS: tuple[tuple[str, dict[str, Any], str], ...] = (
 
 def _schema_only_family() -> ToolFamily:
     # A throwaway ``ToolFamily`` used only to compose the model-facing schema
-    # and to prove the fixed three-child registry has no duplicate or
+    # and to prove the public child registry has no duplicate or
     # reserved-name collision (``ToolFamilyError`` would raise here, at
     # import time, rather than shipping silently). ``WebManager`` builds its
     # own per-instance ``ToolFamily`` in ``__init__`` with real handlers
@@ -190,12 +194,16 @@ def _schema_only_family() -> ToolFamily:
     def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
+    def _unused_settings() -> tuple[Any, ...]:
+        raise AssertionError("the module-level schema-only settings provider never dispatches")
+
     return ToolFamily(
         DECLARATION.name,
         [
             *(ChildTool(name, schema, _unused, title=title) for name, schema, title in _CHILD_SPECS),
             ChildTool("manual", DECLARATION.manual_input_schema, _unused, title="manual input"),
         ],
+        settings_provider=_unused_settings,
     )
 
 
@@ -204,8 +212,9 @@ def get_description(lang: str = "en") -> str:
         "Unified web capability. Use web(action='search', input={'query': '...'}, "
         "reasoning='discover current sources') for current discovery, then "
         "web(action='browse', input={'link_ref': '...'}, reasoning='read the "
-        "selected source') for a known result. Use web(action='manual', input={}, "
-        "reasoning='load web guidance') for the procedure and settings guidance."
+        "selected source') for a known result. Use web(action='settings', input={}, "
+        "reasoning='inspect web settings') for effective configuration and "
+        "web(action='manual', input={}, reasoning='load web guidance') for procedure."
     )
 
 
@@ -232,6 +241,7 @@ DECLARATION = ToolPluginDeclaration(
     binder=_deferred_bind,
     requires=("workdir", "web_runtime", "provider_identity"),
     glossary_package=__package__,
+    settings=True,
 )
 
 
@@ -275,6 +285,9 @@ class WebManager:
         default_source: str = "built_in_default",
         search_service: Any | None = None,
         legacy_fallback_from: str | None = None,
+        provider_current: str | None = None,
+        model_current: str | None = None,
+        api_key_configured: bool | None = None,
     ) -> None:
         self._workdir = workdir
         self._provider_identity = provider_identity
@@ -290,6 +303,16 @@ class WebManager:
         self._legacy_fallback_from = legacy_fallback_from
         self._services: dict[str, Any] = {}
         self._service_errors: dict[str, str] = {}
+        settings_provider = build_settings_provider(
+            workdir,
+            self._specs,
+            self._default_engine_now,
+            self._default_source,
+            provider_current=provider_current,
+            model_current=model_current,
+            api_key_configured=api_key_configured,
+            credential_configured=self._credential_configured,
+        )
         handlers = {"search": self._dispatch_search, "browse": self._dispatch_browse}
         self._family = ToolFamily(
             DECLARATION.name,
@@ -307,6 +330,7 @@ class WebManager:
                 # child.
                 build_manual_child(workdir, DECLARATION.manual),
             ],
+            settings_provider=settings_provider,
         )
 
     @property
@@ -323,6 +347,19 @@ class WebManager:
         if spec.provider and spec.provider != "duckduckgo":
             return "credential_missing"
         return "unavailable"
+
+    def _credential_configured(self, provider: str) -> bool:
+        """Report the route the manager would use now, or its cached service."""
+        for engine_name, spec in self._specs.items():
+            if engine_name != provider and spec.provider != provider:
+                continue
+            if engine_name in self._services or spec.service is not None:
+                return True
+            if spec.api_key_env is not None and os.environ.get(spec.api_key_env):
+                return True
+            if spec.api_key:
+                return True
+        return False
 
     @staticmethod
     def _output_setting_block(snapshot: OutputSettingsSnapshot) -> dict[str, Any]:
@@ -513,19 +550,32 @@ class WebManager:
         if not isinstance(query, str) or not query.strip():
             return self._failure("search", snapshot, diagnostic, "INVALID_QUERY", "query must be a non-empty string")
         if output_snapshot.error:
+            message = (
+                f"{WEB_MAX_CHARS_ENV} is invalid; no search was performed"
+                if output_snapshot.source == "environment_error"
+                else "settings/web.json is invalid; no search was performed"
+            )
             return self._failure(
                 "search", snapshot, diagnostic, "WEB_OUTPUT_SETTINGS_INVALID",
-                "settings/web.json is invalid; no search was performed",
+                message,
             )
         name = snapshot.engine
         if snapshot.error:
-            return self._failure("search", snapshot, diagnostic, "WEB_SETTINGS_INVALID", "settings/web.search.json is invalid; no search engine was selected")
+            message = (
+                f"{WEB_ENGINE_ENV} is invalid; no search engine was selected"
+                if snapshot.source == "environment_error"
+                else "settings/web.search.json is invalid; no search engine was selected"
+            )
+            return self._failure(
+                "search", snapshot, diagnostic, "WEB_SETTINGS_INVALID", message
+            )
         if not name or name not in self._specs:
             return self._failure("search", snapshot, diagnostic, "SEARCH_ENGINE_UNAVAILABLE", "the selected search engine is unavailable")
         if name in _BACKEND_GATED_ENGINES:
-            if snapshot.source != "settings/web.search.json":
+            if snapshot.source not in {"settings/web.search.json", "environment"}:
                 # Anthropic/Gemini are explicit opt-in through a valid
-                # hot-read settings/web.search.json selection only. A
+                # hot-read settings/web.search.json or LINGTAI_WEB_ENGINE
+                # selection only. A
                 # composition-time default_engine/provider can never select
                 # them (rejected outright in _specs_from_kwargs), and the
                 # no-config built-in default never picks them either — this
@@ -533,7 +583,7 @@ class WebManager:
                 # reaching a gated engine name.
                 return self._failure(
                     "search", snapshot, diagnostic, "PROVIDER_BACKEND_INELIGIBLE",
-                    f"engine {name!r} is explicit opt-in only, through settings/web.search.json",
+                    f"engine {name!r} is explicit opt-in only through Web's engine setting",
                 )
             if not _same_provider_identity(self._provider_identity, name):
                 # Explicit Anthropic/Gemini opt-in fails explicitly when the
@@ -686,9 +736,14 @@ class WebManager:
         output_snapshot = self._resolve_output_settings()
         if output_snapshot.error:
             diagnostic = self._browse_diagnostic(output_snapshot)
+            message = (
+                f"{WEB_MAX_CHARS_ENV} is invalid; no browse was performed"
+                if output_snapshot.source == "environment_error"
+                else "settings/web.json is invalid; no browse was performed"
+            )
             return self._failure(
                 "browse", None, diagnostic, "WEB_OUTPUT_SETTINGS_INVALID",
-                "settings/web.json is invalid; no browse was performed",
+                message,
             )
         # A present ``max_chars`` is validated by ``BrowserEngine`` itself
         # (its own 1..100000 range, via ``validate_max_chars``) before any
@@ -827,11 +882,15 @@ class WebManager:
         # dispatcher's own canonical error shape.
         action = args.get("action") if isinstance(args, Mapping) else None
         result = self._family.handle(args)
+        if action == "settings":
+            # The generic SHOW seam owns this exact success/failure ABI; Web's
+            # operational presentation fields must not be stamped onto it.
+            return result
         if action == "manual" and "content" in result:
             result = self._adapt_manual_result(result)
         elif result.get("error_code") == "ACTION_REQUIRED":
             result["action"] = "unknown"
-            result["message"] = "action must be one of search, browse, or manual"
+            result["message"] = "action must be one of search, browse, settings, or manual"
             result["current_setting"] = self._no_settings_diagnostic()
         elif result.get("status") == "failed" and "current_setting" not in result:
             result["action"] = action if isinstance(action, str) else "unknown"
@@ -847,7 +906,7 @@ def _canonical_default_specs() -> dict[str, _EngineSpec]:
     # LLM-adapter attribute. DuckDuckGo needs no credential. Anthropic/Gemini
     # are present as selectable specs (so their status is honestly reported
     # in diagnostics) but are never chosen by the default resolver — only an
-    # explicit settings/web.search.json selection plus canonical-backend
+    # explicit search.engine environment/document selection plus canonical-backend
     # eligibility can select them (see WebManager._search).
     return {
         "duckduckgo": _EngineSpec("duckduckgo", provider="duckduckgo"),
@@ -881,7 +940,7 @@ def _specs_from_kwargs(
     if default_engine in _BACKEND_GATED_ENGINES or provider in _BACKEND_GATED_ENGINES:
         # Anthropic/Gemini are active, fully-admitted canonical providers —
         # never retired — restricted to explicit opt-in through
-        # settings/web.search.json only; a composition-time
+        # search.engine environment/document setting only; a composition-time
         # default_engine/provider must never select them, even when the
         # composed spec set would otherwise be eligible (Contract item 3,
         # g1 repair item 2). engines={...} may still declare a bounded spec
@@ -889,7 +948,7 @@ def _specs_from_kwargs(
         # tests/integration) without selecting it as the default.
         raise SettingsOnlyProviderError(
             f"engine {(default_engine or provider)!r} is a canonical provider explicit opt-in "
-            "only through settings/web.search.json; it cannot be selected via default_engine= or provider="
+            "only through Web's search.engine setting; it cannot be selected via default_engine= or provider="
         )
     if engines is not None:
         if not isinstance(engines, Mapping) or not engines:
@@ -999,6 +1058,15 @@ class WebCompositionPort(Protocol):
     @property
     def legacy_fallback_from(self) -> str | None: ...
 
+    @property
+    def provider_current(self) -> str | None: ...
+
+    @property
+    def model_current(self) -> str | None: ...
+
+    @property
+    def api_key_configured(self) -> bool | None: ...
+
     def publish_manager(self, manager: WebManager) -> None: ...
 
 
@@ -1011,6 +1079,9 @@ class WebComposition:
     default_engine: str | None
     default_source: str
     legacy_fallback_from: str | None
+    provider_current: str | None = None
+    model_current: str | None = None
+    api_key_configured: bool | None = None
     manager: WebManager | None = None
 
     def publish_manager(self, manager: WebManager) -> None:
@@ -1052,6 +1123,9 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
         default_engine=composition.default_engine,
         default_source=composition.default_source,
         legacy_fallback_from=composition.legacy_fallback_from,
+        provider_current=composition.provider_current,
+        model_current=composition.model_current,
+        api_key_configured=composition.api_key_configured,
     )
     composition.publish_manager(manager)
     return BoundToolPlugin(
@@ -1089,12 +1163,60 @@ def setup(
         api_key_env=api_key_env, model=model, default_engine=default_engine,
         engines=engines, kwargs=kwargs,
     )
+    if (
+        engines is None
+        and search_service is None
+        and provider is None
+        and api_key is None
+        and api_key_env is None
+        and model is None
+        and default_engine is None
+    ):
+        provider_current: str | None = "automatic"
+        model_current: str | None = "provider-default"
+        api_key_configured: bool | None = False
+    elif (
+        engines is None
+        and search_service is None
+        and default_engine is None
+        and any(
+            value is not None
+            for value in (provider, api_key, api_key_env, model)
+        )
+    ):
+        selected_spec = specs.get(chosen or "")
+        provider_current = (
+            selected_spec.provider if selected_spec is not None else None
+        )
+        model_current = (
+            selected_spec.model or "provider-default"
+            if selected_spec is not None
+            else None
+        )
+        api_key_configured = (
+            bool(selected_spec.api_key)
+            or bool(
+                selected_spec.api_key_env
+                and os.environ.get(selected_spec.api_key_env)
+            )
+            if selected_spec is not None
+            else None
+        )
+    else:
+        # Engine-map, injected-service, and default-engine composition has no
+        # singular flat provider/model/API-key fact to project.
+        provider_current = None
+        model_current = None
+        api_key_configured = None
     composition = WebComposition(
         browser_port=browser_port,
         specs=specs,
         default_engine=chosen,
         default_source=source,
         legacy_fallback_from=legacy_fallback_from,
+        provider_current=provider_current,
+        model_current=model_current,
+        api_key_configured=api_key_configured,
     )
     from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
 

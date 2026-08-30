@@ -340,7 +340,7 @@ active provider, an explicitly allowed `preset` resolves only that preset's own
 credential for the one requested call, `check`/`list`/`settings`/`manual` make
 no image/provider request, and no provider/credential/MCP fallback is automatic.
 `src/lingtai/tools/web_search/__init__.py` is the fourteenth slice: its
-`DECLARATION` owns the public `search | browse | manual` family and binds
+`DECLARATION` owns the public `search | browse | settings | manual` family and binds
 `WebManager` against `workdir`, the Web-owned typed `web_runtime` composition
 (`WebComposition` — browser transport plus immutable engine specs and default
 provenance, composed by `setup` and granted to `web` alone through

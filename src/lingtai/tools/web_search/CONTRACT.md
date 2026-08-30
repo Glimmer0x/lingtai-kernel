@@ -1,9 +1,10 @@
 ---
 name: web
-contract_version: 6
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/web_search/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
@@ -13,6 +14,7 @@ related_files:
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_web_official_plugin.py
   - tests/test_web_composition_port.py
+  - tests/test_web_settings_action.py
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py
   - src/lingtai/adapters/browser_transport.py
@@ -36,8 +38,8 @@ maintenance: |
 
 ## Purpose
 
-`web` is exactly one model-facing capability with explicit `search`, `browse`,
-and metadata-only `manual` actions. It is implemented in the retained
+`web` is exactly one model-facing capability with `search`, `browse`, the
+generic provider-injected `settings`, and metadata-only `manual` actions. It is implemented in the retained
 `tools.web_search` composition owner; browser and SearchService are internal
 subcomponents. `web` is the first family migrated to the LingTai Tool Protocol
 v2 shape defined in `src/lingtai/tools/CONTRACT.md`, and the first family to
@@ -45,7 +47,8 @@ build its schema composition and envelope dispatch on the generic
 `src/lingtai/tools/tool_family/` infrastructure (`ToolFamily`/`ChildTool`);
 using it changed no observable promise in this file. `web` is also an official
 static declared host plugin: its `DECLARATION` owns the same public name,
-`search`/`browse` action schemas, and installed `web` manual destination; its
+`search`/`browse` operational schemas, settings opt-in, and installed `web`
+manual destination; its
 binder receives only `workdir`, the Web-owned typed `web_runtime` composition
 value, and the narrow `provider_identity` label (`requires=("workdir",
 "web_runtime", "provider_identity")`). Registration, mounting, and name
@@ -54,11 +57,15 @@ receives or retains the whole Agent.
 
 ## Behavior
 
-Search rereads the action-owned `settings/web.search.json` selector on every
-call; browse and manual read no settings file at that path. Search and browse
-both also reread the shared family-owned `settings/web.json` output-delivery
-threshold on every call (`max_chars`, default 50000); manual reads neither
-settings file. Search returns the complete result set the selected provider
+Search resolves `LINGTAI_WEB_ENGINE`, then the action-owned
+`settings/web.search.json` selector, then its composed fallback on every call;
+browse and manual read no selector file. Search and browse both resolve
+`LINGTAI_WEB_MAX_CHARS`, then the shared family-owned `settings/web.json`
+output-delivery threshold, then 50000 on every applicable call; manual reads
+neither settings file. `settings(input={})` inventories those live values plus
+applied provider/model/admitted-engine composition and private credential facts
+through the generic read-only five-field seam. It never sets, resets, or
+otherwise mutates them. Search returns the complete result set the selected provider
 returned for this call — no LingTai-imposed result-count cap and no
 per-field truncation of provider-returned text — with same-Agent `link_ref`
 handles on every URL-bearing result; a synthesized or otherwise URL-less
@@ -88,6 +95,40 @@ migrated one family at a time, not by central injection); `handle()` delegates
 to a per-instance `ToolFamily.handle()` (`tool_family/CONTRACT.md`), which
 validates `summarize` is boolean and strips it before action dispatch — no action implementation
 ever receives it.
+
+### Settings ownership
+
+Guarded by: [W003](BEHAVIORS.md#behavior-w003)
+
+The declaration sets only this family's boolean settings opt-in, so the generic
+child appears immediately before `manual`. Normal success has no top-level
+`status` and every row contains exactly `key`, `current`, `default`,
+`configurable`, and `comment`. The exact ordered keys are `provider`, `model`,
+`api_key`, `engines`, `search.engine`, `output.max_chars`, and the three
+`credentials.{openai,anthropic,gemini}_api_key` rows. Every `comment` points to
+the exact `web-manual` section that owns meaning, accepted values, source and
+precedence, address, apply timing, authorization/sensitivity notes, and the real
+external change procedure.
+
+Provider, model, API-key composition, and admitted engines are applied
+startup/launcher snapshots. The singular flat provider defaults to
+`"automatic"`; its model defaults to `"provider-default"`; multi-engine or
+injected composition reports JSON `null` for singular provider/model facts; and
+the admitted-engine default is the sorted canonical four-engine list. The four
+credential-bearing rows use private `SettingRow(..., _sensitive=True)` facts,
+so both public values render as `<redacted>` and no secret, env indirection, or
+private flag is projected. Credential-route truth comes from the manager: the
+declared route before lazy construction and the cached service afterward.
+
+`search.engine` resolves `LINGTAI_WEB_ENGINE`, then
+`settings/web.search.json`, then the composed runtime fallback;
+`output.max_chars` resolves `LINGTAI_WEB_MAX_CHARS`, then `settings/web.json`,
+then 50000. If either current value is unavailable, the provider raises and the
+generic seam returns one fixed bounded failure with no partial rows.
+`input={}` is the only operation: there is no settings set/reset/mutation API,
+receipt, writer, compatibility shim, or process-environment mutation.
+`configurable` means the manual names an authorized procedure outside SHOW; a
+second SHOW can verify that procedure's result.
 
 ## Port
 
@@ -155,15 +196,17 @@ attribute. The built-in default engine is resolved live, per call: canonical
 OpenAI when its standard credential is genuinely present, else DuckDuckGo.
 Anthropic and Gemini are present in this spec set (so their status is
 honestly reported in `current_setting`) but are never the *selected* default;
-only a valid `settings/web.search.json` selection can select them.
+only a valid explicit `LINGTAI_WEB_ENGINE` or `settings/web.search.json`
+selection can select them.
 
-Anthropic and Gemini are explicit opt-in **only** through a valid hot-read
+Anthropic and Gemini are explicit opt-in **only** through the hot-read
+`search.engine` setting: a valid `LINGTAI_WEB_ENGINE` or
 `settings/web.search.json` selection. A composition-time `default_engine=`/
 `provider=` naming either one is rejected outright with
 `SettingsOnlyProviderError` at `setup()` time (an `engines={}` mapping may
 still declare a bounded spec for one of them — credential/service injection
 for tests/integration — without that composition selecting it as the
-default). Once selected through settings, the call fails loudly with
+default). Once selected through either setting source, the call fails loudly with
 `PROVIDER_BACKEND_INELIGIBLE` — no provider construction, no search call —
 unless the current Agent's live LLM backend truthfully IS that same canonical
 provider, per the module-private `_same_provider_identity()` predicate in
@@ -228,8 +271,8 @@ gets a real `link_ref`).
 
 Operator setup supplies immutable per-Agent engine specs, optional injected
 SearchService instances, and browser ports. Provider construction is lazy and
-cached per selected engine. The settings file is not a credential/configuration
-channel and no request mutates `os.environ`. Existing browser SSRF, deadline,
+cached per selected engine. The engine-selector env/document is not a
+credential or provider-installation channel and no request mutates `os.environ`. Existing browser SSRF, deadline,
 provenance, source-hash, cursor, snapshot, reference, and typed-failure rules
 remain in force. `OpenAISearchService` uses the canonical Responses API
 (`client.responses.create(tools=[{"type": "web_search"}])`), not the retired
@@ -252,14 +295,14 @@ Guarded by: [W002](BEHAVIORS.md#behavior-w002)
   `_reasoning` is internal only.
 - `action`, nested `input`, and top-level `reasoning` are required by the
   capability schema (`required: [action, input, reasoning]`). `action` is
-  one of `search`, `browse`, or `manual`; `input` uses strict action-specific
+  one of `search`, `browse`, `settings`, or `manual`; `input` uses strict action-specific
   object branches. Each branch is closed, every declared branch field is
   required, and browse optionals use JSON null, matching OpenAI strict-object
   conventions. No branch admits `reasoning`, `_reasoning`, or `summarize`.
 - `summarize` is a root-only optional boolean, absent or false by default. It
   is envelope metadata, not action input: `handle()` validates its type
   (non-boolean fails loudly with `INVALID_ARGUMENT`) and strips it before
-  dispatching to `search`/`browse`/`manual`. `src/lingtai/kernel/
+  dispatching to `search`/`browse`/`settings`/`manual`. `src/lingtai/kernel/
   tool_result_summary.py` recognizes canonical root `summarize=true` for
   `web` specifically (scoped by tool name, alongside the legacy literal
   `summary` flag it preserves for genuinely unmigrated callers) and treats
@@ -267,13 +310,14 @@ Guarded by: [W002](BEHAVIORS.md#behavior-w002)
   result, exactly like the kernel-wide `status: "error"` convention — scoped
   to migrated LTP v2 families so an unrelated tool's non-error `"failed"`-named
   domain value is never reinterpreted.
-- Settings v1 is the direct, action-owned strict schema
+- Engine settings v1 is the direct, action-owned strict schema
   `{"schema_version":1,"engine":"<admitted-name>"}`, read from
   `settings/web.search.json` (a direct child of `<agent-dir>/settings/`; no
   nested `search` object). There is no `settings/web.browse.json` or
   `settings/web.manual.json`, no cross-read of any old or sibling settings
   path, and no compatibility fallback, overlay, or merge between
-  `settings/web.search.json` and `settings/web.json` (below). Only an
+  `settings/web.search.json` and `settings/web.json` (below). The separate
+  `LINGTAI_WEB_ENGINE` peer has higher precedence. Only an
   operator-admitted engine name is permitted. Missing files use the
   operator/built-in default; malformed, unknown, disallowed, unavailable, or
   credential-missing selections fail search without substitution. Invalid
@@ -285,7 +329,8 @@ Guarded by: [W002](BEHAVIORS.md#behavior-w002)
   a search provider.
 - `settings/web.json` is a separate, family-owned strict schema
   `{"schema_version":1,"max_chars":<integer 1..100000>}`, default
-  `max_chars` 50000, consumed identically by `search` and `browse` for the
+  `max_chars` 50000, below the higher-precedence `LINGTAI_WEB_MAX_CHARS`, and
+  consumed identically by `search` and `browse` for the
   same call's inline-vs-artifact delivery decision. Manual never reads it.
   Missing file uses the default; a present malformed/unknown-field/
   wrong-schema-version/non-integer/boolean/out-of-range value fails loud with
@@ -295,15 +340,18 @@ Guarded by: [W002](BEHAVIORS.md#behavior-w002)
   override the shared setting for that call only; it no longer selects a
   pagination page size but the delivery threshold. Every search/browse
   success and failure envelope's `current_setting.output_max_chars` echoes
-  the effective value, its source (`default` / `settings/web.json` /
+  the effective value, its source (`environment` / `default` / `settings/web.json` /
   `call_override`), and a bounded diagnostic on error.
-- Settings reads reject symlinks, non-regular files, unstable snapshots,
+- Owner-document reads reject symlinks, non-regular files, unstable snapshots,
   oversize/wrong-UTF-8 data, unknown fields, duplicate fields, and wrong
-  schema. A changed file is observed on the next call (hot-read, no caching).
+  schema. Present invalid env input also fails loud and never falls through. A
+  changed file or environment value is observed on the next applicable call
+  (hot-read, no caching).
   Diagnostics contain source, selected engine/null, bounded available statuses,
-  revision/hash, and the exact change hint `Edit settings/web.search.json;
-  changes apply on the next web call; use web(action='manual', input={},
-  reasoning='load web guidance') for schema.`; secrets and absolute paths never
+  revision/hash, and the exact change hint `Use web(action='settings', input={},
+  reasoning='inspect web settings'); engine/output changes apply on the next
+  applicable web call; use web(action='manual', input={}, reasoning='load web
+  guidance') for schema.`; secrets and absolute paths never
   appear.
 - Search results are `{title,url,snippet}` objects, plus `link_ref` on any
   result carrying a usable HTTP(S) `url`; a synthesized or URL-less result is
@@ -423,7 +471,12 @@ regular file, changed-file-observed-next-call), no old-path cross-read,
 explicit argument rejection, environment immutability, search-to-browse
 continuation, and manual/browse operation with invalid settings and no
 provider construction. Existing browser Core/Port and SearchService contract
-tests remain applicable. Provider ownership/routing checks cover: the real
+tests remain applicable. `tests/test_web_settings_action.py` additionally
+proves declaration/action order, exact row-key and five-field equality,
+current/default/configurable values, exact manual targets, full private
+credential redaction, one fixed no-row failure when current truth is
+unavailable, no mutation input, and unchanged ordinary search behavior.
+Provider ownership/routing checks cover: the real
 no-config `setup(agent)` path composes all four canonical specs and
 genuinely selects OpenAI via its standard `OPENAI_API_KEY` env var when set
 (proved with real environment isolation, not a test-only injected `engines=`
@@ -436,7 +489,7 @@ keeps the pre-existing `legacy_fallback_from` DuckDuckGo behavior; a
 composition-time `default_engine=`/`provider=` naming `anthropic`/`gemini`
 raises the distinct `SettingsOnlyProviderError` (never `RetiredProviderError`
 — both are still active canonical providers), and only a valid hot-read
-`settings/web.search.json` selection (live-changed, no refresh required) can
+`search.engine` env/document selection (live-changed, no refresh required) can
 select either, subject to canonical-backend eligibility that succeeds for a
 truthfully-canonical backend and fails `PROVIDER_BACKEND_INELIGIBLE` (no
 provider construction, no search call) on every non-canonical backend

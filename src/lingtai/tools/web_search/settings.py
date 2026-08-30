@@ -2,11 +2,11 @@
 
 ``settings/web.search.json`` is intentionally a tiny selector, not a provider
 configuration file.  Operators configure engines and credentials at setup;
-an Agent-owned, action-owned ``settings/web.search.json`` may select only one
-admitted engine.
+the hot ``LINGTAI_WEB_ENGINE`` peer or an Agent-owned, action-owned
+``settings/web.search.json`` may select only one admitted engine.
 
-``settings/web.json`` is a separate, family-owned file that holds the shared
-``max_chars`` inline-vs-artifact delivery threshold consumed identically by
+``LINGTAI_WEB_MAX_CHARS`` and the separate family-owned ``settings/web.json``
+file resolve the shared ``max_chars`` inline-vs-artifact delivery threshold consumed identically by
 both ``search`` and ``browse``.  It is read by neither ``manual`` nor by the
 engine-selector reader above; the two files are never merged or cross-read.
 """
@@ -14,19 +14,38 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
+
+from ..tool_family import SettingRow, SettingsProvider
 
 MAX_SETTINGS_BYTES = 64 * 1024
 _ENGINE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 CHANGE_HINT = (
-    "Edit settings/web.search.json; changes apply on the next web call; use "
+    "Use web(action='settings', input={}, reasoning='inspect web settings'); "
+    "engine/output changes apply on the next applicable web call; use "
     "web(action='manual', input={}, reasoning='load web guidance') for schema."
 )
+
+WEB_ENGINE_ENV = "LINGTAI_WEB_ENGINE"
+WEB_MAX_CHARS_ENV = "LINGTAI_WEB_MAX_CHARS"
+
+PROVIDER_KEY = "provider"
+MODEL_KEY = "model"
+API_KEY = "api_key"
+ENGINES_KEY = "engines"
+SEARCH_ENGINE_KEY = "search.engine"
+OUTPUT_MAX_CHARS_KEY = "output.max_chars"
+OPENAI_API_KEY = "credentials.openai_api_key"
+ANTHROPIC_API_KEY = "credentials.anthropic_api_key"
+GEMINI_API_KEY = "credentials.gemini_api_key"
+
+DEFAULT_ENGINE_NAMES = ("anthropic", "duckduckgo", "gemini", "openai")
 
 
 def valid_engine_name(value: Any) -> bool:
@@ -164,6 +183,11 @@ def _read_stable(path: Path) -> tuple[bytes, str]:
     return _read_stable_named(path, filename="settings/web.search.json")
 
 
+def _environment_digest(name: str, value: str) -> str:
+    """Return a stable revision for one public environment setting."""
+    return hashlib.sha256(f"{name}={value}".encode("utf-8")).hexdigest()[:32]
+
+
 def read_settings(
     agent: Any,
     admitted: Mapping[str, Any],
@@ -176,6 +200,18 @@ def read_settings(
     is passed through unchanged; this reader must not infer it from the engine.
     """
     path = settings_path(agent)
+    env_engine = os.environ.get(WEB_ENGINE_ENV)
+    if env_engine is not None:
+        if not valid_engine_name(env_engine) or env_engine not in admitted:
+            return SettingsSnapshot(
+                None,
+                "environment_error",
+                "error",
+                None,
+                f"{WEB_ENGINE_ENV} must name one bounded owner-admitted engine",
+            )
+        digest = _environment_digest(WEB_ENGINE_ENV, env_engine)
+        return SettingsSnapshot(env_engine, "environment", "environment", digest)
     try:
         raw, revision = _read_stable(path)
         if revision == "missing":
@@ -223,6 +259,29 @@ def read_output_settings(agent: Any) -> OutputSettingsSnapshot:
     ``read_settings`` calls this reader.
     """
     path = output_settings_path(agent)
+    env_max_chars = os.environ.get(WEB_MAX_CHARS_ENV)
+    if env_max_chars is not None:
+        stripped = env_max_chars.strip()
+        try:
+            max_chars = int(stripped)
+        except ValueError:
+            max_chars = 0
+        if (
+            not stripped
+            or not (MIN_OUTPUT_MAX_CHARS <= max_chars <= MAX_OUTPUT_MAX_CHARS)
+        ):
+            return OutputSettingsSnapshot(
+                None,
+                "environment_error",
+                "error",
+                None,
+                f"{WEB_MAX_CHARS_ENV} must be an integer between "
+                f"{MIN_OUTPUT_MAX_CHARS} and {MAX_OUTPUT_MAX_CHARS}",
+            )
+        digest = _environment_digest(WEB_MAX_CHARS_ENV, env_max_chars)
+        return OutputSettingsSnapshot(
+            max_chars, "environment", "environment", digest
+        )
     try:
         raw, revision = _read_stable_named(path, filename="settings/web.json")
         if revision == "missing":
@@ -293,3 +352,96 @@ def current_setting(snapshot: SettingsSnapshot, admitted: Mapping[str, Any], sta
     if snapshot.error:
         block["settings_error"] = snapshot.error
     return block
+
+
+def build_settings_provider(
+    workdir: Any,
+    admitted: Mapping[str, Any],
+    default_engine: Callable[[], str | None],
+    default_source: str,
+    *,
+    provider_current: str | None,
+    model_current: str | None,
+    api_key_configured: bool | None,
+    credential_configured: Callable[[str], bool],
+) -> SettingsProvider:
+    """Bind Web's applied and hot-read facts to the five-field SHOW seam."""
+
+    def provide() -> tuple[SettingRow, ...]:
+        engine_default = default_engine()
+        engine = read_settings(
+            workdir,
+            admitted,
+            engine_default,
+            default_source,
+        )
+        output = read_output_settings(workdir)
+        if (
+            engine.error
+            or engine.engine is None
+            or output.error
+            or output.max_chars is None
+        ):
+            raise RuntimeError("Web settings current truth is unavailable")
+        return (
+            SettingRow(
+                PROVIDER_KEY,
+                provider_current,
+                "automatic",
+                True,
+                "web-manual#provider",
+            ),
+            SettingRow(
+                MODEL_KEY,
+                model_current,
+                "provider-default",
+                True,
+                "web-manual#model",
+            ),
+            SettingRow(
+                API_KEY,
+                api_key_configured,
+                None,
+                True,
+                "web-manual#api-key",
+                _sensitive=True,
+            ),
+            SettingRow(
+                ENGINES_KEY,
+                sorted(admitted),
+                list(DEFAULT_ENGINE_NAMES),
+                True,
+                "web-manual#engines",
+            ),
+            SettingRow(
+                SEARCH_ENGINE_KEY,
+                engine.engine,
+                engine_default,
+                True,
+                "web-manual#search-engine",
+            ),
+            SettingRow(
+                OUTPUT_MAX_CHARS_KEY,
+                output.max_chars,
+                DEFAULT_OUTPUT_MAX_CHARS,
+                True,
+                "web-manual#output-max-chars",
+            ),
+            *(
+                SettingRow(
+                    key,
+                    credential_configured(provider),
+                    None,
+                    True,
+                    f"web-manual#{provider}-api-key",
+                    _sensitive=True,
+                )
+                for key, provider in (
+                    (OPENAI_API_KEY, "openai"),
+                    (ANTHROPIC_API_KEY, "anthropic"),
+                    (GEMINI_API_KEY, "gemini"),
+                )
+            ),
+        )
+
+    return provide
