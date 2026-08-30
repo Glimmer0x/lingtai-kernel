@@ -1,10 +1,10 @@
 """Focused acceptance for the action-separated public ``vision`` family.
 
-``vision`` keeps its public tool name and four public action values
-(``analyze``/``check``/``list``/``manual``) while moving to the LTP v2 envelope
+``vision`` keeps its public tool name and operational actions while generic
+composition inserts ``settings`` immediately before ``manual`` in the LTP v2 envelope
 (``action``/``input``/``reasoning``/``summarize``) composed and dispatched by
 the generic ``lingtai.tools.tool_family`` infrastructure. These tests pin the
-migration's own promises: exactly one public model root, both child schemas and
+migration's own promises: exactly one public model root, every child schema and
 handlers, envelope/cross-action rejection strictly *before* any provider I/O,
 a manual route that constructs and calls no provider, the exact preserved
 success/failure result shapes, and Chat/Responses wire parity with no double
@@ -126,9 +126,17 @@ def test_setup_registers_exactly_one_public_vision_root(tmp_path):
     assert agent.tools["vision"]["glossary_package"] == "lingtai.tools.vision"
 
 
-def test_public_actions_are_analyze_check_list_and_manual():
+def test_public_actions_insert_settings_immediately_before_manual():
     schema = get_schema()
-    assert schema["properties"]["action"]["enum"] == ["analyze", "check", "list", "manual"]
+    assert schema["properties"]["action"]["enum"] == [
+        "analyze", "check", "list", "settings", "manual"
+    ]
+
+
+def test_module_docs_distinguish_preserved_actions_from_new_settings_action():
+    assert "operational action values are unchanged" in vision_tool.__doc__
+    assert "new\nreserved ``settings`` action" in vision_tool.__doc__
+    assert "public tool name and action values are unchanged" not in vision_tool.__doc__
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +160,7 @@ def test_root_schema_correlates_each_action_const_with_its_own_input():
         cond["if"]["properties"]["action"]["const"]: cond["then"]["properties"]["input"]
         for cond in schema["allOf"]
     }
-    assert set(conditions) == {"analyze", "check", "list", "manual"}
+    assert set(conditions) == {"analyze", "check", "list", "settings", "manual"}
     assert set(conditions["analyze"]["properties"]) == {"image_path", "question", "preset"}
     assert conditions["list"]["properties"] == {}
     assert conditions["manual"]["properties"] == {}
@@ -163,15 +171,16 @@ def test_root_schema_correlates_each_action_const_with_its_own_input():
 
 
 def test_all_child_input_schemas_are_exposed_before_invocation():
-    branches = get_schema()["properties"]["input"]["oneOf"]
+    branches = get_schema()["properties"]["input"]["anyOf"]
     assert [b["title"] for b in branches] == [
         "analyze input",
         "check input",
         "list input",
+        "settings inventory input",
         "manual input",
     ]
 
-    analyze_branch, check_branch, list_branch, manual_branch = branches
+    analyze_branch, check_branch, list_branch, settings_branch, manual_branch = branches
     assert analyze_branch["required"] == ["image_path", "question"]
     assert analyze_branch["additionalProperties"] is False
     assert analyze_branch["properties"]["image_path"]["type"] == "string"
@@ -190,6 +199,10 @@ def test_all_child_input_schemas_are_exposed_before_invocation():
     assert list_branch["properties"] == {}
     assert list_branch["additionalProperties"] is False
 
+    assert settings_branch["properties"] == {}
+    assert settings_branch["required"] == []
+    assert settings_branch["additionalProperties"] is False
+
     assert manual_branch["properties"] == {}
     assert manual_branch["additionalProperties"] is False
 
@@ -197,7 +210,7 @@ def test_all_child_input_schemas_are_exposed_before_invocation():
 @pytest.mark.parametrize("reasoning", ["chat-wire", "responses-wire"])
 def test_reasoning_and_summarize_never_leak_into_child_input(tmp_path, reasoning):
     schema = get_schema()
-    for branch in schema["properties"]["input"]["oneOf"]:
+    for branch in schema["properties"]["input"]["anyOf"]:
         assert not {"reasoning", "_reasoning", "summarize", "action"} & set(
             branch["properties"]
         )
@@ -558,7 +571,9 @@ def test_no_bare_manual_pointer_survives_in_any_vision_owned_surface():
 
 def test_family_registers_the_reserved_manual_child_once(tmp_path):
     mgr = _manager(tmp_path)
-    assert mgr._family.child_names == ("analyze", "check", "list", "manual")
+    assert mgr._family.child_names == (
+        "analyze", "check", "list", "settings", "manual"
+    )
     assert mgr._family.has_manual()
 
 
@@ -590,7 +605,7 @@ def test_manual_child_input_schema_is_the_generic_owners_object(tmp_path):
 
     manual_branch = next(
         b
-        for b in get_schema()["properties"]["input"]["oneOf"]
+        for b in get_schema()["properties"]["input"]["anyOf"]
         if b["title"] == "manual input"
     )
     assert manual_branch["properties"] == MANUAL_INPUT_SCHEMA["properties"]
@@ -615,17 +630,20 @@ def test_vision_schema_survives_both_provider_wires():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+    for wire, combinator in ((chat, "anyOf"), (responses, "anyOf")):
         assert wire["type"] == "object"
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
-        assert wire["properties"]["action"]["enum"] == ["analyze", "check", "list", "manual"]
+        assert wire["properties"]["action"]["enum"] == [
+            "analyze", "check", "list", "settings", "manual"
+        ]
         branches = wire["properties"]["input"][combinator]
         assert [b["title"] for b in branches] == [
             "analyze input",
             "check input",
             "list input",
+            "settings inventory input",
             "manual input",
         ]
         for branch in branches:
@@ -639,7 +657,9 @@ def test_vision_schema_survives_both_provider_wires():
             cond["if"]["properties"]["action"]["const"]: cond["then"]["properties"]["input"]
             for cond in wire["allOf"]
         }
-        assert set(correlated) == {"analyze", "check", "list", "manual"}
+        assert set(correlated) == {
+            "analyze", "check", "list", "settings", "manual"
+        }
         assert set(correlated["analyze"]["properties"]) == {"image_path", "question", "preset"}
         assert correlated["list"]["properties"] == {}
         assert correlated["manual"]["properties"] == {}
@@ -767,7 +787,7 @@ def test_preset_borrow_resolves_the_listed_presets_own_identity(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, ""),
+        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
     ) as mock_resolve:
         mgr = _manager(tmp_path, _never_called_service())
         svc, reason, identity = mgr._build_service_from_preset("presets/codex-pool.json")
@@ -798,7 +818,7 @@ def test_analyze_with_preset_option_uses_the_borrowed_service(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, ""),
+        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
     ):
         mgr = _manager(tmp_path, _never_called_service())
         result = mgr.handle(
@@ -904,7 +924,7 @@ def test_check_preset_reports_identity_without_image(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, ""),
+        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
     ):
         mgr = _manager(tmp_path, _never_called_service())
         result = mgr.handle(
@@ -1350,7 +1370,7 @@ def test_vision_owner_docs_cover_all_actions_and_truthful_preset_boundary():
     behaviors = (root / "BEHAVIORS.md").read_text(encoding="utf-8")
     manual = (root / "manual" / "SKILL.md").read_text(encoding="utf-8")
 
-    for action in ("analyze", "check", "list", "manual"):
+    for action in ("analyze", "check", "list", "settings", "manual"):
         assert action in anatomy
         assert action in contract
         assert action in manual
@@ -1360,7 +1380,9 @@ def test_vision_owner_docs_cover_all_actions_and_truthful_preset_boundary():
     assert "allowed preset's own" in manual
     assert "reads another preset's secret" not in manual
     assert "auto-invokes MCP" in manual
-    for labt in ("VN001", "VN002", "VN003", "VN004", "VN005", "VN006"):
+    for labt in (
+        "VN001", "VN002", "VN003", "VN004", "VN005", "VN006", "VN007"
+    ):
         assert labt in behaviors
         assert f"{labt}](BEHAVIORS.md#behavior-{labt.lower()}" in contract or labt in contract
 
