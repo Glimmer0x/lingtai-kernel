@@ -2,28 +2,31 @@
 name: daemon-manual
 description: >
   Operational router for the `daemon` tool: inspect slow/stuck/failed emanations,
+  interpret the read-only settings inventory and use its owner procedures,
   read daemon artifact folders, choose polling cadence, avoid reclaiming on a
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.12.4
-last_changed_at: 2026-08-25T00:00:00Z
+version: 0.13.0
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/daemon/system_prompt.py
+- src/lingtai/tools/daemon/settings.py
 - src/lingtai/tools/daemon/execution_host.py
 - src/lingtai/tools/daemon/shell_prompt_events.py
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/dispatch-ledger/SKILL.md
+- tests/test_daemon_settings.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # Daemon Manual — Router
 
-The `daemon` tool schema covers dispatch/follow-up/check/reclaim. This manual
+The `daemon` tool schema covers dispatch/follow-up/check/reclaim/settings. This manual
 routes to deeper operational references: how to inspect daemon artifacts, decide
 whether work is stuck, use CLI backends safely, and clean up old emanations.
 
@@ -91,10 +94,97 @@ the call root — is refused before the daemon engine runs.
 | `ask` | `daemon(action="ask", input={"id": "em-1", "message": "..."}, reasoning="...")` |
 | `check` | `daemon(action="check", input={"id": "em-1", "last": 20, "truncate": 500}, reasoning="...")` |
 | `reclaim` | `daemon(action="reclaim", input={}, reasoning="...")` |
+| `settings` | `daemon(action="settings", input={}, reasoning="...")` |
 | `manual` | `daemon(action="manual", input={}, reasoning="...")` |
 
-`list`, `check`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
+`list`, `check`, `settings`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
 are the three that change state.
+
+## Settings inventory
+
+`daemon(action="settings", input={}, reasoning="inspect daemon settings")`
+is SHOW-only. Success contains only `{"settings": [...]}`; every row has exactly
+`key`, `current`, `default`, `configurable`, and the exact manual-section
+pointer `comment`. The action accepts no set/reset or other input and never
+writes a config file, process environment, launcher state, or daemon run.
+
+`configurable: true` means an authorized owner can use the existing procedure
+in the named section and then verify the new active value with a second SHOW.
+It does not authorize the caller or this action to perform the change.
+
+### Max turns
+
+`max_turns` is the active manager's default and ceiling for a new run's
+tool-loop turns; its meaningful default is `5000`. Accepted owner values are
+positive integers. Source precedence is a valid positive-integer
+`LINGTAI_DAEMON_MAX_TURNS` environment value, an explicit daemon capability or
+setup value, a positive `<workdir>/daemon/daemon.json` key `max_turns`, then
+the default. Invalid environment input retains the valid explicit, file, or
+default result. The per-call `emanate.max_turns` input may select a smaller
+value for one batch but does not change this owner setting.
+
+An authorized owner changes the launcher/environment,
+`manifest.capabilities.daemon.max_turns` in `init.json`, or the existing
+`daemon/daemon.json` key with the normal File/Shell procedure, then refreshes
+or relaunches the agent. The value applies when a new `DaemonManager` is built;
+SHOW never writes it.
+
+### Manager pool size
+
+`manager_pool_size` bounds concurrent POSIX central-manager execution
+children; `0` selects the classic per-run supervisor path. Its default is
+`100`, and accepted values are non-negative integers. Source precedence is a
+valid `LINGTAI_DAEMON_MANAGER_POOL_SIZE` environment value, an explicit daemon
+capability or setup value, a valid `daemon/daemon.json` key
+`manager_pool_size`, then the default. Invalid environment or file input falls
+through without repair.
+
+An authorized owner updates the launcher/environment,
+`manifest.capabilities.daemon.manager_pool_size`, or the existing owner file
+with the normal Shell/File/config procedure, then refreshes or relaunches. The
+value applies when the manager is rebuilt; SHOW only reports the active
+snapshot.
+
+### System prompt budget chars
+
+`system_prompt_budget_chars` is the character limit for a LingTai daemon's
+rendered system prompt. Over-budget prompts fail rather than truncate
+constraints. The default is `20000`; accepted values are positive integers.
+Source precedence is a valid
+`LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS` environment value, an explicit
+daemon capability or setup value, a valid `daemon/daemon.json` key
+`system_prompt_budget_chars`, then the default. Invalid input falls through.
+
+An authorized owner uses the existing launcher/environment,
+`manifest.capabilities.daemon.system_prompt_budget_chars`, or owner-file
+procedure and then refreshes or relaunches. The value applies to a newly built
+manager; SHOW performs no write.
+
+### Timeout
+
+`timeout` is the active manager's default wall-clock seconds for a run and for
+supported follow-up workers; its default is `3600.0`. The operationally valid
+owner value is a finite JSON number (integer or float, but not a Boolean) of at
+least `5` seconds; there is no upper bound. Its only source is the
+launcher/capability setup layer: the owner value has no daemon-file or
+environment peer. An explicit
+`manifest.capabilities.daemon.timeout` value is passed by capability setup,
+otherwise the default applies. A one-run `emanate.timeout` input does not
+change the owner setting.
+
+The existing setup seam does not enforce that type, range, or finiteness: the
+`float` annotation is informational, and `setup()` / `DaemonManager` store an
+explicit value unchanged. A JSON-finite wrong-type or out-of-range value is
+therefore neither coerced nor replaced by the default; SHOW reports that exact
+active value. If a non-finite float reaches setup, it is likewise stored, but
+the generic settings serializer refuses non-finite JSON, so SHOW fails the
+whole inventory with `SETTINGS_UNAVAILABLE` and emits no partial rows. Invalid
+stored values can fail later when timeout arithmetic or persistence consumes
+them; there is no automatic repair or fallback.
+
+An authorized owner changes the daemon capability value in `init.json` using
+the normal config/File procedure and refreshes or relaunches. The new default
+applies when the manager is rebuilt; SHOW never mutates it.
 
 ## Programmatic use / CLI
 
@@ -194,12 +284,9 @@ durable journal with restart recovery. Its purpose is to cap RAM growth: at most
 `manager_pool_size` execution children run concurrently, and runs beyond that
 queue as pure state (≈0 MB RAM) until a worker frees.
 
-Configuration is per-agent `daemon/daemon.json` with environment overrides
-(env wins):
-
-| Config key | Env var | Default | Meaning |
-|---|---|---|---|
-| `manager_pool_size` | `LINGTAI_DAEMON_MANAGER_POOL_SIZE` | `100` | Max concurrent execution children under the manager (Jason 10202). `0` disables the manager entirely; the classic per-run supervisor path is used. |
+Configuration remains per-agent and is not written by SHOW. See
+[Manager pool size](#manager-pool-size) for its accepted values, precedence,
+apply timing, and existing change procedure.
 
 Behavior notes:
 - The manager path is POSIX-only and enabled by default (`manager_pool_size`

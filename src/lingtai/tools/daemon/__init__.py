@@ -154,8 +154,9 @@ DEFAULT_MAX_TURNS = 5000
 # ``max_turns``, ``manager_pool_size``, and ``system_prompt_budget_chars``.
 # Configured positive ``max_turns`` and ``system_prompt_budget_chars`` become
 # the corresponding defaults when ``setup()`` omits explicit capability kwargs.
-# A valid ``LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS`` is the final override
-# at daemon-manager construction. ``manager_pool_size`` caps concurrent central-manager
+# Valid ``LINGTAI_DAEMON_MAX_TURNS`` and
+# ``LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS`` values are final overrides at
+# daemon-manager construction. ``manager_pool_size`` caps concurrent central-manager
 # execution workers. A missing file, a malformed/undecodable file, or an
 # invalid field falls back independently, so agents without a config file
 # behave exactly as before.
@@ -1477,7 +1478,7 @@ class _ToolCollector:
         return getattr(self._parent, name)
 
 
-_DESCRIPTION = 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows the newest 1000 entries by default (pass a positive last explicitly for another count); daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
+_DESCRIPTION = 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows the newest 1000 entries by default (pass a positive last explicitly for another count); daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'settings\', input={}) shows the read-only five-field owner inventory; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers settings meaning/change procedures, inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
 
 
 def get_description(lang: str = "en") -> str:
@@ -1528,6 +1529,7 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind_daemon,
     requires=("workdir", "daemon_runtime"),
     glossary_package=__package__,
+    settings=True,
 )
 
 
@@ -1690,7 +1692,9 @@ class DaemonManager:
             )
         self._runtime = runtime
         self._workdir = workdir
-        self._max_turns = max_turns
+        self._max_turns = self._env_positive_int(
+            "LINGTAI_DAEMON_MAX_TURNS", max_turns,
+        )
         self._timeout = timeout
         self._manager_pool_size = self._env_nonnegative_int(
             "LINGTAI_DAEMON_MANAGER_POOL_SIZE", manager_pool_size,

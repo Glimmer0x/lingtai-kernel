@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/daemon/settings.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
@@ -46,6 +47,7 @@ related_files:
   - tests/test_daemon_attention_delay.py
   - tests/test_daemon_central_manager.py
   - tests/test_tool_family_daemon_migration.py
+  - tests/test_daemon_settings.py
   - tests/test_daemon_empty_parity.py
   - tests/test_apriori_summary_executor.py
   - tests/test_daemon_run_dir.py
@@ -194,6 +196,10 @@ remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBr
 - `adapters/posix/process_identity.py` — shared POSIX process-incarnation helper. Linux identities combine boot ID and `/proc/<pid>/stat` start ticks; Darwin/BSD identities use bounded `ps` start time plus PPID. It returns `None` when observation is unavailable, and all ownership-sensitive signal paths refuse unknown or mismatched identities.
 - `daemon/runtime.py` — stateless daemon backend runtime primitives shared by the LingTai in-process loop and transitional CLI runners. Port-owned Codex, Cursor, OpenCode-family, Qwen, and Kimi runners use the daemon-local process Port for stderr draining and stdout iteration; only ask workers use a local deadline, while initial streams remain watchdog-owned. The historical private names remain for unmigrated paths and compatibility tests.
 - `daemon/CONTRACT.md` — maintained daemon contract for the public tool surface, selected skills catalog/path semantics, MCP registration redaction/native mounting, `daemon_common` checkpoint/inbox delivery and completion enforcement, backend implementation status, run artifacts, review triggers, and the acceptance gate for new backend or contract-impacting changes.
+- `daemon/settings.py` — read-only owner provider for the daemon family's
+  progressive-disclosure `settings` action. It projects the active manager's
+  four effective settings as exact five-field `SettingRow` values and exposes
+  no mutation path.
 
 - `daemon/interactive_terminal/` — capability-local immutable command/exit values and the
   raw byte-stream `InteractiveTerminalPort`; its separate Contract/Anatomy
@@ -234,12 +240,12 @@ remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBr
 
 `daemon` is one model-facing tool carrying the LTP v2 action-separated envelope
 (`action`, `input`, required `reasoning`, optional `summarize`) composed by
-`_tool_family.py` from six internal `ChildTool`s. The children consume no extra
+`_tool_family.py` from seven internal `ChildTool`s. The children consume no extra
 model tool slot. Each action's own strict `input` fields are listed in
-`CONTRACT.md` §Tool Surface; `list`/`check`/`manual` are read-only and
+`CONTRACT.md` §Tool Surface; `list`/`check`/`settings`/`manual` are read-only and
 `emanate`/`ask`/`reclaim` are the side-effectful three.
 
-The `daemon` tool exposes six actions:
+The `daemon` tool exposes seven actions:
 
 | Action     | Description |
 |------------|-------------|
@@ -247,7 +253,7 @@ The `daemon` tool exposes six actions:
 | `list`     | List running/completed/failed emanations with status and elapsed time |
 | `ask`      | Send a follow-up message to a running emanation |
 | `check`    | Read-only progress tail: `daemon.json` state + last N events from `events.jsonl` + a compact `artifacts` block (the run's artifact manifest — relative path/size/mtime/role per important file, plus run-level state/result_path/error_path). On in-memory registry miss (e.g. after refresh/molt) falls back to the durable `daemons/*/` run dirs, resolving by full `run_id` (exact) or short `handle` (most-recent, with ambiguity flagged) |
-| `list`     | Progressive-disclosure index: active registry + historical run dirs; lazily rebuilds missing/invalid/stale-version `daemon.json` and returns prompt/result previews with search filters |
+| `settings` | Return the read-only five-field daemon settings inventory. The provider must resolve every current manager value or the complete action fails; exact meanings and owner change procedures are in the manual sections named by each row's `comment` |
 | `reclaim`  | Cancel all running emanations, shut down CLI process groups/thread pools through the same runtime-shutdown helper used by agent stop, reset ID counter |
 | `manual`   | Return the installed `daemon-manual` skill via the shared reserved `tool_family.manual.build_manual_child(agent, "daemon")` child: canonical `content[0].text` body + `structuredContent.manual_path`, returned verbatim with no double wrap. Reaches no `DaemonManager` method, so it performs no daemon operation |
 

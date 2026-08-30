@@ -210,17 +210,20 @@ def test_daemon_setting_handoff_and_global_memory_rows_are_truthfully_scoped() -
     rows = {row[0].strip("`"): row for row in _registry_rows()}
     assert {
         "LINGTAI_DAEMON_MANAGER_POOL_SIZE",
+        "LINGTAI_DAEMON_MAX_TURNS",
         "LINGTAI_DAEMON_MEMORY_RELIEF",
         "LINGTAI_DAEMON_MANAGER_TOKEN",
         "LINGTAI_DAEMON_RUN_DIR",
     } <= set(rows)
 
     assert "Daemon" in rows["LINGTAI_DAEMON_MANAGER_POOL_SIZE"][6]
+    assert "Daemon" in rows["LINGTAI_DAEMON_MAX_TURNS"][6]
     assert "system` catch-all" in rows["LINGTAI_DAEMON_MEMORY_RELIEF"][6]
     assert "every `ToolExecutor` batch" in rows["LINGTAI_DAEMON_MEMORY_RELIEF"][3]
     assert "not an operator setting" in rows["LINGTAI_DAEMON_MANAGER_TOKEN"][7]
     assert "not an operator setting" in rows["LINGTAI_DAEMON_RUN_DIR"][7]
     assert "Non-negative integer" in rows["LINGTAI_DAEMON_MANAGER_POOL_SIZE"][2]
+    assert "Positive integer" in rows["LINGTAI_DAEMON_MAX_TURNS"][2]
     assert "Exactly `1`" in rows["LINGTAI_DAEMON_MEMORY_RELIEF"][2]
 
     executor_source = (

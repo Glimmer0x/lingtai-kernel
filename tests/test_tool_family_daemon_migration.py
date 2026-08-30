@@ -2,7 +2,7 @@
 
 Proves the public/model-facing ``daemon`` tool is the ToolFamily-composed
 ``action``/``input``/``reasoning``/``summarize`` envelope over the canonical
-children ``emanate | list | ask | check | reclaim | manual``, while
+children ``emanate | list | ask | check | reclaim | settings | manual``, while
 ``DaemonManager`` — batch emanation, backend routing, run directories, the
 detached supervisor, ``daemon_common`` completion signaling, cancellation,
 timeouts, terminal notifications, and result/error persistence — stays the
@@ -14,7 +14,8 @@ flat call shape.
 The invariants under test come from ``src/lingtai/tools/CONTRACT.md``
 (Envelope, Dispatch and actions), ``src/lingtai/tools/tool_family/CONTRACT.md``,
 and the Daemon migration acceptance line: exactly one model tool slot, strict
-action/input correlation, read-only (``list``/``check``/``manual``) vs
+action/input correlation, read-only (``list``/``check``/``settings``/
+``manual``) vs
 side-effectful (``emanate``/``ask``/``reclaim``) receipt truth, the reserved
 ``manual`` performing no daemon operation with no double wrap, and the complete
 nested ``emanate`` task schema preserved field-for-field.
@@ -51,7 +52,11 @@ from lingtai.tools.tool_family import ToolFamilyError
 from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
 _ACTIONS = list(DAEMON_ACTIONS)
-_READ_ONLY = ("list", "check", "manual")
+_ACTION_TITLES = [
+    "settings inventory input" if action == "settings" else f"{action} input"
+    for action in _ACTIONS
+]
+_READ_ONLY = ("list", "check", "settings", "manual")
 _SIDE_EFFECTFUL = ("emanate", "ask", "reclaim")
 
 # One minimal, schema-valid ``input`` per action — every optional explicitly
@@ -62,6 +67,7 @@ _MINIMAL_INPUT: dict[str, dict[str, Any]] = {
     "ask": {"id": "em-1", "message": "hello"},
     "check": {"id": "em-1", "last": None, "truncate": None},
     "reclaim": {},
+    "settings": {},
     "manual": {},
 }
 
@@ -77,6 +83,10 @@ class _RecordingManager:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self._max_turns = 5_000
+        self._manager_pool_size = 100
+        self._system_prompt_budget_chars = 20_000
+        self._timeout = 3_600.0
 
     def handle(self, args: dict) -> dict:
         self.calls.append(dict(args))
@@ -142,7 +152,7 @@ def test_public_model_facing_name_is_daemon_with_the_family_schema(tmp_path):
 
 
 def test_setup_registers_exactly_one_model_facing_daemon_tool(tmp_path):
-    """The six children consume no extra model tool slot: a real Agent with the
+    """The seven children consume no extra model tool slot: a real Agent with the
     daemon capability exposes exactly one ``daemon`` tool and no per-action tool."""
     agent = make_daemon_agent(tmp_path)
 
@@ -202,13 +212,13 @@ def test_root_is_strict_action_input_reasoning_summarize():
     assert schema["properties"]["summarize"]["type"] == "boolean"
 
 
-def test_canonical_children_are_the_six_daemon_actions():
+def test_canonical_children_are_the_seven_daemon_actions():
     schema = get_schema()
 
     assert schema["properties"]["action"]["enum"] == _ACTIONS
-    assert [b["title"] for b in schema["properties"]["input"]["oneOf"]] == [
-        f"{a} input" for a in _ACTIONS
-    ]
+    assert [b["title"] for b in schema["properties"]["input"]["anyOf"]] == (
+        _ACTION_TITLES
+    )
 
 
 @pytest.mark.parametrize(
@@ -219,6 +229,7 @@ def test_canonical_children_are_the_six_daemon_actions():
         ("ask", {"id", "message"}),
         ("check", {"id", "last", "truncate"}),
         ("reclaim", set()),
+        ("settings", set()),
         ("manual", set()),
     ],
 )
@@ -255,8 +266,8 @@ def test_every_child_input_schema_is_closed_and_free_of_host_fields():
             assert host_field not in branch["properties"], (action, host_field)
 
 
-def test_reclaim_and_manual_take_the_canonical_strict_empty_input():
-    for action in ("reclaim", "manual"):
+def test_reclaim_settings_and_manual_take_the_canonical_strict_empty_input():
+    for action in ("reclaim", "settings", "manual"):
         branch = daemon_action_input_schema(action)
         assert branch["properties"] == {}
         assert branch["required"] == []
@@ -273,7 +284,7 @@ def test_root_allof_correlates_each_action_const_to_its_own_input_schema():
         assert condition["if"]["required"] == ["action"]
         branch = daemon_action_input_schema(action)
         correlated = condition["then"]["properties"]["input"]
-        # Same canonical child schema the ``oneOf`` branch embeds, minus the
+        # Same canonical child schema the ``anyOf`` branch embeds, minus the
         # presentational ``title`` the branch adds.
         assert correlated == {k: v for k, v in branch.items() if k != "title"}
 
@@ -281,12 +292,12 @@ def test_root_allof_correlates_each_action_const_to_its_own_input_schema():
 def test_composed_schema_branches_are_mutation_isolated():
     """A caller mutating one composed schema must not corrupt the next call's."""
     first = get_schema()
-    first["properties"]["input"]["oneOf"][0]["properties"].clear()
+    first["properties"]["input"]["anyOf"][0]["properties"].clear()
     first["allOf"][0]["then"]["properties"]["input"]["properties"].clear()
 
     second = get_schema()
 
-    assert set(second["properties"]["input"]["oneOf"][0]["properties"]) == {
+    assert set(second["properties"]["input"]["anyOf"][0]["properties"]) == {
         "tasks", "backend", "max_turns", "timeout"
     }
 
@@ -455,7 +466,7 @@ def test_reasoning_and_summarize_never_reach_the_engine(tmp_path):
 # Envelope validation is fail-closed before any engine I/O
 # ---------------------------------------------------------------------------
 
-def test_unknown_action_fails_with_daemons_own_six_action_message(tmp_path):
+def test_unknown_action_fails_with_daemons_own_seven_action_message(tmp_path):
     dispatcher, mgr = _dispatcher(tmp_path)
 
     result = dispatcher.handle({"action": "kill", "input": {}, "reasoning": "r"})
@@ -463,7 +474,7 @@ def test_unknown_action_fails_with_daemons_own_six_action_message(tmp_path):
     assert result["status"] == "failed"
     assert result["error_code"] == "ACTION_REQUIRED"
     assert result["message"] == (
-        "action must be one of emanate, list, ask, check, reclaim, or manual"
+        "action must be one of emanate, list, ask, check, reclaim, settings, or manual"
     )
     assert mgr.calls == []
 
@@ -488,6 +499,7 @@ def test_unhashable_or_wrong_typed_action_is_rejected_not_raised(tmp_path, actio
         ("ask", {"truncate": 10}),
         ("emanate", {"message": "hi"}),
         ("reclaim", {"id": "em-1"}),
+        ("settings", {"last": 5}),
         ("manual", {"last": 5}),
     ],
 )
@@ -551,7 +563,7 @@ def test_legacy_flat_call_no_longer_reaches_the_engine(tmp_path):
 
 @pytest.mark.parametrize("action", _READ_ONLY)
 def test_read_only_actions_start_no_run_and_cancel_nothing(tmp_path, action):
-    """``list``/``check``/``manual`` must be pure reads against a real manager:
+    """``list``/``check``/``settings``/``manual`` must be pure reads:
     no emanation is created, nothing is cancelled, no run dir appears."""
     agent = make_daemon_agent(tmp_path, working_dir_name=f"ro-{action}")
     handler = agent._tool_handlers["daemon"]
@@ -709,7 +721,7 @@ def test_manual_documents_the_read_only_versus_side_effect_split():
         / "src" / "lingtai" / "tools" / "daemon" / "manual" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
-    assert "`list`, `check`, and `manual` are read-only" in manual
+    assert "`list`, `check`, `settings`, and `manual` are read-only" in manual
     assert "`emanate`, `ask`, and `reclaim`" in manual
     # The envelope itself is taught, including the summarize rename.
     assert 'daemon(action="reclaim", input={}' in manual
@@ -749,14 +761,14 @@ def test_daemon_family_schema_survives_chat_and_responses_wires():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+    for wire, combinator in ((chat, "anyOf"), (responses, "anyOf")):
         assert wire["type"] == "object"
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["action"]["enum"] == _ACTIONS
         branches = wire["properties"]["input"][combinator]
-        assert [b["title"] for b in branches] == [f"{a} input" for a in _ACTIONS]
+        assert [b["title"] for b in branches] == _ACTION_TITLES
         for branch in branches:
             assert branch["additionalProperties"] is False
             for host_field in ("reasoning", "_reasoning", "summarize"):
@@ -798,7 +810,7 @@ def test_nested_emanate_task_schema_is_identical_on_both_wires():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    chat_task = chat["properties"]["input"]["oneOf"][0]["properties"]["tasks"]["items"]
+    chat_task = chat["properties"]["input"]["anyOf"][0]["properties"]["tasks"]["items"]
     responses_task = (
         responses["properties"]["input"]["anyOf"][0]["properties"]["tasks"]["items"]
     )

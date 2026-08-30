@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/daemon/settings.py
   - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
   - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/claude-p/SKILL.md
@@ -18,6 +19,7 @@ related_files:
   - tests/test_daemon_qwen_code_submanual.py
   - tests/test_daemon_per_batch_limits.py
   - tests/test_daemon_attention_delay.py
+  - tests/test_daemon_settings.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
 maintenance: |
@@ -30,6 +32,9 @@ maintenance: |
   contract and the non-negative daemon wake deltas in CONTRACT.md § 6; update it
   whenever event typing, terminal classification, or the bounded
   `agent_state.daemon` projection changes.
+  D010 guards the daemon owner's exact read-only five-field settings inventory;
+  update it whenever row ownership, defaults, configurability, or manual
+  section pointers change.
 ---
 # Daemon Behavior Tests
 
@@ -473,3 +478,45 @@ Pass when all evidence is observed and no forbidden side effect occurs. Fail if
 a follow-up is typed or counted as terminal, if it adds a second terminal for
 the same run, if `latest_terminal` reports a follow-up status, or if any wake
 delta is negative; record the evidence trail in the task report.
+
+## Behavior D010 — daemon settings are exact and read-only
+
+- **id**: D010
+- **title**: the daemon owner projects its effective inventory as exactly five
+  public fields and routes all change guidance to exact manual sections
+- **guards**: `daemon-contract` § Daemon settings ownership
+  ([CONTRACT.md](CONTRACT.md#daemon-settings-ownership))
+- **supersedes**: `tests/test_daemon_settings.py` (projection and refusal paths)
+- **runner**: any LingTai agent with the `daemon` tool
+- **prerequisites**: a configured daemon capability
+- **estimate**: 2 min
+
+### Steps
+1. Call `daemon(action="settings", input={}, reasoning="inspect")` and retain
+   the complete response.
+2. Confirm the row keys are exactly `max_turns`, `manager_pool_size`,
+   `system_prompt_budget_chars`, and `timeout`, in that order.
+3. Confirm every row has exactly `key`, `current`, `default`, `configurable`,
+   and `comment`.
+4. Open `daemon(action="manual", input={}, reasoning="inspect")`; follow every
+   `comment` fragment to its exact heading and verify the omitted meaning,
+   accepted values, source/precedence, canonical key, apply timing,
+   authorization, and real owner change procedure are present there.
+5. Call `daemon(action="list", input={}, reasoning="unchanged")` and confirm it
+   still returns the ordinary daemon index. Do not alter configuration during
+   this behavior check.
+
+### Expected evidence
+- [ ] SHOW contains exactly four rows in the owner-defined order.
+- [ ] Every successful row exposes exactly the five contracted public fields.
+- [ ] Every comment resolves to the exact owner-manual heading containing the
+      operational details omitted from SHOW.
+- [ ] No set, reset, writer, state, receipt, or other mutation operation is
+      exposed, and the unchanged `list` action still succeeds.
+- [ ] The automated unavailable-current case returns only the generic fixed
+      whole-action failure; it never emits a partial or placeholder row.
+
+### Pass / Fail
+Pass when all evidence holds. Fail on a missing or extra key, a sixth public
+field, a dangling manual pointer, any settings mutation route, partial output
+on failure, or a regression in the unchanged `list` action.

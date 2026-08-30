@@ -863,13 +863,13 @@ Its absence leaves SHOW available with fixed defaults, and file presence never
 opts a family into SHOW. System declares no per-action settings and authorizes
 no set/reset or mutation path.
 
-`daemon` (`emanate | list | ask | check | reclaim | manual`) is the twelfth
+`daemon` (`emanate | list | ask | check | reclaim | settings | manual`) is the twelfth
 family migrated to this contract, and the one with the largest retained engine.
 Its final model-facing root is exactly `action`, `input`, `reasoning`, and
 `summarize`, and each action's arguments live only in that action's own strict
 `input`: `tasks`/`backend`/`max_turns`/`timeout` belong to `emanate`,
 `contains`/`status`/`include_done` to `list`, `message` to `ask`, `truncate` to
-`check`, while `reclaim` and `manual` take the canonical strict-empty `input`
+`check`, while `reclaim`, `settings`, and `manual` take the canonical strict-empty `input`
 (`id` is shared by `ask`/`check` and `last` by `list`/`check`, each declared in
 both branches). It follows `shell`'s division: a dedicated
 `daemon/_tool_family.py` owns the public schema and a `DaemonFamilyDispatcher`
@@ -879,6 +879,11 @@ completion signaling, cancellation, timeouts, and terminal notifications are
 untouched by the migration. Its pre-migration flat `summary` boolean is
 replaced by the canonical root `summarize`, joining the allowlist below in the
 same change. See `src/lingtai/tools/daemon/CONTRACT.md`.
+Daemon opts into reserved read-only SHOW through its declaration plus a bound
+manager provider. The provider exposes exactly four Daemon-owned settings and
+inserts `settings` immediately before `manual`; it adds no set/reset or other
+writer. Meaning, precedence, and authorized change procedures remain in the
+Daemon manual rather than this shared contract.
 `email` (`send | check | read | dismiss | reply | reply_all | search |
 archive | delete | contacts | add_contact | remove_contact | edit_contact |
 manual`) is the thirteenth family migrated to this contract, and the widest
