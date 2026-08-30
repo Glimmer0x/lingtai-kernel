@@ -1,6 +1,6 @@
 ---
 name: tool-family-behavior-tests
-behavior_version: 3
+behavior_version: 4
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -41,8 +41,8 @@ families built on the generic `src/lingtai/tools/tool_family/` infrastructure.
 They prove the *observable* promises of the family contracts this package
 serves: the `file` read/write/edit surface and its fail-closed envelope, the
 `avatar` spawn/rules/settings/manual migration envelope, the reserved `manual` child's
-canonical result contract (no double wrap), the `psyche` five-domain manual
-router (pad + lingtai + knowledge + skills = psyche), `mcp` identity
+canonical result contract (no double wrap), the `psyche` five-manual router
+plus redacted Pad settings (pad + lingtai + knowledge + skills = psyche), `mcp` identity
 discovery with secret-safe projection, and `email` abs-mode reply routing with
 the #145 ambiguity guard. Low-level mechanics stay in pytest; each LABT below
 is executable verbatim by an agent with the tools it names.
@@ -379,12 +379,12 @@ Pass when every evidence item holds. Fail if a manual body is missing or
 summarized, the path is absent or not model-visible, the result is wrapped a
 second time, or a manual call performs any target I/O.
 
-## Behavior T007 — psyche: five-domain manual routing, read-only
+## Behavior T007 — psyche: five-manual routing plus two-row settings, read-only
 
 - **id**: T007
-- **title**: `psyche` routes `pad | lingtai | knowledge | skills | manual` to
-  five distinct installed manuals, performs no mutation or catalog scan, and
-  rejects every retired action and every `input` key
+- **title**: `psyche` routes five installed manuals, shows two fully redacted
+  Pad settings, performs no mutation or catalog scan, and rejects every retired
+  action and every `input` key
 - **guards**: `psyche-tool-contract` § Port (action inventory) / § Behavior
   ([CONTRACT.md](../psyche/CONTRACT.md#port))
 - **supersedes**: `tests/test_psyche_family.py` (inventory, routing,
@@ -406,10 +406,12 @@ second time, or a manual call performs any target I/O.
 3. Inspect the `manual` action's returned body for the four domain spellings
    and the shared mutation/rebuild model.
 4. Inspect the `knowledge` and `skills` bodies for current-route call shapes.
-5. Call `psyche(action="pad_edit", input={}, reasoning="...")`, then
+5. Call `psyche(action="settings", input={}, reasoning="...")`; record every
+   row field, then repeat with `input={"set": "pad"}`.
+6. Call `psyche(action="pad_edit", input={}, reasoning="...")`, then
    `psyche(action="", input={}, reasoning="...")`, then `psyche(action=
    "manual", input={"files": ["x"]}, reasoning="...")`.
-6. Glob `<wd>` again and compare with the step 1 baseline.
+7. Glob `<wd>` again and compare with the step 1 baseline.
 
 ### Expected evidence
 - [ ] Step 2: every action returns `{"status": "ok", "manual": <non-empty
@@ -429,23 +431,29 @@ second time, or a manual call performs any target I/O.
       and `"revert_preset": null`. Neither body teaches a retired public root
       (`pad(action=`, `lingtai(action=`, `knowledge(action=`, `skills(action=`,
       `substrate(action=`) nor `pad.append` / `knowledge.info` / `skills.info`.
-- [ ] Step 5: `pad_edit` returns `{"error": "Unknown psyche action:
-      pad_edit. Must be one of: pad, lingtai, knowledge, skills, manual."}`;
+- [ ] Step 5: success is exactly `pad`, then `pad_file`; each row contains
+      exactly `key`, `current`, `default`, `configurable`, `comment` in that
+      order, both values are `<redacted>`, both rows are configurable, and the
+      comments point to `psyche-manual#setting-pad` / `#setting-pad-file`.
+      Invalid input fails with no inventory and no source value.
+- [ ] Step 6: `pad_edit` returns `{"error": "Unknown psyche action:
+      pad_edit. Must be one of: pad, lingtai, knowledge, skills, settings, manual."}`;
       the omitted/empty and other retired spellings (`lingtai_update`,
       `lingtai_load`, `pad_load`, `pad_append`, `context_molt`, `name_set`,
       `name_nickname`, `molt`, `summarize`, `rebuild`) fail with the same
       `Unknown psyche action: ...` shape; any `input` key fails with
       `{"error_code": "INVALID_ARGUMENT", "message": "unsupported psyche
-      input field"}` before the manual is read.
-- [ ] Step 6: the glob match set is identical to the baseline — no `psyche`
+      input field"}` before the selected child runs.
+- [ ] Step 7: the glob match set is identical to the baseline — no `psyche`
       action created, edited, or deleted any file (every action is read-only).
 
 ### Pass / Fail
 Pass when every evidence item holds. Fail if an action returns the wrong
-manual, a body teaches a retired root or an undispatchable call, any action
-mutates the tree, or a retired action is accepted. Forbidden side effect: no
-`psyche` action may scan a catalog, write a prompt or source file, or reload
-prompt state.
+manual, settings leak or drift from their exact shape/order, a body teaches a
+retired root or an undispatchable call, any action mutates the tree, or a retired
+action is accepted. Forbidden side effect: no `psyche` action may scan a
+catalog, write a prompt or source file, change configuration, or reload prompt
+state.
 
 ## Behavior T008 — mcp: identity discovery surfaces safe fields only
 

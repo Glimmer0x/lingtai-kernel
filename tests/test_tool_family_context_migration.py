@@ -116,9 +116,10 @@ def test_context_is_registered_exactly_once_as_an_intrinsic():
 def test_no_old_psyche_action_survives_anywhere():
     """The dissolved family leaves no action, alias, or context spelling.
 
-    A public root named ``psyche`` exists again — the manual-only family for the
-    four durable domains — but it grants the old family's actions nothing. Root
-    reuse is not action compatibility, so this pins the ACTIONS, not the name.
+    A public root named ``psyche`` exists again — five manuals plus redacted Pad
+    settings for the four durable domains — but it grants the old family's
+    actions nothing. Root reuse is not action compatibility, so this pins the
+    ACTIONS, not the name.
     """
     from lingtai.tools import psyche as psyche_tool
     from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
@@ -126,8 +127,10 @@ def test_no_old_psyche_action_survives_anywhere():
     assert "psyche" not in BUILTIN_TOOLS  # an intrinsic, never a capability
     assert "anima" not in BUILTIN_TOOLS
 
-    # The current root's entire inventory is the five manual loaders.
-    assert psyche_tool.ACTION_ORDER == ("pad", "lingtai", "knowledge", "skills", "manual")
+    # The current root has five manual loaders plus read-only settings SHOW.
+    assert psyche_tool.ACTION_ORDER == (
+        "pad", "lingtai", "knowledge", "skills", "settings", "manual",
+    )
     for retired in (
         "lingtai_update", "lingtai_load", "pad_edit", "pad_load", "pad_append",
         "context_molt", "name_set", "name_nickname",
@@ -716,12 +719,12 @@ def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_
         schemas = _build_tool_schemas(live)
         context_schemas = [s for s in schemas if s.name == "context"]
         assert len(context_schemas) == 1, "exactly one public context root"
-        # A ``psyche`` root exists again — the manual-only durable-domain family
-        # — but it is a separate root, never a second context root or alias.
+        # A ``psyche`` root exists again — five durable-domain manuals plus
+        # redacted Pad settings — but it is never a second context root/alias.
         psyche_schemas = [s for s in schemas if s.name == "psyche"]
         assert len(psyche_schemas) == 1
         assert psyche_schemas[0].parameters["properties"]["action"]["enum"] == [
-            "pad", "lingtai", "knowledge", "skills", "manual",
+            "pad", "lingtai", "knowledge", "skills", "settings", "manual",
         ]
 
         chat = _build_tools(context_schemas)[0]["function"]["parameters"]

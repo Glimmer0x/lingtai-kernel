@@ -1,20 +1,22 @@
 """Psyche intrinsic — the one public root for the four durable domains.
 
-``psyche`` is a mandatory, model-visible LTP v2 family whose entire public
-inventory is manual loading. The name states the human contract exactly:
-``pad + lingtai + knowledge + skills = psyche``. Its exact action set is
-``pad | lingtai | knowledge | skills | manual``:
+``psyche`` is a mandatory, model-visible LTP v2 family whose public inventory
+is manual loading plus read-only settings discovery. The name states the human
+contract exactly: ``pad + lingtai + knowledge + skills = psyche``. Its exact
+action set is ``pad | lingtai | knowledge | skills | settings | manual``:
 
 - ``pad``, ``lingtai``, ``knowledge``, and ``skills`` each return that domain's
   own installed manual;
+- ``settings`` returns the two fully redacted Psyche-owned Pad configuration
+  rows;
 - ``manual`` returns the psyche routing-table manual, which explains the four
   durable domains, which action loads which manual, and the generic
   mutation/rebuild model shared by all of them.
 
 Every child takes the canonical strict-empty ``input``, so *every* ``input`` key
 is an unknown key and is rejected before any handler runs. No child mutates
-disk, prompt state, or a catalog: the family is read-only by construction, not
-by convention.
+disk, prompt state, configuration, or a catalog: the family is read-only by
+construction, not by convention.
 
 This root replaces the four former public roots ``pad``, ``lingtai``,
 ``knowledge``, and ``skills``. That was a clean break: those roots, the
@@ -59,6 +61,7 @@ from typing import Any, Mapping
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .settings import build_settings_provider
 
 __all__ = [
     "ACTION_ORDER",
@@ -86,10 +89,6 @@ DOMAIN_MANUALS: tuple[tuple[str, str], ...] = (
     ("skills", "skills"),
 )
 
-#: The exact public action inventory, derived from the one registry so the
-#: advertised enum and dispatch keys cannot drift.
-ACTION_ORDER: tuple[str, ...] = tuple(name for name, _ in DOMAIN_MANUALS) + ("manual",)
-
 #: The psyche routing-table manual: its own installed skill bundle, loaded by
 #: the reserved ``manual`` child exactly like every domain child loads its own.
 _ROUTER_MANUAL = "psyche-manual"
@@ -100,11 +99,10 @@ _DROPPED_ENVELOPE_KEYS = ("_tc_id",)
 def _build_children(agent) -> list[ChildTool]:
     """Build the one fixed child registry.
 
-    Every child — the four domain loaders and the reserved router ``manual`` —
-    is a :func:`build_manual_child`, so all five share one loader, one strict
-    empty input schema, and one canonical result adapter. There is no
-    per-domain handler and therefore no place for a domain child to acquire a
-    side effect.
+    Every manual child — the four domain loaders and reserved router
+    ``manual`` — is a :func:`build_manual_child`, so all five share one loader,
+    one strict-empty input schema, and one canonical result adapter. The generic
+    settings child is injected later by :class:`ToolFamily`.
 
     ``agent=None`` yields the schema-only family backing :func:`get_schema`.
     That is safe because :meth:`ToolFamily.build_schema` reads only each child's
@@ -123,11 +121,15 @@ def _build_children(agent) -> list[ChildTool]:
     return children + [build_manual_child(agent, _ROUTER_MANUAL)]
 
 
-_FAMILY = ToolFamily("psyche", _build_children(None))
+_FAMILY = ToolFamily("psyche", _build_children(None), settings_provider=tuple)
+
+#: The exact public action inventory comes from the same composed family as the
+#: schema, including its injected reserved settings child.
+ACTION_ORDER: tuple[str, ...] = _FAMILY.child_names
 
 _ACTION_ENUM_DESCRIPTION = (
-    "Required manual to load from your psyche. Every action takes an empty "
-    "input object and is strictly read-only — none of them writes a file, "
+    "Required Psyche operation. Every action takes an empty input object and "
+    "is strictly read-only — none of them writes a file, "
     "reloads the prompt, or rescans a catalog.\n"
     "pad: return pad-manual (the sketchboard body at system/pad.md and its "
     "pinned read-only references).\n"
@@ -136,6 +138,8 @@ _ACTION_ENUM_DESCRIPTION = (
     "knowledge/<name>/KNOWLEDGE.md).\n"
     "skills: return the skills manual (your catalog under .library/ plus any "
     "configured skills paths).\n"
+    "settings: return the redacted five-field inventory of Psyche-owned Pad "
+    "configuration.\n"
     "manual: return the psyche routing table — which action loads which "
     "domain manual, and the shared mutation/rebuild model.\n"
     "To CHANGE any durable source, use file.write for a full rewrite or "
@@ -147,11 +151,13 @@ _ACTION_ENUM_DESCRIPTION = (
 def get_description(lang: str = "en") -> str:
     return (
         "SIGNPOST ONLY: your psyche is your four durable domains — pad, "
-        "lingtai (灵台), knowledge, and skills. Every action returns a manual "
-        "and nothing else: it never authors, edits, pins, installs, rescans, "
-        "or loads anything. "
+        "lingtai (灵台), knowledge, and skills. Domain actions return manuals; "
+        "settings returns one compact redacted inventory. It never authors, "
+        "edits, pins, installs, rescans, or loads anything. "
         "psyche(action='pad'|'lingtai'|'knowledge'|'skills', "
         "input={}, reasoning='why') returns that domain's manual; "
+        "psyche(action='settings', input={}, reasoning='why') returns the two "
+        "Psyche-owned Pad settings with both values redacted; "
         "psyche(action='manual', input={}, reasoning='why') returns the "
         "routing table that says which one you want and how the domains relate. "
         "Durable content is changed with file.write (full rewrite) or file.edit "
@@ -174,10 +180,10 @@ def get_schema(lang: str = "en") -> dict:
 def _adapt_manual_result(mcp_result: dict) -> dict:
     """Flatten one dispatched child's canonical result to psyche's shape.
 
-    Every psyche child is a manual loader, so this one adapter serves all
-    five — there is no per-action presentation branch. It runs strictly after
-    dispatch, in this Host layer, never inside a registered child, per the
-    no-double-wrap rule (``../CONTRACT.md`` "Dispatch and actions").
+    This one adapter serves all five manual children; settings never returns a
+    ``content`` block and bypasses it. It runs strictly after dispatch, in this
+    Host layer, never inside a registered child, per the no-double-wrap rule
+    (``../CONTRACT.md`` "Dispatch and actions").
     """
     flat: dict[str, Any] = {
         "status": mcp_result.get("status", "ok"),
@@ -194,14 +200,18 @@ def handle(agent, args: dict) -> dict:
 
     ``ToolFamily.handle`` is the always-authoritative, fail-closed boundary: an
     unknown or missing action, and any ``input`` key at all (every child's input
-    is strict-empty), is rejected before the selected loader reads a file.
+    is strict-empty), is rejected before the selected provider/loader runs.
     """
     raw = dict(args or {})
     for key in _DROPPED_ENVELOPE_KEYS:
         raw.pop(key, None)
 
     action = raw.get("action")
-    result = ToolFamily("psyche", _build_children(agent)).handle(raw)
+    result = ToolFamily(
+        "psyche",
+        _build_children(agent),
+        settings_provider=build_settings_provider(agent),
+    ).handle(raw)
     if "content" in result:
         return _adapt_manual_result(result)
     if result.get("error_code") == "ACTION_REQUIRED":

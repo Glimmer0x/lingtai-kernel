@@ -1,6 +1,6 @@
 ---
 name: psyche-behavior-tests
-behavior_version: 1
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -8,7 +8,10 @@ related_files:
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/tools/psyche/__init__.py
+  - src/lingtai/tools/psyche/settings.py
   - src/lingtai/tools/psyche/glossary-en.md
+  - src/lingtai/agent.py
+  - tests/test_psyche_family.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -18,14 +21,14 @@ maintenance: |
 # Psyche Tool Behavior Tests
 
 Self-contained agent behavior tasks guarding the observable behavior clauses of
-`src/lingtai/tools/psyche/CONTRACT.md` (every action read-only; durable changes
-via file + explicit rebuild). Pinned pytest commands must run from the repo
-root with the project's Python.
+`src/lingtai/tools/psyche/CONTRACT.md` (five read-only manual actions, two-row
+redacted settings SHOW, and durable changes via file + explicit rebuild).
+Pinned pytest commands must run from the repo root with the project's Python.
 
-## Behavior PY001 — every psyche action is read-only and durable changes apply only through file + an explicit rebuild
+## Behavior PY001 — Psyche manuals and settings are read-only; durable changes apply only through file + rebuild
 
 - **id**: PY001
-- **title**: every psyche action is read-only and durable changes apply only through file + an explicit rebuild
+- **title**: Psyche manuals and settings are read-only; durable changes apply only through file + rebuild
 - **guards**: `psyche-tool-contract` § Behavior
 - **runner**: any LingTai agent with `shell` and `file` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
@@ -33,13 +36,30 @@ root with the project's Python.
 
 ### Steps
 1. From `<repo>`, run `python -m pytest tests/test_psyche_family.py -q` and capture the outcome.
-2. Call every `psyche` action with its strict input on `<scratch>` and hash all prompt/source files before and after; record the results.
-3. Make a durable change with `file.edit` on the domain's own source and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
+2. Call `pad | lingtai | knowledge | skills | manual` with strict empty input;
+   confirm each returns its intended manual.
+3. Call `settings` with strict empty input and record the two rows. Edit the
+   referenced Pad source without reconstructing, then temporarily make
+   `init.json` malformed; confirm SHOW remains available and unchanged. Restore
+   a valid init, reconstruct, and confirm the focused provider assertion sees
+   the newly applied snapshot. Call settings with any input key and record the
+   rejection. Hash all prompt/source files around each SHOW call.
+4. Make a durable change with `file.edit` on the domain's own source and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
 
 ### Expected evidence
-- [ ] Step 1: the psyche family suite passes, pinning five-domain manual routing and read-only behavior.
-- [ ] Step 2: no `psyche` action authors, edits, pins, installs, migrates, rescans a catalog, writes a prompt/source file, or reloads prompt state — all file hashes are unchanged.
-- [ ] Step 3: file mutation never hot-loads the prompt; the prompt section updates only after an explicit rebuild or passive reconstruction.
+- [ ] Step 1: the psyche family suite passes, pinning exact manual routing,
+      settings discovery, and read-only behavior.
+- [ ] Step 2: the five manual bodies are nonempty and distinct.
+- [ ] Step 3: success is exactly `pad`, then `pad_file`; each row has exactly
+      `key,current,default,configurable,comment`, both values are `<redacted>`,
+      an ambient source edit or malformed init cannot change/make SHOW
+      unavailable before successful reconstruction, and invalid input fails
+      without rows. No `psyche` action authors, edits, pins, installs, migrates,
+      rescans, writes, or reloads — hashes are unchanged.
+- [ ] Step 4: file mutation never hot-loads the prompt; the prompt section updates only after an explicit rebuild or passive reconstruction.
 
 ### Pass / Fail
-Pass when the suite passes and the read-only/no-hot-load observations hold. Fail on any mutating `psyche` action or on a prompt that reloads from a plain file edit; record the evidence trail in the task report.
+Pass when the suite passes, SHOW stays bound to the last applied reconstruction,
+and the read-only/no-hot-load observations hold. Fail on ambient-source SHOW
+drift, any mutating `psyche` action, or a prompt that reloads from a plain file
+edit; record the evidence trail in the task report.

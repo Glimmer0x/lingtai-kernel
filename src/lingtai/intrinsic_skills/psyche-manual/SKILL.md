@@ -1,26 +1,30 @@
 ---
 name: psyche-manual
-last_changed_at: 2026-08-01T00:00:00Z
+last_changed_at: 2026-08-29T00:00:00Z
 description: >
   Routing table for the `psyche` tool — the one public root for your four
   durable domains: pad + lingtai + knowledge + skills = psyche. Read this to
-  learn which action loads which manual, and the one mutation/rebuild model all
-  four share.
+  learn which action loads which manual, inspect Psyche-owned Pad settings, and
+  follow the one mutation/rebuild model all four domains share.
 related_files:
 - src/lingtai/tools/psyche/CONTRACT.md
 - src/lingtai/tools/psyche/ANATOMY.md
+- src/lingtai/tools/psyche/settings.py
+- src/lingtai/agent.py
 - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
 - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
 - src/lingtai/tools/knowledge/manual/SKILL.md
 - src/lingtai/tools/skills/manual/SKILL.md
 - src/lingtai/tools/context/manual/SKILL.md
+- tests/test_psyche_family.py
 maintenance: |
   This is the psyche family's own manual, loaded by
   `psyche(action='manual', input={}, reasoning='...')`.
   It is a routing table by design: keep it short and keep the depth in the four
   domain manuals it points to. Update it together with
   src/lingtai/tools/psyche/{CONTRACT,ANATOMY}.md whenever the public action
-  inventory, a domain's durable source, or the rebuild model changes.
+  inventory, owned settings, a domain's durable source, or the rebuild model
+  changes.
 ---
 
 # Psyche
@@ -30,10 +34,11 @@ re-read and recomposed into every fresh system prompt.
 
 > pad + lingtai + knowledge + skills = psyche
 
-`psyche` is the one public root that teaches them. It is a signpost family —
-every action returns a manual and changes nothing. It owns no lifecycle action:
-molt, summarize, and rebuild belong to `context`, and your name belongs to
-`system`.
+`psyche` is the one public root that teaches them. Its five domain/routing
+actions return manuals; `settings` shows a bounded, fully redacted inventory of
+the Pad configuration Psyche owns. Every public action is read-only. It owns no
+lifecycle action: molt, summarize, and rebuild belong to `context`, and your
+name belongs to `system`.
 
 ## Routing table
 
@@ -43,10 +48,11 @@ molt, summarize, and rebuild belong to `context`, and your name belongs to
 | `psyche(action="lingtai", input={}, reasoning="load identity guidance")` | `lingtai-manual` | `system/lingtai.md` (your 灵台 / character) |
 | `psyche(action="knowledge", input={}, reasoning="load knowledge guidance")` | the knowledge manual | `knowledge/<name>/KNOWLEDGE.md` entries |
 | `psyche(action="skills", input={}, reasoning="load skills guidance")` | the skills manual | `.library/{intrinsic,custom}/` plus configured skills paths |
+| `psyche(action="settings", input={}, reasoning="inspect Pad configuration")` | two fully redacted five-field rows | root `pad` and `pad_file` inputs |
 | `psyche(action="manual", input={}, reasoning="load the routing table")` | this routing table | — |
 
-Every action takes a strict empty `input`; any key is rejected before the manual
-is read.
+Every action takes a strict empty `input`; any key is rejected before its
+provider or manual loader runs.
 
 ## The one mutation model
 
@@ -84,12 +90,59 @@ depth.
 
 ## `summarize`
 
-**Short-result.** Every psyche action returns one manual body, and a summarized
-manual loses the exact procedure you called it for — leave root `summarize`
-`false`. This is the family-wide rule; the domain manuals do not restate it.
+**Short-result.** Manual actions return one manual body, and `settings` returns
+two compact rows. Leave root `summarize` `false`; summarizing either result loses
+the exact procedure or inventory you called it for.
 
 ## Settings
 
-No manual in this family owns a settings file at either level — there is no
-`settings/psyche.json`, no `settings/psyche.<action>.json`, and no per-domain
-equivalent. Nothing to configure; an unrecognized file there is not read.
+`psyche(action="settings", input={}, reasoning="inspect Pad configuration")` is
+SHOW only. It returns exactly `pad`, then `pad_file`; every row has exactly
+`key`, `current`, `default`, `configurable`, and `comment` in that order. Both
+`current` and `default` are always `<redacted>` for both rows, including when a
+value is empty or absent. The action reports the `pad` / `pad_file` snapshot
+consumed by the last successful full reconstruction. Editing `init.json` or the
+file it references does not change SHOW until rebuild, refresh, or molt applies
+that edit; an unreadable or malformed pending source leaves the last applied
+SHOW available. A provider/snapshot failure still produces one fixed bounded
+failure without content, paths, or parser details, never partial rows.
+
+There is no `settings/psyche.json`, no per-action settings file, no Psyche
+environment variable, and no `set` or `reset` operation. File presence never
+opts a family into SHOW, and SHOW never changes configuration or prompt state.
+
+### Setting pad
+
+- **Meaning and default:** the configured UTF-8 initial Pad seed. Its meaningful
+  default is the empty string.
+- **Source and precedence:** top-level `pad_file` wins when it names a readable
+  file; otherwise top-level inline `pad` is the fallback. Reconstruction
+  materializes, validates, and path-resolves that shape once; SHOW reports the
+  resulting applied snapshot without rereading either source.
+- **Configurable:** `true`, because the operator may edit the authorized root
+  init source or the file it names. SHOW still fully redacts the effective body.
+- **Apply timing and procedure:** active or passive full reconstruction seeds
+  `system/pad.md` only when that durable body is missing or empty. A nonempty
+  durable Pad is preserved. To replace one, edit `system/pad.md` through the Pad
+  procedure, then call `context(action="rebuild", input={}, reasoning="apply Pad change")`;
+  changing only the configured seed does not overwrite a nonempty durable Pad.
+
+### Setting pad file
+
+- **Meaning and default:** the configured file pointer supplying the initial Pad
+  seed. It has no meaningful default, so its underlying default is `null`.
+- **Source and precedence:** top-level `pad_file` only. `~` expands and a
+  relative path resolves against the agent working directory. A readable file
+  supplies `pad`; a missing or blank pointer falls back to inline `pad`. SHOW
+  fully redacts the resolved pointer as well as the Pad body.
+- **Configurable:** `true`, because the operator may edit the authorized root
+  init source. No environment or settings-file layer exists.
+- **Apply timing and procedure:** the pointer is re-read on full reconstruction,
+  but its content remains only an initial seed for a missing/empty
+  `system/pad.md`. To change a nonempty durable Pad, use the Pad file procedure
+  and rebuild instead of expecting `pad_file` to overwrite it.
+
+A second SHOW before reconstruction deliberately reports the same applied
+snapshot. After an authorized rebuild/refresh/molt succeeds, another SHOW can
+verify that discovery remains available, but because both values are always
+redacted it cannot reveal or compare the underlying content.

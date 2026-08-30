@@ -1,10 +1,13 @@
 ---
 name: psyche-tool-contract
-contract_version: 1
+contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/psyche/ANATOMY.md
+  - src/lingtai/tools/psyche/BEHAVIORS.md
   - src/lingtai/tools/psyche/__init__.py
+  - src/lingtai/tools/psyche/settings.py
+  - src/lingtai/agent.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
@@ -14,12 +17,16 @@ related_files:
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - tests/test_psyche_family.py
+  - tests/test_context_ownership_redesign.py
+  - tests/test_tool_family_context_migration.py
+  - tests/test_tool_settings_contract.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the one
   public `psyche` root. Keep the paired ANATOMY.md, the psyche-manual
-  routing table, the four domain Contracts it points to, the glossary
-  resources, and tests/test_psyche_family.py in sync. Bump contract_version
-  for any change to the public action inventory or to the read-only promise.
+  routing table, owner settings provider, Pad reconstruction seam, the four
+  domain Contracts it points to, glossary resources, and focused tests in sync.
+  Bump contract_version for any change to the public action inventory or to the
+  read-only/settings promise.
   Follow the root Anatomy/Contract pairing and ownership rules, report
   mismatches, and do not duplicate or auto-fix the rule here.
 ---
@@ -35,8 +42,10 @@ contract exactly:
 
 > pad + lingtai + knowledge + skills = psyche
 
-It is a pure manual router. Its entire public inventory is manual loading, and it
-owns no domain state of its own.
+It is a read-only manual router plus owner settings SHOW. Its five manual
+actions teach the durable domains and routing model; its reserved `settings`
+action exposes exactly the two Psyche-owned root Pad inputs, fully redacted. It
+owns no settings document or domain state of its own.
 
 It replaces four former public roots (`pad`, `lingtai`, `knowledge`, `skills`) as
 a clean break. Those roots, the `pad.append` action, and the `skills.info` /
@@ -62,7 +71,7 @@ Reusing the root name grants none of them, and the two cases are distinct:
   before any I/O with no alias, wrapper, or compatibility path.
 - **The spelling `manual` is deliberately reused, with new semantics.** It is a
   current, accepted action, so a `manual` call is NOT rejected. What it returns
-  is only the new durable-self routing table (`psyche-manual`, the five-way map
+  is only the new durable-self routing table (`psyche-manual`, the five-manual map
   over Pad / 灵台 / Knowledge / Skills). It never returns the dissolved family's
   manual or body, and accepting it grants no compatibility with any other old
   action.
@@ -85,6 +94,18 @@ part of it. Nothing keys the two together.
 Agents MUST treat every `psyche` action as read-only. No action authors,
 edits, pins, installs, migrates, rescans a catalog, writes a prompt or source
 file, or reloads prompt state.
+
+`settings` MUST report the narrow `pad` / `pad_file` snapshot consumed by the
+last successful canonical reconstruction and return exactly `pad`, then
+`pad_file`. Ambient edits to `init.json` or its referenced Pad file MUST NOT
+change SHOW until active or passive reconstruction successfully consumes them;
+an unreadable or malformed new source MUST leave the prior SHOW available.
+Each row MUST project exactly `key`, `current`, `default`, `configurable`, and
+`comment` in that order. Both values of both rows MUST be fully redacted,
+including empty and null defaults. A provider/snapshot/row failure MUST return
+the generic fixed `SETTINGS_UNAVAILABLE` result with no partial inventory or
+exception text. The complete response MUST remain subject to the generic
+incremental 65,536-byte UTF-8 bound.
 
 To change a durable source, an agent MUST use the generic text operations —
 `file.write` for a full create/overwrite, `file.edit` for exact replacement — on
@@ -113,11 +134,12 @@ and `reasoning` are required. The public action inventory is exactly:
 | `lingtai` | strict empty `{}` | same shape — `lingtai-manual` |
 | `knowledge` | strict empty `{}` | same shape — the installed knowledge manual |
 | `skills` | strict empty `{}` | same shape — the installed skills manual |
+| `settings` | strict empty `{}` | exact `{settings: [...]}` inventory with two fully redacted five-field rows |
 | `manual` | strict empty `{}` | same shape — `psyche-manual`, the routing table |
 
 Every call carries required root `action`, `input`, and `reasoning`; a public
 call is spelled `psyche(action="<domain>", input={}, reasoning="...")`. All
-five children share one strict-empty `input` schema, so every `input` key is an
+six children share one strict-empty `input` schema, so every `input` key is an
 unknown key. Unknown or missing actions, any `input` key, non-object `input`,
 unknown root fields, and a non-boolean root `summarize` fail with the LTP v2
 envelope errors before any file is read. Root `summarize`, `reasoning`, and the
@@ -125,12 +147,19 @@ intrinsic-only `_tc_id` never become child input.
 
 ## Adapters
 
-Dispatch and schema composition are the generic `tool_family` infrastructure. All
-five children are built by the shared `build_manual_child` loader, so there is one
-loader, one input schema, and one result adapter for the whole family — no
-per-domain handler exists to acquire a side effect. The flat
+Dispatch and schema composition are the generic `tool_family` infrastructure.
+Five children are built by the shared `build_manual_child` loader, so there is
+one loader and one result adapter for every manual action — no per-domain
+handler exists to acquire a side effect. The flat
 `{status, manual, manual_path}` presentation shape is rebuilt strictly after
 dispatch in this package's own Host layer, per the no-double-wrap rule.
+
+Schema composition opts in with an inert callable so the reserved `settings`
+child is injected immediately before `manual`; per-call dispatch binds
+`build_settings_provider(agent)` to that same family. The provider captures the
+Agent-owned `(pad, pad_file)` snapshot and performs no file I/O. Agent
+reconstruction alone uses the canonical reader and resolver, then replaces the
+snapshot only after the complete prompt-section pass succeeds.
 
 `psyche` is a mandatory intrinsic: `tools/registry.py` wires it through
 `INTRINSICS`, and it composes its dispatching family per call rather than owning
@@ -140,6 +169,8 @@ per-Agent state.
 
 - Schema and dispatch derive from the same fixed child registry; the advertised
   action enum cannot drift from the dispatch keys.
+- The exact action order is `pad | lingtai | knowledge | skills | settings |
+  manual`; the reserved settings action is immediately before `manual`.
 - Every child is mutation-free. A future mutating action does not belong in this
   family; durable mutation has exactly one owner, `file`.
 - The four domain actions load the domains' existing manuals as progressively
@@ -150,9 +181,23 @@ per-Agent state.
   `psyche` action.
 - Full active `context.rebuild` and passive refresh/molt reconstruction re-read
   and recompose all enabled canonical sections once and publish one prompt; this
-  family participates in none of it.
+  family action surface participates in none of it. The Agent reconstruction
+  seam applies configured `pad` only as an initial seed for missing/empty
+  `system/pad.md`; it preserves every nonempty durable Pad before composing it,
+  then retains the successfully resolved Pad inputs for settings discovery.
+- SHOW reads only that retained snapshot. Ambient source edits and failed
+  reconstruction attempts preserve the prior rows until a later successful
+  reconstruction replaces them.
 - `psyche` is in `_LTP_V2_MIGRATED_FAMILIES` and `EMANATION_BLACKLIST`.
-- No `psyche` settings file exists at either level, and the manual says so.
+- Psyche owns only these settings rows:
+  - `pad`: default `""`, configurable `true`, fully redacted, comment
+    `psyche-manual#setting-pad`.
+  - `pad_file`: default `null`, configurable `true`, fully redacted, comment
+    `psyche-manual#setting-pad-file`.
+- Psyche MUST NOT expose LingTai inputs, Skills paths, content, paths, auth, or
+  any other row. System MUST NOT duplicate the two owned Pad rows.
+- No `psyche` settings file or environment layer exists, and no generic
+  set/reset/control-plane writer is authorized.
 - `summarize` profile: **short-result** for every action.
 
 ## Contract tests
@@ -161,11 +206,14 @@ per-Agent state.
 python -m pytest -q tests/test_psyche_family.py
 ```
 
-These pin the exact five-action inventory and order, the strict-empty input on
-every child, pre-I/O rejection of unknown actions and smuggled input keys, that
-each action returns its intended manual, that no action mutates disk or prompt,
-the absence of the four old public roots and of `pad.append` / `skills.info` /
-`knowledge.info`, and both provider wire shapes.
+These pin the exact six-action inventory and order; strict-empty input on every
+child; applied-snapshot file-over-inline resolution; ambient-edit isolation;
+last-good preservation after a malformed init; exact five-field row order,
+defaults, configurability, anchors, and full redaction; whole-inventory failure;
+missing/empty-only Pad seeding; unchanged manual routing; no action mutation;
+the absence of old roots/actions; and both provider wire shapes. The shared
+settings suite additionally pins the 65,536-byte whole-response bound and the
+exact production owner opt-ins (`system` plus this intrinsic).
 
 ## Maintenance
 

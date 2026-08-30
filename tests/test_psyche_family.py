@@ -1,14 +1,14 @@
 """Focused LTP v2 evidence for the one public ``psyche`` root.
 
-Covers the exact public inventory, the strict-empty input on every child,
-pre-I/O rejection, that each action returns its own intended manual, that no
-action mutates disk or prompt, and that the four former public roots and their
-retired actions are gone without an alias.
+Covers the exact public inventory, strict-empty inputs, five-field settings,
+pre-I/O rejection, unchanged manual routing, read-only behavior, and removal of
+the four former public roots and their retired actions.
 """
 from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 
 import pytest
 
@@ -17,7 +17,8 @@ from lingtai.tools import psyche as psyche_tool
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-EXPECTED_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "manual"]
+MANUAL_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "manual"]
+EXPECTED_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "settings", "manual"]
 
 #: Which installed manual each action must return, by its `.library` directory.
 EXPECTED_MANUAL_DIR = {
@@ -70,8 +71,15 @@ def test_root_is_the_closed_strict_ltp_v2_envelope():
 
 def test_every_child_input_is_the_canonical_strict_empty_object():
     schema = psyche_tool.get_schema()
-    branches = schema["properties"]["input"]["oneOf"]
-    assert [b["title"] for b in branches] == [f"{a} input" for a in EXPECTED_ACTIONS]
+    branches = schema["properties"]["input"]["anyOf"]
+    assert [b["title"] for b in branches] == [
+        "pad input",
+        "lingtai input",
+        "knowledge input",
+        "skills input",
+        "settings inventory input",
+        "manual input",
+    ]
     for branch in branches:
         assert branch["type"] == "object"
         assert branch["properties"] == {}
@@ -132,7 +140,7 @@ def test_psyche_is_blacklisted_for_emanations():
 # Each action returns its own intended manual
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("action", EXPECTED_ACTIONS)
+@pytest.mark.parametrize("action", MANUAL_ACTIONS)
 def test_each_action_returns_its_intended_manual(tmp_path, action):
     agent = _agent(tmp_path)
     try:
@@ -150,8 +158,8 @@ def test_each_action_returns_its_intended_manual(tmp_path, action):
 def test_the_five_manuals_are_all_distinct(tmp_path):
     agent = _agent(tmp_path)
     try:
-        bodies = {a: _call(agent, a)["manual"] for a in EXPECTED_ACTIONS}
-        assert len(set(bodies.values())) == len(EXPECTED_ACTIONS)
+        bodies = {a: _call(agent, a)["manual"] for a in MANUAL_ACTIONS}
+        assert len(set(bodies.values())) == len(MANUAL_ACTIONS)
     finally:
         agent.stop(timeout=1.0)
 
@@ -166,6 +174,208 @@ def test_router_manual_is_a_routing_table_naming_all_four_domains(tmp_path):
         # the domain manuals it points at.
         assert "file.write" in body and "file.edit" in body
         assert 'context(action="rebuild"' in body
+    finally:
+        agent.stop(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Owner settings discovery
+# ---------------------------------------------------------------------------
+
+def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
+    from lingtai.tools.psyche.settings import build_settings_provider
+
+    agent = _agent(tmp_path)
+    try:
+        pad_source = agent._working_dir / "pad-source.md"
+        pad_source.write_text("PAD FROM FILE", encoding="utf-8")
+        (agent._working_dir / "init.json").write_text(
+            json.dumps({
+                "manifest": {
+                    "llm": {"provider": "openai", "model": "gpt-4o"},
+                },
+                "covenant": "operator contract",
+                "pad": "inline Pad loses",
+                "pad_file": pad_source.name,
+            }),
+            encoding="utf-8",
+        )
+        agent._reconstruct_context()
+
+        provider = build_settings_provider(agent)
+        rows = provider()
+        assert [row.key for row in rows] == ["pad", "pad_file"]
+        assert [row.current for row in rows] == [
+            "PAD FROM FILE",
+            str(pad_source),
+        ]
+        assert [row.default for row in rows] == ["", None]
+        assert all(row.configurable is True for row in rows)
+        assert all(row._sensitive is True for row in rows)
+        assert [row.comment for row in rows] == [
+            "psyche-manual#setting-pad",
+            "psyche-manual#setting-pad-file",
+        ]
+
+        pad_source.write_text("FRESH PAD FROM FILE", encoding="utf-8")
+        assert build_settings_provider(agent)()[0].current == "PAD FROM FILE"
+        agent._reconstruct_context()
+        assert build_settings_provider(agent)()[0].current == "FRESH PAD FROM FILE"
+
+        (agent._working_dir / "init.json").write_text(
+            json.dumps({
+                "manifest": {
+                    "llm": {"provider": "openai", "model": "gpt-4o"},
+                },
+                "covenant": "operator contract",
+                "pad": "INLINE FALLBACK",
+                "pad_file": "missing-pad-source.md",
+            }),
+            encoding="utf-8",
+        )
+        assert [row.current for row in build_settings_provider(agent)()] == [
+            "FRESH PAD FROM FILE",
+            str(pad_source),
+        ]
+        agent._reconstruct_context()
+        fallback_rows = build_settings_provider(agent)()
+        assert [row.current for row in fallback_rows] == [
+            "INLINE FALLBACK",
+            str(agent._working_dir / "missing-pad-source.md"),
+        ]
+
+        manual = _call(agent, "manual")["manual"]
+        assert "### Setting pad" in manual
+        assert "### Setting pad file" in manual
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_full_setup_binds_resolved_pad_snapshot_and_prompt(tmp_path):
+    from lingtai.tools.psyche.settings import build_settings_provider
+
+    agent = _agent(tmp_path)
+    try:
+        pad_source = agent._working_dir / "setup-pad-source.md"
+        pad_source.write_text("SETUP PAD", encoding="utf-8")
+        (agent._working_dir / "init.json").write_text(
+            json.dumps({
+                "manifest": {
+                    "llm": {
+                        "provider": "gemini",
+                        "model": "gemini-test",
+                        "api_key": "test-only",
+                    },
+                },
+                "covenant": "operator contract",
+                "pad_file": pad_source.name,
+            }),
+            encoding="utf-8",
+        )
+
+        agent._setup_from_init()
+
+        assert [row.current for row in build_settings_provider(agent)()] == [
+            "SETUP PAD",
+            str(pad_source),
+        ]
+        assert "SETUP PAD" in agent._build_system_prompt()
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_settings_success_is_exactly_five_projected_fields_and_redacted(tmp_path):
+    agent = _agent(tmp_path)
+    try:
+        source = agent._working_dir / "private-pad-source.md"
+        source.write_text("PRIVATE PAD CONTENT", encoding="utf-8")
+        (agent._working_dir / "init.json").write_text(
+            json.dumps({
+                "manifest": {
+                    "llm": {"provider": "openai", "model": "gpt-4o"},
+                },
+                "covenant": "operator contract",
+                "pad_file": source.name,
+            }),
+            encoding="utf-8",
+        )
+        agent._reconstruct_context()
+        result = _call(agent, "settings")
+        assert result == {"settings": [
+            {
+                "key": "pad",
+                "current": "<redacted>",
+                "default": "<redacted>",
+                "configurable": True,
+                "comment": "psyche-manual#setting-pad",
+            },
+            {
+                "key": "pad_file",
+                "current": "<redacted>",
+                "default": "<redacted>",
+                "configurable": True,
+                "comment": "psyche-manual#setting-pad-file",
+            },
+        ]}
+        assert list(result["settings"][0]) == [
+            "key", "current", "default", "configurable", "comment",
+        ]
+        assert "PRIVATE PAD CONTENT" not in repr(result)
+        assert str(source) not in repr(result)
+        rejected = _call(agent, "settings", {"set": "pad"})
+        assert rejected["error_code"] == "INVALID_ARGUMENT"
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_malformed_ambient_init_preserves_applied_settings_snapshot(tmp_path):
+    from lingtai.tools.psyche.settings import build_settings_provider
+
+    agent = _agent(tmp_path)
+    try:
+        (agent._working_dir / "init.json").write_text(
+            json.dumps({
+                "manifest": {
+                    "llm": {"provider": "openai", "model": "gpt-4o"},
+                },
+                "covenant": "operator contract",
+                "pad": "APPLIED PRIVATE CONTENT",
+            }),
+            encoding="utf-8",
+        )
+        agent._reconstruct_context()
+        assert build_settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
+
+        (agent._working_dir / "init.json").write_text(
+            '{"pad":"private content"', encoding="utf-8",
+        )
+        result = _call(agent, "settings")
+        assert [row["key"] for row in result["settings"]] == ["pad", "pad_file"]
+        assert "private content" not in repr(result)
+        assert build_settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
+
+        with pytest.raises(RuntimeError, match="init.json exists but could not be read"):
+            agent._reconstruct_context()
+        assert build_settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
+        assert "settings" in _call(agent, "settings")
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_configured_pad_seeds_only_an_empty_durable_body(tmp_path):
+    agent = _agent(tmp_path)
+    try:
+        pad_path = agent._working_dir / "system" / "pad.md"
+        assert pad_path.read_text(encoding="utf-8") == ""
+        agent._reload_prompt_sections({"pad": "INITIAL PAD", "lingtai": ""})
+        assert pad_path.read_text(encoding="utf-8") == "INITIAL PAD"
+        assert "INITIAL PAD" in agent._build_system_prompt()
+
+        pad_path.write_text("DURABLE PAD", encoding="utf-8")
+        agent._reload_prompt_sections({"pad": "REPLACEMENT", "lingtai": ""})
+        assert pad_path.read_text(encoding="utf-8") == "DURABLE PAD"
+        assert "DURABLE PAD" in agent._build_system_prompt()
+        assert "REPLACEMENT" not in agent._build_system_prompt()
     finally:
         agent.stop(timeout=1.0)
 
@@ -319,7 +529,7 @@ def test_no_returned_manual_teaches_a_retired_public_root(tmp_path):
     """No body may show a retired root as an executable call."""
     agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
     try:
-        for action in EXPECTED_ACTIONS:
+        for action in MANUAL_ACTIONS:
             body = _call(agent, action)["manual"]
             for retired in ("pad", "lingtai", "knowledge", "skills"):
                 assert f"{retired}(action=" not in body, (
@@ -394,7 +604,7 @@ def test_manual_actions_never_scan_a_catalog(tmp_path, monkeypatch):
         monkeypatch.setattr(knowledge_tool, "_migrate_legacy_json", _boom)
         monkeypatch.setattr(skills_tool, "_reconcile", _boom)
 
-        for action in EXPECTED_ACTIONS:
+        for action in MANUAL_ACTIONS:
             assert _call(agent, action)["status"] == "ok"
     finally:
         agent.stop(timeout=1.0)
@@ -412,21 +622,24 @@ def test_unknown_or_retired_action_is_rejected(tmp_path, action):
     try:
         result = _call(agent, action)
         assert "Unknown psyche action" in result["error"]
-        assert "pad, lingtai, knowledge, skills, manual" in result["error"]
+        assert "pad, lingtai, knowledge, skills, settings, manual" in result["error"]
     finally:
         agent.stop(timeout=1.0)
 
 
 @pytest.mark.parametrize("action", EXPECTED_ACTIONS)
-def test_any_input_key_is_rejected_before_the_manual_is_read(tmp_path, action, monkeypatch):
+def test_any_input_key_is_rejected_before_the_selected_child_runs(
+    tmp_path, action, monkeypatch
+):
     from lingtai.tools import _manual as manual_loader
 
     agent = _agent(tmp_path)
     try:
         def _boom(*_a, **_k):  # pragma: no cover - must never run
-            raise AssertionError("manual was loaded despite an invalid input key")
+            raise AssertionError("selected Psyche child ran despite invalid input")
 
         monkeypatch.setattr(manual_loader, "load_installed_manual", _boom)
+        monkeypatch.setattr(psyche_tool, "build_settings_provider", lambda _agent: _boom)
         result = _call(agent, action, {"files": ["x"]})
         assert result["error_code"] == "INVALID_ARGUMENT"
         assert result["message"] == "unsupported psyche input field"
@@ -673,7 +886,7 @@ def test_no_returned_manual_teaches_a_public_substrate_root(tmp_path):
     """The retired public `substrate` root must not survive in any body."""
     agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
     try:
-        for action in EXPECTED_ACTIONS:
+        for action in MANUAL_ACTIONS:
             body = _call(agent, action)["manual"]
             assert "substrate(action=" not in body, (
                 f"{action} manual teaches the retired substrate(action=...) root"

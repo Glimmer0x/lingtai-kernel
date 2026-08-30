@@ -2,14 +2,15 @@
 name: context-manual
 description: |
   Router and operational guide for the context tool: molt, summarize/rebuild, session journaling, and post-wipe recovery. Read it when molting, compacting or rebuilding provider context, tending the four durable stores, or waking from a system-performed wipe. Routes consequential handoffs to assets/molt-template.md and the summarize/rebuild procedure to reference/summarize-manual.
-version: 2.1.0
-last_changed_at: "2026-08-07T00:00:00Z"
+version: 2.1.1
+last_changed_at: "2026-08-29T00:00:00Z"
 related_files:
 - src/lingtai/tools/context/__init__.py
 - src/lingtai/tools/context/_molt.py
 - src/lingtai/tools/context/_session_journal.py
 - src/lingtai/tools/system/summarize.py
 - src/lingtai/agent.py
+- src/lingtai/tools/psyche/CONTRACT.md
 maintenance: |
   This package is the canonical Context manual source and runtime-installed owner.
   Update it when the tool/capability behavior changes.
@@ -136,7 +137,12 @@ false: `context` results are small (short-result profile), and summarizing a
 resident tool description; no action takes `summarize` as input.)
 
 `context` owns only your context. Your name is `system(action='name_set')` /
-`system(action='name_nickname')`. Your four durable stores share one read-only root: `psyche(action="pad"|"lingtai"|"knowledge"|"skills"|"manual", input={}, reasoning="...")` returns the matching manual and nothing else. Use `file.write`/`file.edit` for their durable files, then rebuild explicitly when needed.
+`system(action='name_nickname')`. Your four durable stores share one read-only
+root. `psyche(action="pad"|"lingtai"|"knowledge"|"skills"|"manual", input={},
+reasoning="...")` returns the matching manual;
+`psyche(action="settings", input={}, reasoning="...")` returns the two fully
+redacted Psyche-owned Pad configuration rows. Use `file.write`/`file.edit` for
+durable files, then rebuild explicitly when needed.
 
 **Required pre-molt order (enforced by the kernel):** write the session journal
 sub-entry first (§4) → pass its path as `session_journal_path` → the kernel
