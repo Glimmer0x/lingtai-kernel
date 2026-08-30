@@ -635,22 +635,22 @@ def test_mcp_show_unknown_action_returns_error(tmp_path):
     # (issue #513) and the ToolFamily migration.
     assert result == {
         "status": "error",
-        "message": "unknown action: 'register', only 'info' or 'manual' is supported",
+        "message": "unknown action: 'register', only 'info', 'settings', or 'manual' is supported",
     }
     # Missing action key renders the empty-string default, not None.
     assert handler({}) == {
         "status": "error",
-        "message": "unknown action: '', only 'info' or 'manual' is supported",
+        "message": "unknown action: '', only 'info', 'settings', or 'manual' is supported",
     }
     # Invalid JSON can make `action` unhashable (issue #513 blocker): the router
     # must render the unknown-action envelope, not raise TypeError.
     assert handler({"action": []}) == {
         "status": "error",
-        "message": "unknown action: [], only 'info' or 'manual' is supported",
+        "message": "unknown action: [], only 'info', 'settings', or 'manual' is supported",
     }
     assert handler({"action": {}}) == {
         "status": "error",
-        "message": "unknown action: {}, only 'info' or 'manual' is supported",
+        "message": "unknown action: {}, only 'info', 'settings', or 'manual' is supported",
     }
 
 

@@ -716,12 +716,12 @@ take the canonical strict-empty `input`, and it supports no settings file (see
 `src/lingtai/tools/knowledge/CONTRACT.md`). It remains a signpost capability
 with no authoring, search, or edit action.
 
-`mcp` (`info | manual`) is the first family declared under
-`### Tool-to-MCP Plugin Contract`: that recut is internal only — the public
-tool name, both public action values, both strict-empty `input` branches, and
-every result shape including the tool-specific `mcp_manual` body key are
-unchanged, while the family now reaches the live Agent body through two granted
-host ports instead of the whole `Agent` (see
+`mcp` (`info | settings | manual`) is the first family declared under
+`### Tool-to-MCP Plugin Contract`: the reserved settings action is the sole
+additive surface and is bound to the owner's five-field SHOW provider; the
+public tool name and existing action result shapes including the tool-specific
+`mcp_manual` body key are unchanged, while the family reaches the live Agent
+body through two granted host ports instead of the whole `Agent` (see
 `src/lingtai/tools/mcp/CONTRACT.md`).
 
 `avatar` (`spawn | rules | manual`) is the second family declared under
@@ -956,10 +956,10 @@ unmigrated and keeps its existing schema and settings surface unchanged by
 this file.
 
 `mcp` is the second migrated family: public tool name `mcp`, actions `info |
-manual`, both taking the canonical strict-empty `input`. The migration changed
-its call envelope only — no action was added, removed, renamed, or given a new
-capability; it remains signpost-only and read-only, and external MCP
-registration (direct insertion into `mcp_registry.jsonl`) is untouched by it.
+settings | manual`, all taking the canonical strict-empty `input`. The bounded
+settings owner slice is SHOW-only; existing action behavior stays read-only and
+external MCP registration (direct insertion into `mcp_registry.jsonl`) is
+untouched by it.
 See `src/lingtai/tools/mcp/CONTRACT.md`.
 
 `plugin` is `mcp`'s deliberate twin and the only family born on this envelope

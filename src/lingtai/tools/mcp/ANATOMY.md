@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/mcp/BEHAVIORS.md
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/mcp/settings.py
   - src/lingtai/tools/mcp/plugin.json
   - src/lingtai/agent.py
   - src/lingtai/services/mcp_inbox.py
@@ -20,6 +21,7 @@ related_files:
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/mcp_servers/ANATOMY.md
   - tests/test_mcp_capability.py
+  - tests/test_mcp_settings.py
   - tests/test_mcp_inbox.py
   - tests/test_tool_family_mcp_migration_parity.py
   - src/lingtai/tools/mcp/glossary-en.md
@@ -44,9 +46,10 @@ maintenance: |
 # lingtai/tools/mcp + lingtai/services/mcp_* (split)
 
 MCP capability — per-agent registry of MCP (Model Context Protocol) servers.
-Pure presentation: reads the registry from disk, validates records, and renders
-it as XML into the system prompt. No tool writes; all registry mutations happen
-via file operations from the agent (`write`, `edit`).
+Pure presentation: reads the registry from disk, validates records, renders it
+as XML into the system prompt, and SHOWs the two MCP-owned init settings. No
+tool writes; all configuration/registry mutations happen via explicitly
+authorized file operations from the agent (`write`, `edit`).
 
 Also includes the **LICC v1 (LingTai Inbox Callback Contract)** — a
 filesystem-based inbox that lets out-of-process MCP servers push events into
@@ -56,7 +59,35 @@ The model-visible notification projection for LICC events is governed by `src/li
 
 ## Components
 
-- `mcp/__init__.py` — MCP tool surface (the tool slice, ~350 lines). One model-facing LTP v2 family: the public tool name stays `mcp` and the public actions stay `info`/`manual`, now carried in the canonical `action` + `input` + `reasoning` + `summarize` envelope composed by the generic `lingtai.tools.tool_family` infrastructure (`src/lingtai/tools/tool_family/ANATOMY.md`). `get_description` (`src/lingtai/tools/mcp/__init__.py:219`), `get_schema` (`src/lingtai/tools/mcp/__init__.py:223`) returns `ToolFamily.build_schema()` with the pre-migration signpost `action` description preserved verbatim, `_build_family` (`src/lingtai/tools/mcp/__init__.py:170`) is the single source of the two-child registry — called with `None` at import for the module-level schema-only family `_FAMILY` (`src/lingtai/tools/mcp/__init__.py:330`, built after the declaration it derives from), which fails loudly on a duplicate/reserved-name collision and never dispatches, and called with the granted `ToolPluginHost` from `_bind` (`src/lingtai/tools/mcp/__init__.py:233`) for the real dispatching family whose `manual` child comes straight from `tool_family.manual.build_manual_child`, handed only `host.workdir` and the manual destination read back out of `DECLARATION.manual`; both paths take their per-action `input` schemas from `DECLARATION` too — which holds the one `_EMPTY_INPUT` literal (`src/lingtai/tools/mcp/__init__.py:160`) re-exported from `tool_family.manual.MANUAL_INPUT_SCHEMA` — so the declared, advertised, and validated shapes cannot drift. `_reconcile` (`src/lingtai/tools/mcp/__init__.py:74`) backs the `info` child and reaches the live Agent body only through `host.workdir.path` and `host.prompt_section.write_protected_section`, `_flatten_manual_result` (`src/lingtai/tools/mcp/__init__.py:113`) is the Host-owned adapter that turns the manual child's canonical `content`/`structuredContent` result back into mcp's flat `mcp_manual` public shape strictly *after* dispatch (no double wrap), and `handle_mcp` (closed over inside `_bind`, `src/lingtai/tools/mcp/__init__.py:245`) owns mcp's exact pre-migration unknown-action envelope — including the missing-action empty-string default and unhashable `action` values (issue #513), routed by tuple membership against `child_names`, which compares by `==` and never hashes — before delegating to `ToolFamily.handle`. Both actions declare a strict-empty `input`, so any extra input field fails before the registry is re-read or the manual is loaded. The registry infra now lives in `src/lingtai/services/mcp_registry.py`: `validate_record` (`src/lingtai/services/mcp_registry.py:72`), `validate_registry_line` (`src/lingtai/services/mcp_registry.py:118`), `read_registry` (`src/lingtai/services/mcp_registry.py:139`), `read_identities` (`src/lingtai/services/mcp_registry.py:253`), `decompress_addons` (`src/lingtai/services/mcp_registry.py:316`), `_load_catalog` (`src/lingtai/services/mcp_registry.py:43`), `_build_registry_xml` (`src/lingtai/services/mcp_registry.py:419`). **Account-identity discovery** (`src/lingtai/services/mcp_registry.py:253`): `read_identities` reads each addon's non-secret identity document at `system/mcp_identities/<name>.json` (schema `lingtai.mcp.identity.v1`) and projects every account through the secret-safe allowlist `IDENTITY_SAFE_ACCOUNT_KEYS` (`src/lingtai/services/mcp_registry.py:211`) via `_project_account` (`src/lingtai/services/mcp_registry.py:242`). The tool-slice `_reconcile` attaches the projected identity to each `registered` entry (`_registered_entry`, `src/lingtai/tools/mcp/__init__.py:66`) and the registry XML builder renders it into the prompt XML (`_build_identity_xml`, `src/lingtai/services/mcp_registry.py:399`). The projection is an allowlist, not a passthrough — tokens/passwords/secrets/headers and any unrecognized field are dropped even if an on-disk identity file contains them, so the generic surface can never leak what a producer bug might persist. The prompt render further narrows to `_PROMPT_ACCOUNT_KEYS` (`src/lingtai/services/mcp_registry.py:394`), which excludes `last_verified_at`: that field, and the identity-level `<last_verified_at>` that used to precede the account list, are volatile re-verification timestamps that change on plain refresh and would otherwise break prompt-cache stability. `read_identities` and the `mcp(action="info")` diagnostic payload still surface `last_verified_at` — only the model-facing prompt XML omits it.
+- `mcp/__init__.py` — MCP tool surface. One model-facing LTP v2 family keeps
+  public name `mcp` and exposes exact actions `info`/`settings`/`manual` through
+  the canonical `action` + `input` + `reasoning` + `summarize` envelope.
+  `_build_family` is the one ordered owner-child source; generic composition
+  injects settings immediately before manual. `_reconcile` backs `info` through
+  only the workdir and protected prompt-section ports; `_flatten_manual_result`
+  preserves the existing flat manual result; the Host-owned wrapper keeps
+  malformed/unknown actions out of dispatch. All actions have strict-empty
+  input. Registry validation, JSONL I/O, addon decompression, identity
+  projection, and XML construction remain in
+  `src/lingtai/services/mcp_registry.py` (`validate_record`,
+  `validate_registry_line`, `read_registry`, `read_identities`,
+  `decompress_addons`, `_load_catalog`, `_build_registry_xml`); `info` behavior
+  is unchanged.
+- `mcp/settings.py` — `MCPSettingsProvider`, the read-only owner provider.
+  Every call runs the canonical init reader with boot/refresh preset callbacks,
+  then returns exactly `init.addons` and `init.mcp`. The latter is marked
+  sensitive so current and default are fully redacted by the generic SHOW
+  projector. Any source/shape failure rejects the whole inventory; no registry,
+  identity, curated private config/session, Task Card, agent identity, legacy
+  server file, or live-process state is consulted.
+- **Account-identity discovery** — `read_identities` reads each addon's
+  non-secret `system/mcp_identities/<name>.json` document and projects accounts
+  through `IDENTITY_SAFE_ACCOUNT_KEYS` via `_project_account`. `_reconcile`
+  attaches that allowlisted projection to an `info` entry, while
+  `_build_identity_xml` narrows the prompt rendering again through
+  `_PROMPT_ACCOUNT_KEYS`. Tokens, passwords, secrets, headers, and unknown
+  fields are dropped. Volatile `last_verified_at` remains available to
+  `read_identities`/`info` but stays out of prompt XML for cache stability.
 - `src/lingtai/services/mcp_inbox.py` — LICC v1 filesystem inbox poller (the **consumer** half). `validate_event` validates required `from`/`subject`/`body` fields; `_format_notification_summary` is **deprecated** legacy helper (retained for backward compat); `_extract_preview_meta` pulls optional IM/chat scalars (`conversation_ref`, `message_ref`, `platform`, and the additive per-update `event_id` used by the persistent lane for event-identity dedup/delivery) out of `event["metadata"]` when present as non-empty strings, each capped at `_PREVIEW_META_FIELD_CAP` (200 chars), and curated IM structured fields (`latest_incoming`, `recent_messages`, `referenced_messages` — the full reply target when it falls outside the last-20 window) after a bounded JSON-safe copy (a right-typed structured field that is unserializable or over the `_PREVIEW_STRUCTURED_META_JSON_CAP` is replaced by an explicit `licc_structured_omitted` marker carrying the reason and a read-action recovery hint, never silently dropped) — these feed the kernel builder for `_meta.agent_meta.notifications.persistent.mcp.<channel>` (currently Telegram, WeChat, Feishu, WhatsApp) and are then stripped from the model-visible ephemeral lane by the per-channel `meta_block.sanitize_*_notification_after_persistent` wrappers (move, not duplicate — Jason #6148); `_consume_event` returns `(wake, preview)` where `preview = {"from": sender, "subject": subject, "preview": body[:_PREVIEW_FIELD_CAP], "preview_truncated": bool, **extracted_meta}` — only the body snippet gets capped (sender/subject are bounded by upstream construction); `_dispatch_summary` publishes to `.notification/mcp.<mcp_name>.json` via `notifications.submit`, embedding full body snippets once in `data.previews` while keeping `instructions` to read/check guidance plus lightweight sender/subject/metadata routing context; `_scan_once` coalesces per MCP, threading the preview list through; `MCPInboxPoller` class drives the poll loop. Body snippet cap is `_PREVIEW_FIELD_CAP = 10000`. Defines the shared contract constants `LICC_VERSION` / `INBOX_DIRNAME` / `DEAD_DIRNAME` / `TMP_SUFFIX` / `EVENT_SUFFIX`.
 - `src/lingtai/services/mcp_licc.py` — LICC v1 client (the **producer** half). One public function, `push_inbox_event(sender, subject, body, *, metadata=None, wake=True, received_at=None, agent_dir=None, mcp_name=None, event_id=None) -> bool`, that an out-of-process MCP imports to drop one event into `<agent_dir>/.mcp_inbox/<mcp_name>/<event_id>.json`. Lightweight by design — importing it starts no threads and re-exports the contract constants (`LICC_VERSION`, `INBOX_DIRNAME`, `TMP_SUFFIX`, `EVENT_SUFFIX`) straight from `src/lingtai/services/mcp_inbox.py` so producer and consumer never drift. `agent_dir`/`mcp_name` default to env vars `LINGTAI_AGENT_DIR`/`LINGTAI_MCP_NAME` (kernel-injected per MCP); explicit params override for tests/advanced callers. Writes atomically: serialize → `<event_id>.json.tmp` → `flush`+`os.fsync` → `os.replace` onto the final `.json` (the poller ignores `.tmp`, so half-writes are never observed). `event_id` defaults to a fresh `uuid4().hex` (guarantees per-call uniqueness); explicit `mcp_name`/`event_id` path components are validated before use. The payload is checked with `validate_event` before writing, so the canonical producer does not intentionally emit dead-letterable events. Best-effort/silent: missing/invalid target, unsafe path component, invalid payload, or filesystem/serialization error → `False` (never raises into the MCP), with a terse, content-free log that never echoes `body`/`subject`/`metadata`.
 - **Declared host-plugin route** — `mcp` is the current base reference slice
@@ -83,36 +114,38 @@ requires exactly `workdir` and the earned `file_io` port; and Plugin's static
 own `prompt_section`, and the read-only `plugin_catalog` projection
 (`src/lingtai/kernel/tool_plugin/ANATOMY.md`,
 `src/lingtai/kernel/tool_plugin/CONTRACT.md`, LABTs TP001/TP002). `DECLARATION`
-(`src/lingtai/tools/mcp/__init__.py:308`) is a static `ToolPluginDeclaration`
-built at module import with no Agent in existence: `actions=("info",)` (the
-reserved `manual` is appended by the declaration, never declared), one
+is a static `ToolPluginDeclaration` built at module import with no Agent in
+existence: `actions=("info",)` and `settings=True` (the reserved `settings` and
+`manual` children are appended by the declaration), one
 strict-empty `input` schema per action, `manual="mcp"` naming the installed
 manual destination that `_build_family` reads back out of it (one literal, not
 two), and `requires=("workdir", "prompt_section")` — the two host ports this
-family actually consumes. `_bind` (`src/lingtai/tools/mcp/__init__.py:233`)
+family actually consumes. `_bind`
 composes the family and the `handle_mcp` wrapper and returns a `BoundToolPlugin`
 whose `activate` is the boot reconcile; it mounts nothing, and
 `ToolPluginDeclaration.bind` refuses it outright if the composed schema
 advertises an action inventory other than the declared `public_actions`. `setup`
-(`src/lingtai/tools/mcp/__init__.py:333`) is now only composition wiring: it
+is only composition wiring: it
 calls `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins`, which
 reserves the official `mcp` name, grants the two ports, binds, activates, and
 mounts — in that order, so a name conflict is refused before the live tool
-surface is touched. The recut changed no public behavior: same tool name, same
-`["info", "manual"]` enum, same strict-empty inputs, same result shapes including
-the tool-specific `mcp_manual` body key (`tests/test_tool_family_mcp_migration_parity.py`,
-`tests/test_mcp_capability.py`, `tests/test_tool_plugin_declaration.py`).
+surface is touched. Settings is the sole additive public action; the tool name,
+existing strict-empty inputs, and existing result shapes including the
+tool-specific `mcp_manual` body key stay unchanged
+(`tests/test_tool_family_mcp_migration_parity.py`, `tests/test_mcp_capability.py`,
+`tests/test_mcp_settings.py`).
 - `mcp/plugin.json` + `mcp/skills/mcp-manual/` — the built-in Agent Plugins v1.0.0 documentation package. `Agent._install_intrinsic_manuals` validates this one-skill package through `services.plugin_registry.read_plugin` and mounts the skill as `intrinsic/capabilities/mcp/`; it does not register a plugin or an MCP server. The retained `mcp/manual/` tree is a source-layout compatibility copy, never the installed manual source.
 
 ## Public API
 
-The `mcp` tool exposes two signpost actions, called through the LTP v2 envelope
-`mcp(action=..., input={}, reasoning="...")` (both actions take a strict-empty
+The `mcp` tool exposes three read-only actions, called through the LTP v2 envelope
+`mcp(action=..., input={}, reasoning="...")` (all actions take a strict-empty
 `input`; `summarize` is the optional root presentation control):
 
 | Action | Description |
 |--------|-------------|
 | `info` | Re-read the MCP registry and return runtime health (registry contents, problems, registry path) without the manual body. Each `registered` entry may carry a non-secret `identity` block (account alias, provider username/id/display name, non-secret routing counts) read from `system/mcp_identities/<name>.json` when the addon has published one. |
+| `settings` | SHOW exactly the five-field `init.addons` and fully redacted `init.mcp` rows from a fresh canonical effective init composition. |
 | `manual` | Return the mcp-manual skill body on demand, with no registry read, rescan, or mutation. |
 
 ### LICC v1 Inbox Protocol
