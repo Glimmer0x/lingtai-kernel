@@ -2,10 +2,11 @@
 name: avatar-manual
 description: |
   Complete operational guide for the avatar tool — spawning, managing, and communicating with 他我 (alter-ego agents). Read this when: you are about to spawn an avatar; an avatar you spawned goes quiet; you need to decide between avatar, daemon, or bash; or you are an avatar and need to know how to escalate to your parent. Covers spawn types, naming rules, discipline, escalation protocol, and the parent_prompt contract.
-version: 1.1.0
-last_changed_at: 2026-07-27T00:00:00Z
+version: 1.2.0
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
 - src/lingtai/tools/avatar/__init__.py
+- src/lingtai/tools/avatar/settings.py
 - src/lingtai/tools/avatar/ANATOMY.md
 - src/lingtai/tools/avatar/CONTRACT.md
 - src/lingtai/tools/CONTRACT.md
@@ -17,25 +18,29 @@ maintenance: |
 
 ## 0. How to Call `avatar`
 
-One tool, three actions, each with its own strict `input` object:
+One tool, four actions, each with its own strict `input` object:
 
 ```
 avatar(action="spawn",  input={"name": "researcher"},        reasoning="<mission briefing>")
 avatar(action="spawn",  input={"name": "clone", "type": "deep"}, reasoning="<mission briefing>")
 avatar(action="rules",  input={"rules_content": "..."},      reasoning="why these rules")
+avatar(action="settings", input={},                           reasoning="inventory Avatar policy")
 avatar(action="manual", input={},                            reasoning="load avatar guidance")
 ```
 
 - `action` is **required** — there is no default. Omitting it never spawns.
 - `input` is **required** and closed. `spawn` owns `name`, `type`, `comment`,
-  `dry_run`, `confirm`; `rules` owns `rules_content`; `manual` takes `{}`.
+  `dry_run`, `confirm`; `rules` owns `rules_content`; `settings` and `manual`
+  each take only `{}`.
   Putting one action's field in another's `input` is rejected before anything
   happens — no process, no ledger entry, no `.rules` write.
 - `reasoning` is **required** and lives at the root, never inside `input`. For
   `spawn` it *is* the mission briefing (see §4).
 
 **Settings:** `avatar` has no settings file at either the family or action
-level. There is nothing to configure on disk.
+level and reads no `LINGTAI_AVATAR_*` environment variable. The read-only
+`settings` action inventories the immutable defaults and owner policy below; it
+does not make them mutable.
 
 **`summarize` (short-result profile).** Every action here returns a small
 result — a spawn receipt, a distribution list, or a manual body you asked for
@@ -43,6 +48,60 @@ verbatim. `summarize` is available but normally unnecessary: leave it false.
 Keep it false for `manual` in particular, so exact procedure and constraints
 are not summarized away, and for `spawn`, whose receipt carries the address,
 `agent_name`, and `pid` you need exactly.
+
+### Settings inventory
+
+`avatar(action="settings", input={}, reasoning="...")` is SHOW-only. Success
+is exactly `{"settings": [...]}`. Every row contains exactly, and in order,
+`key`, `current`, `default`, `configurable`, and `comment`. The 16 rows are the
+immutable call defaults, validation constraints, and lifecycle policy described
+in the next three sections. Each is `configurable:false`, and its fixed code
+fallback is both the fresh effective `current` and truthful `default`.
+
+The action accepts no set/reset form and never creates a settings file, launches
+an avatar, changes rules or authorization, writes the spawn ledger, or mutates
+the process environment. Avatar has no owner file, environment peer, or source
+precedence for these rows. Parent identity, runtime/venv data, authorization,
+handoff values, and per-invocation/session state are not settings and are not
+read or returned. A provider or JSON-safety failure makes the complete
+inventory unavailable with no partial rows or exception text; the generic
+boundary caps the complete response at 65,536 UTF-8 bytes.
+
+There is no runtime change procedure. To change one of these policies, revise
+the owning Avatar source and this manual through normal review, run the Avatar
+and shared settings suites, then relaunch. Call SHOW again after relaunch to
+verify the effective policy. A per-call `spawn` input varies only that one
+invocation and never changes a row.
+
+### Spawn call defaults
+
+When the corresponding nullable input is absent or `null`, `spawn` uses
+`spawn.type.default="shallow"`, `spawn.comment.default=""`,
+`spawn.dry_run.default=false`, and `spawn.confirm.default=false`. A single call
+may supply `type` (`shallow` or `deep`), `comment` (string), `dry_run` (boolean),
+or `confirm` (boolean). Those inputs have no precedence beyond that invocation;
+the next SHOW reports the same fixed defaults. Permanent changes follow the
+review-and-relaunch procedure under Settings inventory.
+
+### Spawn validation policy
+
+The fixed accepted spawn types are `spawn.type.allowed=["shallow","deep"]`.
+Names must contain 1–64 characters. Missions under 20 characters trigger the
+confirmation gate, as do missions equal to or beginning with the placeholder
+tokens `bar`, `check`, `debug`, `foo`, `temp`, `test`, and `tmp`. These package
+constants are the only source; there is no config/environment key or runtime
+precedence. Permanent changes follow the review-and-relaunch procedure above.
+
+### Spawn lifecycle policy
+
+Avatar observes boot for 5.0 seconds, polls every 0.1 seconds, and retains at
+most the final 2,000 bytes of child stderr on early exit. It always selects the
+parent's default preset, inherits the launcher process environment without
+showing it, launches a detached independent life, and clears newborn admin.
+These seven rows are fixed package/launcher policy with no file, environment
+peer, or runtime precedence. A slow observation releases the parent-side handle
+without terminating the detached child. Permanent changes require owner-source
+and launcher review, the focused tests, and relaunch as described above.
 
 ## 1. What Is an Avatar
 

@@ -20,6 +20,7 @@ related_files:
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/settings.py
   - src/lingtai/tools/soul/CONTRACT.md
   - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/skills/CONTRACT.md
@@ -287,7 +288,9 @@ knowledge's exact pre-migration unknown-action result.
 contract (after `file` and `vision`, which adopt this package per
 `../CONTRACT.md` without a dedicated Adapter paragraph here):
 `AvatarManager.__init__` builds a per-instance `ToolFamily` with
-`spawn`/`rules`/`manual` handlers bound to that instance, and
+`spawn`/`rules` handlers bound to that instance, the generic `settings` child
+bound to the static no-I/O `AvatarSettingsProvider`, and Avatar's local
+`manual` handler. `settings` is injected immediately before `manual`, and
 `AvatarManager.handle()` calls `self._family.handle(args)`. It is a deliberate
 **partial** adoption, which this package permits: `avatar` reuses `ChildTool`
 and `ToolFamily` but *not* `build_manual_child`, because its manual ships inside

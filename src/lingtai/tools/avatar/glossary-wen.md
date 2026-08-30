@@ -16,7 +16,7 @@ maintenance: |
 **名相对照**
 
 - `avatar`：唯一公开之器，以 `action` 分遣，每遣各有严整自专之 `input`。详见 avatar-manual 技。
-- `action`：必填，无默认。`spawn`（化出独立他我，承 init.json，以默认预设启）｜`rules`（设网法以布一切后嗣，需 karma）｜`manual`（只读，还 avatar 手册全文及其 `manual_path`）。
+- `action`：必填，无默认。`spawn`（化出独立他我，承 init.json，以默认预设启）｜`rules`（设网法以布一切后嗣，需 karma）｜`settings`（唯读，以五栏列 Avatar 之定默认与策）｜`manual`（只读，还 avatar 手册全文及其 `manual_path`）。
 - `input`：必填，乃所遣一动作自专之严封之器。他遣分支之名，未及动手之先即斥。
 - `reasoning`：必填，居根，非动作之入。`action=spawn` 时即任务之书，为他我第一言。
 - `summarize`：可选，居根之布尔，默然为否。惟司果之后治，终不入动作之实。

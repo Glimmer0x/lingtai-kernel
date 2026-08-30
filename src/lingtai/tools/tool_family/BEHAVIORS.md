@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/tools/avatar/settings.py
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/mcp/CONTRACT.md
   - src/lingtai/tools/email/CONTRACT.md
@@ -39,7 +40,7 @@ LABT v1. These are self-contained agent-executable behavioral tests for the
 families built on the generic `src/lingtai/tools/tool_family/` infrastructure.
 They prove the *observable* promises of the family contracts this package
 serves: the `file` read/write/edit surface and its fail-closed envelope, the
-`avatar` spawn/rules/manual migration envelope, the reserved `manual` child's
+`avatar` spawn/rules/settings/manual migration envelope, the reserved `manual` child's
 canonical result contract (no double wrap), the `psyche` five-domain manual
 router (pad + lingtai + knowledge + skills = psyche), `mcp` identity
 discovery with secret-safe projection, and `email` abs-mode reply routing with
@@ -265,8 +266,9 @@ tree untouched.
       created (names must match `^[\w-]+$`, be ≤64 chars, with no dot, slash,
       or leading `.`).
 - [ ] Step 5 returns exactly `{"error": "unknown action: 'bogus', only
-      'spawn', 'rules', or 'manual' is supported"}` and `{"error": "unknown
-      action: '', only 'spawn', 'rules', or 'manual' is supported"}` for the
+      'spawn', 'rules', 'settings', or 'manual' is supported"}` and `{"error":
+      "unknown action: '', only 'spawn', 'rules', 'settings', or 'manual' is
+      supported"}` for the
       omitted case — no spawn, no ledger, no process.
 - [ ] Step 6: the cross-action key fails with `{"status": "failed",
       "error_code": "INVALID_ARGUMENT", "message": "unsupported avatar input
@@ -646,7 +648,7 @@ new snapshot/summary/session state.
 
 - [ ] Opt-in/order, exact input, exact five-field success, private redaction,
       manual `comment` route, fixed whole-action failures, incremental bounding,
-      exports, and production opt-out pass.
+      exports, and exact production opt-in ownership pass.
 
 ### Pass / Fail
 

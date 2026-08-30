@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/avatar/ANATOMY.md
+  - src/lingtai/tools/avatar/settings.py
   - src/lingtai/tools/soul/ANATOMY.md
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/psyche/ANATOMY.md
@@ -189,10 +190,11 @@ pre-migration unknown-action result.
 `avatar/__init__.py` ([`../avatar/ANATOMY.md`](../avatar/ANATOMY.md)) is the
 sixth real consumer, and shows partial adoption is conforming: it reuses
 `ChildTool`/`ToolFamily` and the exported `MANUAL_INPUT_SCHEMA` for
-`spawn`/`rules`/`manual` schema composition and dispatch — deriving both its
-schema-only and handler-bound child listings from one `_CHILD_SPECS`
-`(action, schema)` source via its own `_build_family`, so they cannot drift
-apart — but supplies its **own** `manual` handler rather than
+`spawn`/`rules`/`settings`/`manual` schema composition and dispatch. Its
+declaration opts into the generic settings child with the no-I/O provider from
+`avatar/settings.py`, while its operational actions remain one
+`_DECLARED_CHILD_SPECS` source and its public listing derives from the
+declaration. It supplies its **own** `manual` handler rather than
 `manual.build_manual_child`, because its manual ships inside its own package
 instead of the agent's installed `.library` catalog. `ToolFamily.handle()`
 returns that child's own canonical flat result verbatim — no double wrap, and

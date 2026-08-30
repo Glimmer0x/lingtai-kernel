@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/_launcher.py
+  - src/lingtai/tools/avatar/settings.py
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
@@ -47,11 +48,14 @@ independent life — its existence does not depend on yours.
 
 ## Components
 
-- `avatar/__init__.py` — static official `DECLARATION`, local manual child,
-  validation, preparation, boot policy, ledger, rules, schemas, and registrar
-  setup. The core class is `AvatarManager`.
+- `avatar/__init__.py` — static official `DECLARATION`, settings binding, local
+  manual child, validation, preparation, boot policy, ledger, rules, schemas,
+  and registrar setup. The core class is `AvatarManager`.
 - `avatar/_launcher.py` — immutable launch request/receipt and the avatar-local
   opaque-handle Port.
+- `avatar/settings.py` — the no-I/O `AvatarSettingsProvider` and the constants
+  shared with Avatar's runtime validation/default/lifecycle consumers. It owns
+  no store, environment reader, runtime object, or writer.
 
 ## Public API
 
@@ -62,6 +66,7 @@ family (`src/lingtai/tools/CONTRACT.md`) whose actions are canonical children:
 |------|------|-------------|
 | `spawn` | `name`, `type`, `comment`, `dry_run`, `confirm` | Spawn a new avatar agent (shallow or deep). `dry_run` previews only; `confirm` acknowledges the mission-quality gate. |
 | `rules` | `rules_content` | Set rules content and distribute via `.rules` signal files to self + all descendants. Karma-gated. |
+| `settings` | `{}` | Return 16 immutable Avatar defaults, validation constraints, and lifecycle policies as exact five-field rows. |
 | `manual` | *(empty)* | Read-only: returns the exact `manual/SKILL.md` body plus its host-local `manual_path`. No spawn or rules I/O. |
 
 The model-facing root is exactly `action` + `input` + required `reasoning` +
@@ -93,10 +98,11 @@ unknown-action error string.
 ```
 avatar/__init__.py
   ├── _SPAWN/_RULES_INPUT_SCHEMA    — canonical strict operational inputs
-  ├── DECLARATION                   — static official identity, actions, manual,
-  │                                    and exact `(workdir, avatar_parent)` grant
+  ├── DECLARATION                   — static official identity, actions,
+  │                                    settings/manual reservations, and exact
+  │                                    `(workdir, avatar_parent)` grant
   ├── _CHILD_SPECS / _build_family  — declaration-derived public listing plus
-  │                                    the package-local reserved manual child
+  │                                    generic settings and local manual children
   ├── _bind()                       — pure host composition → BoundToolPlugin
   ├── AvatarManager.__init__        — narrow host + per-instance ToolFamily
   ├── handle()                      — envelope entry: captures root _reasoning,
@@ -108,6 +114,8 @@ avatar/__init__.py
   ├── _strip_nulls()                — nullable-optional → absent
   ├── _manual_payload()             — plugin-owned local `manual/SKILL.md`
   │                                    result; no manager/host mutation
+  ├── settings.AvatarSettingsProvider — fresh immutable SettingRow values;
+  │                                    no parent state or configuration I/O
   │
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
@@ -135,6 +143,12 @@ avatar/__init__.py
 - **Local manual:** `manual` is the declaration-appended reserved child but
   remains package-local: it returns `manual/SKILL.md` and performs no host or
   manager I/O.
+- **Settings are SHOW-only:** declaration opt-in injects `settings` immediately
+  before `manual`. The provider returns only
+  `key/current/default/configurable/comment`, with every Avatar row fixed and
+  non-configurable. Avatar owns no settings file, environment peer, provider
+  cache, writer, or set/reset operation; parent identity, runtime/venv/auth,
+  handoff, and invocation/session state are omitted rather than sampled.
 - **Name validation:** Avatar names must match `^[\w-]+$` (Unicode-aware), max 64 chars, no dots or path separators. The name doubles as the working directory basename.
 - **Path scope:** The avatar's working directory must be a direct sibling of the parent's (same parent directory). Resolved path is checked against the network root to prevent escape.
 - **No identity inheritance:** Avatars get no name (`agent_name` is set to the avatar name), no admin privileges, no comment, no brief, no addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the first turn still arrives via a separate `.prompt` signal file.
@@ -162,8 +176,9 @@ avatar/__init__.py
   routes `DECLARATION` through `register_agent_tool_plugins`; the kernel checks
   the reserved `avatar` name, grants only `workdir`/`avatar_parent`, binds the
   manager, and mounts the issued transaction. `AvatarManager` internally
-  dispatches `spawn`/`rules`/the declaration-owned local `manual` child through
-  `ToolFamily`. `avatar` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
+  dispatches `spawn`/`rules`, the generic declaration-bound `settings` child,
+  and the declaration-owned local `manual` child through `ToolFamily`. `avatar`
+  is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
   (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean
   it advertises is actually honored by the single central summarizer. The daemon
   capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules
