@@ -5,7 +5,7 @@ slice) for the WhatsApp package: ``lingtai.mcp_servers._plugin.CuratedMcpPlugin`
 binds the same three facts for WhatsApp — registry name, bundled ``SKILL.md``,
 and the stdio MCP declaration the curated catalog publishes — and enforces the
 same reserved ``manual`` promise. These tests pin the packaging promise and the
-*unchanged* public WhatsApp surface around it, without spinning up the Node
+WhatsApp-owned ``settings`` opt-in around it, without spinning up the Node
 bridge or a live account.
 """
 from __future__ import annotations
@@ -72,9 +72,12 @@ def test_catalog_loading_is_unchanged_and_still_the_runtime_source():
 # `manual` is mandatory, reserved, and sourced from the packaged skill
 # ---------------------------------------------------------------------------
 
-def test_package_does_not_declare_manual_and_the_plugin_appends_it_last():
+def test_package_declares_neither_reserved_action_and_plugin_appends_both():
     assert _plugin.MANUAL_ACTION not in WHATSAPP_DECLARED_ACTIONS
-    assert WHATSAPP_ACTIONS == (*WHATSAPP_DECLARED_ACTIONS, "manual")
+    assert "settings" not in WHATSAPP_DECLARED_ACTIONS
+    assert WHATSAPP_PLUGIN.settings is True
+    assert WHATSAPP_ACTIONS == (*WHATSAPP_DECLARED_ACTIONS, "settings", "manual")
+    assert WHATSAPP_ACTIONS[-2] == "settings"
     assert WHATSAPP_ACTIONS[-1] == "manual"
 
 
@@ -148,7 +151,7 @@ def test_manual_still_requires_root_reasoning_like_every_other_action():
 
 
 # ---------------------------------------------------------------------------
-# The public envelope shape is unchanged by the packaging
+# The public envelope keeps its strict shape while adding owner settings
 # ---------------------------------------------------------------------------
 
 def test_public_schema_keeps_the_strict_action_family_shape():
@@ -160,7 +163,11 @@ def test_public_schema_keeps_the_strict_action_family_shape():
     assert len(schema["allOf"]) == len(WHATSAPP_ACTIONS)
     assert "whatsapp-mcp-manual" in schema["properties"]["action"]["description"]
     branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
-    assert branch_titles == [f"{action} input" for action in WHATSAPP_ACTIONS]
+    assert branch_titles == [
+        *(f"{action} input" for action in WHATSAPP_DECLARED_ACTIONS),
+        "settings inventory input",
+        "manual input",
+    ]
 
 
 def test_declared_actions_still_dispatch_flat_into_the_manager():

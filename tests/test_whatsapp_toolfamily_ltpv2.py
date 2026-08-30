@@ -1,7 +1,7 @@
 """Focused WhatsApp LTP-v2 family and server-boundary invariants.
 
 Mirrors ``tests/test_telegram_toolfamily_ltpv2.py``'s family-schema coverage
-for the WhatsApp curated MCP: strict envelope validation for all 13 actions,
+for the WhatsApp curated MCP: strict envelope validation for all 14 actions,
 cross-branch input rejection, manual-action parity, Result/Error typed-object
 parity (including ``INVALID_PARAMS`` for an unknown resource/tool), and inbound
 notification behavior unaffected by the tool envelope.
@@ -20,6 +20,7 @@ import pytest
 
 from lingtai.mcp_servers.whatsapp._family import (
     WHATSAPP_ACTIONS,
+    WHATSAPP_DECLARED_ACTIONS,
     WHATSAPP_SCHEMA,
     _basic_validate,
     _whatsapp_input_schemas,
@@ -63,7 +64,9 @@ class _StubBridge:
 def _branches(schema: dict) -> dict[str, dict]:
     inputs = schema["properties"]["input"]
     branches = inputs.get("oneOf") or inputs.get("anyOf")
-    return {branch["title"].removesuffix(" input"): branch for branch in branches}
+    result = {branch["title"].removesuffix(" input"): branch for branch in branches}
+    result["settings"] = result.pop("settings inventory")
+    return result
 
 
 def _real_manager(tmp_path: Path, *, bridge: _StubBridge | None = None) -> WhatsAppManager:
@@ -89,20 +92,21 @@ _VALID_INPUT_BY_ACTION = {
     "get_qr": {},
     "logout": {},
     "status": {},
+    "settings": {},
     "manual": {},
 }
 
 
 # ---------------------------------------------------------------------------
-# 1. Strict schema validation across all 13 actions.
+# 1. Strict schema validation across all 14 actions.
 # ---------------------------------------------------------------------------
 
 
-def test_all_thirteen_actions_present_in_stable_order():
+def test_all_fourteen_actions_present_in_stable_order():
     assert WHATSAPP_ACTIONS == (
         "send", "check", "read", "reply", "react", "search", "contacts",
         "add_contact", "remove_contact", "get_qr", "logout", "status",
-        "manual",
+        "settings", "manual",
     )
     assert WHATSAPP_SCHEMA["properties"]["action"]["enum"] == list(WHATSAPP_ACTIONS)
 
@@ -128,7 +132,7 @@ def test_every_action_dispatches_with_its_valid_input():
     business action.
     """
     manager = _CountingManager()
-    declared = [action for action in WHATSAPP_ACTIONS if action != "manual"]
+    declared = list(WHATSAPP_DECLARED_ACTIONS)
     for action in WHATSAPP_ACTIONS:
         result = handle_whatsapp(
             manager,
@@ -138,13 +142,20 @@ def test_every_action_dispatches_with_its_valid_input():
                 "reasoning": "schema probe",
             },
         )
-        assert result["status"] == "ok", (action, result)
+        if action == "settings":
+            assert result == {
+                "status": "failed",
+                "error_code": "SETTINGS_UNAVAILABLE",
+                "message": "settings inventory is unavailable",
+            }
+        else:
+            assert result["status"] == "ok", (action, result)
     assert len(manager.calls) == len(declared)
     assert [call["action"] for call in manager.calls] == declared
 
 
-def test_every_action_resolves_to_a_manager_method():
-    for action in WHATSAPP_ACTIONS:
+def test_every_manager_owned_action_resolves_to_a_manager_method():
+    for action in (*WHATSAPP_DECLARED_ACTIONS, "manual"):
         assert callable(getattr(WhatsAppManager, f"_{action}", None)), action
 
 
@@ -261,8 +272,8 @@ def test_react_requires_message_id_and_emoji():
     assert not _basic_validate({"emoji": "x"}, react)
 
 
-def test_get_qr_logout_status_manual_take_no_input_at_all():
-    for action in ("get_qr", "logout", "status", "manual"):
+def test_get_qr_logout_status_settings_manual_take_no_input_at_all():
+    for action in ("get_qr", "logout", "status", "settings", "manual"):
         branch = _branches(WHATSAPP_SCHEMA)[action]
         assert branch.get("properties", {}) == {}
         assert _basic_validate({}, branch)

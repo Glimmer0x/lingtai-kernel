@@ -102,9 +102,11 @@ def load_config() -> tuple[dict[str, Any], Path]:
 
 
 def build_manager(config: dict[str, Any] | None = None) -> WhatsAppManager:
+    config_path: Path | None = None
     if config is None:
         try:
-            config = load_config()[0] or {}
+            loaded_config, config_path = load_config()
+            config = loaded_config or {}
         except ValueError:
             if os.environ.get("LINGTAI_WHATSAPP_CONFIG"):
                 # The env var is set but the config file is missing/malformed:
@@ -116,7 +118,7 @@ def build_manager(config: dict[str, Any] | None = None) -> WhatsAppManager:
             # error, unlike an unreadable/invalid one (which still propagates).
             log.info("LINGTAI_WHATSAPP_CONFIG not set; using personal-mode defaults")
             config = {}
-    return WhatsAppManager(config)
+    return WhatsAppManager(config, config_path=config_path)
 
 
 def _status_payload(manager: WhatsAppManager | None) -> dict[str, Any]:
@@ -140,8 +142,9 @@ def build_server(manager: WhatsAppManager | None = None) -> Server:
     """Construct the MCP server.
 
     ``manager`` is None when eager start failed (or when a caller only wants
-    the schema surface); in that case every action except ``manual`` returns a
-    readable error explaining why.
+    the schema surface); in that case ``manual`` still answers, ``settings``
+    reports unavailable startup facts, and business actions return a readable
+    error explaining why.
     """
 
     async def _list_resources(

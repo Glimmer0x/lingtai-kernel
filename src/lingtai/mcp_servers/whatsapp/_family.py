@@ -6,9 +6,9 @@ family, mirroring ``lingtai.mcp_servers.telegram._family``.
 
 Action *composition* belongs to the package's plugin descriptor (`plugin.py`):
 this module declares WhatsApp's own actions and their strict `input` branches,
-and `WHATSAPP_PLUGIN` appends the reserved `manual` action from the packaged
-`SKILL.md`. `manual` therefore never routes through the manager and cannot be
-omitted, re-schema'd, or rebound to other material from here.
+and `WHATSAPP_PLUGIN` appends owner-bound `settings` followed by the reserved
+`manual` action from packaged `SKILL.md`. Neither reserved action routes through
+the business manager.
 """
 from __future__ import annotations
 
@@ -18,9 +18,10 @@ from typing import Any
 from lingtai.tools.tool_family import ChildTool, ToolFamily
 
 from .plugin import WHATSAPP_ACTIONS, WHATSAPP_DECLARED_ACTIONS, WHATSAPP_PLUGIN
+from .settings import settings_provider
 
-# The package's own actions plus the plugin-appended reserved ``manual``. Kept
-# local to avoid importing the manager (which consumes this schema).
+# The package's own actions plus plugin-appended ``settings`` and ``manual``.
+# Kept local to avoid importing the manager (which consumes this schema).
 _DECLARED_ACTIONS = WHATSAPP_DECLARED_ACTIONS
 _ACTIONS = WHATSAPP_ACTIONS
 
@@ -154,6 +155,7 @@ def _schema_only_family() -> ToolFamily:
             ChildTool(action, schemas[action], lambda _input: {})
             for action in _DECLARED_ACTIONS
         ],
+        settings_provider=settings_provider(None),
     )
 
 
@@ -168,10 +170,12 @@ def whatsapp_schema() -> dict[str, Any]:
     # action to its exact closed branch; use anyOf for the model-discovery
     # list so native JSON-Schema validators do not reject a valid input merely
     # because another action's branch also fits.
-    schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
+    input_schema = schema["properties"]["input"]
+    if "oneOf" in input_schema:
+        input_schema["anyOf"] = input_schema.pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "WhatsApp action. Each action owns a strict input branch. WhatsApp "
-        "Call manual "
+        "WhatsApp action. Each action owns a strict input branch. Call settings "
+        "with empty input for a redacted startup inventory. WhatsApp Call manual "
         + WHATSAPP_PLUGIN.manual_action_description()
     )
     return schema
@@ -239,13 +243,13 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
 
 
 def build_whatsapp_family(manager: Any | None) -> ToolFamily:
-    """Compose the public family: manager-backed declared actions + plugin manual.
+    """Compose declared actions, owner settings, then the plugin manual.
 
-    Only WhatsApp's own actions are built here. ``manual`` is appended by
-    ``WHATSAPP_PLUGIN`` and answered directly from the packaged ``SKILL.md``,
-    with or without a live manager — the same payload the manager's own
-    ``_manual()`` returns, minus the possibility of the business boundary
-    replacing it.
+    Only WhatsApp's own actions are built here. ``settings`` and ``manual``
+    are appended by ``WHATSAPP_PLUGIN``. The provider reads the manager's
+    startup snapshot; without a manager, the whole inventory is unavailable.
+    ``manual`` is answered directly from the packaged ``SKILL.md`` with or
+    without a live manager.
     """
     schemas = _whatsapp_input_schemas()
     children = [
@@ -257,7 +261,10 @@ def build_whatsapp_family(manager: Any | None) -> ToolFamily:
         )
         for action in _DECLARED_ACTIONS
     ]
-    return WHATSAPP_PLUGIN.build_family(children)
+    return WHATSAPP_PLUGIN.build_family(
+        children,
+        settings_provider=settings_provider(manager),
+    )
 
 
 def handle_whatsapp(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
