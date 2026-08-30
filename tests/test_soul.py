@@ -166,19 +166,21 @@ class TestSoulSchema:
 
     def _branch(self, schema, action):
         return next(
-            b for b in schema["properties"]["input"]["oneOf"]
-            if b["title"] == f"{action} input"
+            b for b in schema["properties"]["input"]["anyOf"]
+            if b["title"]
+            == ("settings inventory input" if action == "settings" else f"{action} input")
         )
 
-    def test_schema_exposes_six_actions(self):
+    def test_schema_exposes_seven_actions(self):
         schema = soul.get_schema("en")
-        # Six actions are agent-visible: inquiry (manual self-Q&A),
+        # Seven actions are agent-visible: inquiry (manual self-Q&A),
         # flow (opt-in; also fires mechanically on the wall clock),
         # config (agent adjusts cadence + K at runtime), voice (agent
         # picks/customizes own soul-flow prompt — read or set), dismiss
-        # (clear soul notification), and manual (installed soul-manual).
+        # (clear soul notification), settings (read-only inventory), and manual
+        # (installed soul-manual).
         assert schema["properties"]["action"]["enum"] == [
-            "inquiry", "flow", "config", "voice", "dismiss", "manual",
+            "inquiry", "flow", "config", "voice", "dismiss", "settings", "manual",
         ]
 
     def test_schema_inquiry_input_is_action_scoped(self):

@@ -622,8 +622,9 @@ non-goal for third-party-versus-third-party mounts.
   Vision, and Web are accepted vertical evidence. Soul's declaration binds only
   `workdir`/`soul_runtime`;
   its focused suites (`tests/test_tool_family_soul_migration.py`,
-  `tests/test_soul_runtime_port_ab.py`) prove the explicit runtime port, exact
-  grant, preserved six-action surface, one mount, and sole package manual body at
+  `tests/test_soul_runtime_port_ab.py`, `tests/test_soul_settings.py`) prove the
+  explicit runtime port, exact grant, preserved six-action operational surface,
+  additive reserved SHOW child, one mount, and sole package manual body at
   `soul-manual`. Email's declaration
   binds only `workdir`/`email_runtime`; its focused suite proves the typed port,
   one mount/no capability row, canonical manual, and call-time replacement
@@ -979,13 +980,14 @@ addon decompression and unreachable from any action. That is why it is safe in
 `CORE_DEFAULTS`, and registration is registry-level only: registered, never
 running. See `src/lingtai/tools/plugin/CONTRACT.md`.
 
-`soul` (`inquiry | flow | config | voice | dismiss | manual`) is the seventh
-family migrated to this contract, and the first migrated *intrinsic*. Its final
-model-facing root is exactly `action`, `input`, `reasoning`, and `summarize`;
-each action owns one strict closed `input` object, and its `summarize` guidance
-profile is **short-result** for every action (see
-`src/lingtai/tools/soul/CONTRACT.md`). `soul` supports no settings file at
-either level and its manual says so explicitly. Being an intrinsic, it also
+`soul` (`inquiry | flow | config | voice | dismiss | settings | manual`) is the
+seventh family migrated to this contract, and the first migrated *intrinsic*.
+Its final model-facing root is exactly `action`, `input`, `reasoning`, and
+`summarize`; each action owns one strict closed `input` object, and its
+`summarize` guidance profile is **short-result** for every action (see
+`src/lingtai/tools/soul/CONTRACT.md`). The reserved `settings` child is a
+five-row SHOW over Soul's existing sources; `soul` still supports no settings
+file at either level and its manual says so explicitly. Being an intrinsic, it also
 proves one boundary `web` could not: `base_agent._dispatch_tool` injects the
 transport-only `_tc_id` into every intrinsic's args, so a migrated intrinsic
 drops that key at its own Host boundary before the closed-root check rather
@@ -1111,9 +1113,10 @@ envelope, and the reserved `manual` child's no-double-wrap result.
 
 `soul`'s migration evidence (`tests/test_tool_family_soul_migration.py`, plus
 the updated `tests/test_soul.py`, `tests/test_soul_consultation.py`,
-`tests/test_system_dismiss.py`, and `tests/test_intrinsic_manual_actions.py`)
-is likewise one family's local evidence: it covers all six child schemas and
-handlers, the closed root on both provider wires, wrong-branch rejection
+`tests/test_system_dismiss.py`, `tests/test_intrinsic_manual_actions.py`, and
+`tests/test_soul_settings.py`) is likewise one family's local evidence: it
+covers the six existing children plus additive reserved `settings`, the closed
+root on both provider wires, wrong-branch rejection
 before any handler I/O, `reasoning`/`_reasoning`/`summarize`/`_tc_id`
 isolation from child input, the reserved `manual` child's
 full-body/`manual_path` result with no double wrap and no soul operation, and

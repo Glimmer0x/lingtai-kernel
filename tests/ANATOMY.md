@@ -338,6 +338,7 @@ related_files:
   - tests/test_snapshot.py
   - tests/test_soul.py
   - tests/test_soul_consultation.py
+  - tests/test_soul_settings.py
   - tests/test_source_drift.py
   - tests/test_status_snapshot.py
   - tests/test_streaming.py

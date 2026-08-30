@@ -168,8 +168,9 @@ capability names and lazy adapters.
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
   (`src/lingtai/tools/knowledge/ANATOMY.md`).
-- `soul/` — the official declared `soul` family (its injected module remains only for kernel hooks): six action-separated children
-  (`inquiry`, `flow`, `config`, `voice`, `dismiss`, `manual`) behind one
+- `soul/` — the official declared `soul` family (its injected module remains
+  only for kernel hooks): seven action-separated children (`inquiry`, `flow`,
+  `config`, `voice`, `dismiss`, read-only `settings`, and `manual`) behind one
   model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
 - `bash/` — public `shell` composition owner for run/poll/cancel/manual
   (`src/lingtai/tools/bash/ANATOMY.md`); the public model-facing schema is
@@ -307,7 +308,8 @@ through a callback-only adapter without exposing the Agent, Store,
 configuration object, or writer, including its two-row settings projection.
 `src/lingtai/tools/soul/__init__.py` is the tenth slice: its `DECLARATION`
 preserves the public `inquiry | flow | config | voice | dismiss | manual`
-family and binds the five operational children only to `workdir` plus the
+family, adds the generic read-only `settings` child immediately before
+`manual`, and binds the five operational children only to `workdir` plus the
 explicit `SoulRuntimePort`; Soul stays an injected intrinsic for kernel
 lifecycle hooks while its model-facing root mounts only through the registrar,
 and its package manual is the sole operational body installed at the historical

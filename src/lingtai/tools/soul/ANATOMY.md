@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/tools/soul/BEHAVIORS.md
   - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/soul/config.py
+  - src/lingtai/tools/soul/settings.py
   - src/lingtai/tools/soul/consultation.py
   - src/lingtai/tools/soul/flow.py
   - src/lingtai/tools/soul/inquiry.py
@@ -19,21 +20,23 @@ related_files:
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_soul_migration.py
   - tests/test_soul_runtime_port_ab.py
+  - tests/test_soul_settings.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Keep this map
   synchronized with Soul's structural composition and the paired contract.
-  The root package is the only whole-Agent compatibility bridge; the four
+  The root package is the only whole-Agent compatibility bridge; the five
   implementation consumers below receive SoulRuntimePort directly. Capability
   mentions require explicit related_files links to implementing code.
 ---
 # intrinsics/soul
 
 Soul is the official declared-host-plugin family for the agent's inner voice.
-Its public root owns the LTP-v2 envelope and six action children (`inquiry`,
-`flow`, `config`, `voice`, `dismiss`, and reserved `manual`). Soul's domain
+Its public root owns the LTP-v2 envelope and seven action children (`inquiry`,
+`flow`, `config`, `voice`, `dismiss`, read-only `settings`, and reserved
+`manual`). Soul's domain
 implementation receives the least-privilege `SoulRuntimePort`; it does not
 receive a whole Agent.
 
@@ -49,6 +52,9 @@ receive a whole Agent.
   `manifest.soul` persistence. `_handle_config()` and `_handle_voice()` read
   and mutate only the granted runtime's `config`, cadence, timer, logging, and
   `working_dir` properties.
+- `settings.py` — binds the generic five-field `SettingRow` projection to live
+  `SoulRuntimePort` cadence/config truth and the process flow gate. It exposes
+  a private-redacted prompt row and performs no mutation.
 - `flow.py` — opt-in gate, IDLE timer, fire lock, consultation-fire
   orchestration, notification publication, append-only records, and appendix
   rehydration. It accesses `shutdown`, `soul_timer`, `state`, `fire_lock`, and
@@ -60,7 +66,8 @@ receive a whole Agent.
   bounded consultation batches, timeout/token accounting, refusal handling, and
   synthesized flow-pair construction. Runtime access is through `chat`,
   `session`, `service`, `config`, `working_dir`, and `log` on the port.
-- `manual/SKILL.md` — the local operational guide for the six-action envelope,
+- `manual/SKILL.md` — the local operational guide for the seven-action
+  envelope, exact settings comment targets, real change procedures,
   disabled-flow/config behavior, and valid nullable input shapes.
 - `tests/test_soul_runtime_port_ab.py` — focused proof that the four consumers
   accept a structural port directly and that the root bridge preserves a real
@@ -69,10 +76,11 @@ receive a whole Agent.
 ## Connections
 
 - The declaration binder creates a `SoulRuntimePort` adapter in the host
-  composition layer; it never passes an Agent into `config.py`, `flow.py`,
-  `inquiry.py`, or `consultation.py`.
+  composition layer; it never passes an Agent into `config.py`, `settings.py`,
+  `flow.py`, `inquiry.py`, or `consultation.py`.
 - `__init__.py` dispatches `config`/`voice` to `config.py`, `inquiry` to
-  `inquiry.py`, and flow lifecycle work to `flow.py`. `flow.py` imports the
+  `inquiry.py`, flow lifecycle work to `flow.py`, and injects `settings.py`'s
+  provider through the generic ToolFamily seam. `flow.py` imports the
   consultation batch and diary helpers; `inquiry.py` imports prompt, send,
   token, and persistence helpers from sibling modules.
 - The root compatibility wrappers remain available for kernel lifecycle hooks
@@ -94,6 +102,8 @@ receive a whole Agent.
 
 - `config.py` writes `init.json` under `manifest.soul` for cadence, voice, and
   custom voice prompt.
+- `settings.py` writes no state; it reads the process flow gate and the live
+  cadence/voice values already owned by the runtime and config action.
 - `flow.py` appends `logs/soul_flow.jsonl` and may publish/clear the `soul`
   notification through the port. `inquiry.py` persists inquiry entries through
   the same Soul persistence operation and may publish `btw` for human source.

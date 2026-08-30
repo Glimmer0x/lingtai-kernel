@@ -320,8 +320,9 @@ def test_official_soul_mount_preserves_real_flow_and_packaged_manual(mcp_agent):
     from lingtai.tools.soul import DECLARATION
 
     assert DECLARATION.public_actions == (
-        "inquiry", "flow", "config", "voice", "dismiss", "manual",
+        "inquiry", "flow", "config", "voice", "dismiss", "settings", "manual",
     )
+    assert DECLARATION.settings is True
     assert DECLARATION.requires == ("workdir", "soul_runtime")
     assert mcp_agent.official_tool_plugins["soul"] is DECLARATION
     assert [schema.name for schema in mcp_agent._tool_schemas].count("soul") == 1
