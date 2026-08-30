@@ -2,10 +2,9 @@
 
 Exposes one independent public LTP-v2 family, ``wechat``. WeChat's own nine
 actions (send, check, read, reply, search, contacts, add_contact,
-remove_contact, accounts) dispatch to WechatManager; the reserved ``manual``
-action is appended by ``WECHAT_PLUGIN`` and answered directly from the
-packaged ``SKILL.md``. Inbound WeChat events flow into the host agent's inbox
-via LICC.
+remove_contact, accounts) dispatch to WechatManager; ``WECHAT_PLUGIN`` appends
+the reserved read-only ``settings`` action immediately before ``manual``.
+Inbound WeChat events flow into the host agent's inbox via LICC.
 
 Configuration:
     LINGTAI_WECHAT_CONFIG  — path to ``config.json``. ``credentials.json``
@@ -354,7 +353,7 @@ def _profile_manifest(
                 "description": "Strict WeChat LTP-v2 family.",
                 # Sourced from the plugin descriptor so the advertised action
                 # list cannot drift from the family the server actually serves
-                # (``manual`` included, because the plugin always appends it).
+                # (both reserved children included by the plugin).
                 "actions": list(WECHAT_ACTIONS),
             }
         ],
@@ -736,7 +735,7 @@ _ONBOARDING_HTML = """<!doctype html>
 # ---------------------------------------------------------------------------
 
 def load_config_and_credentials() -> tuple[dict, dict, Path]:
-    """Read config.json + sibling credentials.json. Returns (config, creds, config_dir)."""
+    """Read config + sibling credentials; return the exact loaded config path."""
     config_path_raw = os.environ.get("LINGTAI_WECHAT_CONFIG")
     if not config_path_raw:
         raise ValueError(
@@ -777,7 +776,7 @@ def load_config_and_credentials() -> tuple[dict, dict, Path]:
             f"cli_login('{config_path.parent}')\""
         )
     creds = json.loads(creds_path.read_text(encoding="utf-8"))
-    return file_cfg, creds, config_path.parent
+    return file_cfg, creds, config_path
 
 
 # ---------------------------------------------------------------------------
@@ -786,7 +785,8 @@ def load_config_and_credentials() -> tuple[dict, dict, Path]:
 
 def build_manager() -> tuple[WechatManager, Path]:
     """Construct manager from env + config.json + credentials.json."""
-    file_cfg, creds, config_dir = load_config_and_credentials()
+    file_cfg, creds, config_path = load_config_and_credentials()
+    config_dir = config_path.parent
 
     bot_token = creds.get("bot_token")
     user_id = creds.get("user_id")
@@ -836,6 +836,7 @@ def build_manager() -> tuple[WechatManager, Path]:
         on_inbound=_on_inbound,
         config_source=os.environ.get("LINGTAI_WECHAT_CONFIG"),
         credentials_source=str(config_dir / "credentials.json"),
+        settings_config_path=str(config_path),
     )
     return mgr, working_dir
 

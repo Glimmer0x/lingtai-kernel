@@ -6,9 +6,8 @@ family, mirroring ``lingtai.mcp_servers.telegram._family``.
 
 Action *composition* belongs to the package's plugin descriptor (`plugin.py`):
 this module declares WeChat's own actions and their strict `input` branches,
-and `WECHAT_PLUGIN` appends the reserved `manual` action from the packaged
-`SKILL.md`. `manual` therefore never routes through the manager and cannot be
-omitted, re-schema'd, or rebound to other material from here.
+and `WECHAT_PLUGIN` appends the reserved `settings` child immediately before
+the packaged `manual`. Neither reserved child routes through manager actions.
 """
 from __future__ import annotations
 
@@ -18,9 +17,10 @@ from typing import Any
 from lingtai.tools.tool_family import ChildTool, ToolFamily
 
 from .plugin import WECHAT_ACTIONS, WECHAT_DECLARED_ACTIONS, WECHAT_PLUGIN
+from .settings import wechat_settings
 
-# The package's own actions plus the plugin-appended reserved ``manual``. Kept
-# local to avoid importing the manager (which consumes this schema).
+# The package's own actions plus plugin-appended ``settings`` and ``manual``.
+# Kept local to avoid importing the manager (which consumes this schema).
 _DECLARED_ACTIONS = WECHAT_DECLARED_ACTIONS
 _ACTIONS = WECHAT_ACTIONS
 
@@ -149,6 +149,7 @@ def _schema_only_family() -> ToolFamily:
             ChildTool(action, schemas[action], lambda _input: {})
             for action in _DECLARED_ACTIONS
         ],
+        settings_provider=lambda: wechat_settings(None),
     )
 
 
@@ -157,12 +158,13 @@ _SCHEMA_FAMILY = _schema_only_family()
 
 def wechat_schema() -> dict[str, Any]:
     schema = _SCHEMA_FAMILY.build_schema()
-    # check/contacts/accounts/manual all publish an empty-object branch, so a
-    # oneOf discovery list makes {} match more than one branch and native
-    # JSON-Schema validators reject a valid zero-input call. The root allOf
-    # discriminator still correlates each action to its exact closed branch;
-    # use anyOf for the discovery list, mirroring telegram_schema().
-    schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
+    # check/contacts/accounts/settings/manual all accept an empty-object input,
+    # so discovery must use anyOf. Settings opt-in already selects it; retain
+    # the conversion for schema-only compatibility if that generic detail
+    # changes later.
+    inputs = schema["properties"]["input"]
+    if "oneOf" in inputs:
+        inputs["anyOf"] = inputs.pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "send: send a message to a WeChat user "
         "(user_id, text; optional media_path for file/image/voice/video). "
@@ -176,6 +178,7 @@ def wechat_schema() -> dict[str, Any]:
         "add_contact: save a contact (user_id, alias). "
         "remove_contact: remove a contact (alias or user_id). "
         "accounts: list configured WeChat accounts. "
+        "settings: show the active read-only WeChat configuration inventory. "
         + WECHAT_PLUGIN.manual_action_description()
     )
     return schema
@@ -243,13 +246,11 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
 
 
 def build_wechat_family(manager: Any | None) -> ToolFamily:
-    """Compose the public family: manager-backed declared actions + plugin manual.
+    """Compose manager actions plus plugin-owned settings and manual children.
 
-    Only WeChat's own actions are built here. ``manual`` is appended by
-    ``WECHAT_PLUGIN`` and answered directly from the packaged ``SKILL.md``,
-    with or without a live manager — the same payload the manager's own
-    ``_handle_manual()`` returns, minus the possibility of the business
-    boundary replacing it.
+    Only WeChat's own actions are built here. ``settings`` projects the live
+    manager snapshot and ``manual`` answers from the packaged ``SKILL.md``;
+    neither can be rebound through the business-action boundary.
     """
     schemas = _wechat_input_schemas()
     children = [
@@ -261,7 +262,10 @@ def build_wechat_family(manager: Any | None) -> ToolFamily:
         )
         for action in _DECLARED_ACTIONS
     ]
-    return WECHAT_PLUGIN.build_family(children)
+    return WECHAT_PLUGIN.build_family(
+        children,
+        settings_provider=lambda: wechat_settings(manager),
+    )
 
 
 def handle_wechat(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
