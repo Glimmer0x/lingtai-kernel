@@ -108,8 +108,8 @@ def test_real_agent_startup_builds_web_family_schema_on_both_wires(tmp_path):
         assert responses["required"] == ["action", "input", "reasoning"]
         assert chat["properties"]["input"]["type"] == "object"
         assert responses["properties"]["input"]["type"] == "object"
-        assert len(chat["properties"]["input"]["oneOf"]) == 3
-        assert len(responses["properties"]["input"]["anyOf"]) == 3
+        assert len(chat["properties"]["input"]["anyOf"]) == 4
+        assert len(responses["properties"]["input"]["anyOf"]) == 4
     finally:
         agent.stop(timeout=1.0)
 

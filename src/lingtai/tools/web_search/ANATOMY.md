@@ -10,10 +10,12 @@ related_files:
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_web_official_plugin.py
   - tests/test_web_composition_port.py
+  - tests/test_web_settings_action.py
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py
@@ -66,8 +68,8 @@ The retained `web_search` package is the public `web` composition owner. It
 combines lazy SearchService adapters with the internal browser Core while
 exposing one model-facing handler and one per-Agent state boundary. Schema
 composition and envelope dispatch delegate to the generic
-`tool_family` infrastructure; this package retains ownership of
-action implementations, settings, and diagnostics.
+`tool_family` infrastructure; this package retains ownership of action
+implementations, read-only settings resolution, and diagnostics.
 
 ## Components
 
@@ -84,7 +86,8 @@ action implementations, settings, and diagnostics.
   `host.web_runtime` is granted and is a typed `WebComposition` — no fallback
   carrier, default transport, or default engine set — then constructs a
   per-instance `ToolFamily` (`lingtai.tools.tool_family`) with
-  `search`/`browse` handlers and a `manual` child from
+  `search`/`browse` handlers, the generic provider-injected `settings` child,
+  and a `manual` child from
   `tool_family.manual.build_manual_child`, and returns the bound handler.
   `handle()` delegates envelope validation/dispatch and stamps
   `current_setting`/`action` onto envelope-level failures; no Web object retains
@@ -131,12 +134,16 @@ action implementations, settings, and diagnostics.
   handler also recognizes the shared `SearchProviderError` base for any
   other typed provider failure and stamps a bounded `provider_failure_class`
   onto the `SEARCH_FAILED` result (`src/lingtai/tools/web_search/__init__.py`).
-- `read_settings()` — bounded regular-file snapshot and strict v1 selector
-  validation over the action-owned `settings/web.search.json`
+- `build_settings_provider()` — binds Web's applied composition, live
+  credential routes, engine selector, and output threshold to exact five-field
+  rows. Credential rows are private and the provider owns no writer
   (`src/lingtai/tools/web_search/settings.py`).
-- `read_output_settings()` — bounded regular-file snapshot and strict v1
-  `max_chars` validation over the family-owned `settings/web.json`, shared
-  identically by `search` and `browse` (`src/lingtai/tools/web_search/settings.py`).
+- `read_settings()` — `LINGTAI_WEB_ENGINE`, then bounded strict-v1
+  `settings/web.search.json`, then the composed runtime fallback
+  (`src/lingtai/tools/web_search/settings.py`).
+- `read_output_settings()` — `LINGTAI_WEB_MAX_CHARS`, then bounded strict-v1
+  `settings/web.json`, then 50000, shared identically by `search` and `browse`
+  (`src/lingtai/tools/web_search/settings.py`).
 - `spill_if_over_threshold()` — the shared Web-owned inline-vs-artifact
   decision and envelope builder, called by both `_deliver_search` and
   `_deliver_browse`; atomically writes complete content via the kernel's
@@ -192,16 +199,19 @@ that promise for web's actions, behavior, and evidence.
 
 ## State
 
-Each manager owns immutable engine specs, a lazy per-engine service cache, one
-browser engine, and its bounded ref/snapshot/cursor stores. Settings are read
-from the granted workdir port on every call and never written by the capability,
-except for the artifact files `spill_if_over_threshold()` writes under the
+Each manager owns immutable engine specs and applied owner-setting snapshots, a
+lazy per-engine service cache, one browser engine, and its bounded
+ref/snapshot/cursor stores. Engine/output settings and their canonical env peers
+are read on every applicable call. The `settings` action writes no state; real
+changes remain in the launcher/composition/file procedures taught by
+`web-manual`. Separately, `spill_if_over_threshold()` writes artifacts under the
 canonical `<agent-workdir>/tmp/tool-results/` directory when a call's
 complete content exceeds the shared threshold — the same directory the
 kernel's generic preventive spill already owns, not a second web-owned
 directory. Those are ephemeral output artifacts, not settings state, and
 unrelated to `<agent-workdir>/settings/*.json` above. Credentials stay in
-operator wiring or process configuration; no call mutates environment state.
+operator wiring or process configuration and are projected only through
+redacted rows; no call mutates environment state.
 
 ## Notes
 

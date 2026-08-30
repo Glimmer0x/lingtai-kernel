@@ -323,9 +323,10 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `capabilities/vision/SKILL.md`.
 - `src/lingtai/tools/web_search/__init__.py` is the fourteenth accepted
   vertical slice, the unified `web` search/browse family. Its static
-  `DECLARATION` owns the public `search | browse | manual` family (one strict
-  input schema per action, derived from the family's one `_CHILD_SPECS`
-  source) and binds `WebManager` to exactly `workdir`, the Web-owned typed
+  `DECLARATION` owns the public `search | browse | settings | manual` family
+  (two strict operational schemas derived from the family's one
+  `_CHILD_SPECS` source, plus generic settings opt-in) and binds `WebManager`
+  to exactly `workdir`, the Web-owned typed
   `web_runtime` composition value, and the narrow read-only
   `provider_identity` label. `setup(agent, ...)` keeps the existing lazy
   engine/browser composition, folds the `BrowserPort` plus immutable

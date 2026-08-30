@@ -1901,6 +1901,14 @@ def test_system_settings_classification_covers_init_and_environment_registries()
     assert "LINGTAI_TUI_DIR" in classification["system"]
     assert "LINGTAI_DAEMON_MANAGER_POOL_SIZE" in classification["concrete_tool"]
     assert "LINGTAI_DAEMON_MAX_TURNS" in classification["concrete_tool"]
+    assert {
+        "LINGTAI_WEB_ENGINE",
+        "LINGTAI_WEB_MAX_CHARS",
+    } <= classification["concrete_tool"]
+    assert {
+        "LINGTAI_WEB_ENGINE",
+        "LINGTAI_WEB_MAX_CHARS",
+    }.isdisjoint(classification["system"])
     assert "LINGTAI_DAEMON_MEMORY_RELIEF" in classification["system"]
     assert system_settings.SYSTEM_ENVIRONMENT_SETTING_OWNERS[
         "LINGTAI_DAEMON_MEMORY_RELIEF"

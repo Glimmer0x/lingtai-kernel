@@ -55,6 +55,7 @@ related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/manual/SKILL.md
+  - tests/test_web_settings_action.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_settings_contract.py
@@ -185,7 +186,9 @@ Coding agents and LingTai agents MUST observe the following.
   `analyze` call, and no provider/credential/MCP fallback is ever automatic
   (see `src/lingtai/tools/vision/CONTRACT.md`).
   Web is the unified search/browse capability whose public surface is exactly
-  `search | browse | manual`: it binds `workdir`, its Web-owned typed
+  `search | browse | settings | manual`: its settings child is the generic
+  read-only SHOW seam bound to Web-owned rows, and it binds `workdir`, its
+  Web-owned typed
   `web_runtime` composition value (browser transport, immutable engine specs,
   and default provenance, composed by its own `setup` and granted to the `web`
   declaration alone through `extra_ports_for`), and the narrow read-only
@@ -571,21 +574,23 @@ preserve Notification Core delay/timer and Store behavior:
   `tests/test_vision_capability.py`, `tests/test_inherit_fallback.py`).
 - Web's static `DECLARATION`, exact
   `workdir`/`web_runtime`/`provider_identity` grant and exact
-  `search | browse | manual` surface, one mount on a real Agent with the
+  `search | browse | settings | manual` surface, one mount on a real Agent
+  with the
   `provider_identity` port reading the live `Agent.service.provider` label
   (and exposing only that), the typed `web_runtime` composition absent from
   the standard table (a bare standard grant fails with `HostPortError`, and a
   bind with a missing, legacy-carrier, or mistyped `web_runtime` fails closed
   with `HostPortError`), one manager published back through the composition
   exactly once, idempotent refresh re-claim, the package-owned
-  `capabilities/web/SKILL.md` manual with strict zero-input behavior, the
+  `capabilities/web/SKILL.md` manual with strict zero-input manual/settings
+  behavior, the
   strict controlled-host manual proof in
   `tests/test_intrinsic_manual_actions.py`, and the family-local provider
-  gate/spill/isolation suites (`tests/test_web_official_plugin.py`,
+  gate/spill/isolation/settings suites (`tests/test_web_official_plugin.py`,
   `tests/test_web_composition_port.py`,
   `tests/test_web_canonical_provider_routing.py`,
   `tests/test_web_output_spill.py`, `tests/test_web_search_capability.py`,
-  `tests/test_unified_web_capability.py`).
+  `tests/test_unified_web_capability.py`, `tests/test_web_settings_action.py`).
 
 Also decisive for a change here:
 `tests/test_mcp_capability.py`, `tests/test_tool_family_mcp_migration_parity.py`,

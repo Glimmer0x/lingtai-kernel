@@ -297,7 +297,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert context_tool.get_schema()["required"] == ["action", "input", "reasoning"]
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input", "reasoning"]
-    assert len(web_schema["properties"]["input"]["oneOf"]) == 3
+    assert len(web_schema["properties"]["input"]["anyOf"]) == 4
     file_schema = file_tool.get_schema()
     assert file_schema["required"] == ["action", "input", "reasoning"]
     assert len(file_schema["properties"]["input"]["anyOf"]) == 7

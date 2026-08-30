@@ -17,12 +17,14 @@ def test_official_web_mount_preserves_declared_surface_and_packaged_manual(tmp_p
     try:
         assert DECLARATION.requires == ("workdir", "web_runtime", "provider_identity")
         assert DECLARATION.actions == ("search", "browse")
-        assert DECLARATION.public_actions == ("search", "browse", "manual")
+        assert DECLARATION.public_actions == ("search", "browse", "settings", "manual")
         assert agent.official_tool_plugins["web"] is DECLARATION
         assert [schema.name for schema in agent._tool_schemas].count("web") == 1
 
         schema = agent._tool_schemas[[s.name for s in agent._tool_schemas].index("web")]
-        assert schema.parameters["properties"]["action"]["enum"] == ["search", "browse", "manual"]
+        assert schema.parameters["properties"]["action"]["enum"] == [
+            "search", "browse", "settings", "manual",
+        ]
 
         manual = agent._tool_handlers["web"](
             {"action": "manual", "input": {}, "reasoning": "guidance"}

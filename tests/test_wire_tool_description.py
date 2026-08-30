@@ -163,12 +163,10 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
     schema = FunctionSchema(name="web", description="web", parameters=get_schema())
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
-    # The family composes a nested ``oneOf`` under ``input``. Chat Completions
-    # passes it through unchanged; the Responses backend rewrites any nested
-    # ``oneOf`` to ``anyOf`` (``_scrub_responses_schema``), so each wire is
-    # checked under its own actual combinator key — the branches themselves
-    # stay identical either way.
-    for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+    # The injected settings child makes the disclosure branches overlap at
+    # ``input={}``, so the family deliberately emits nested ``anyOf`` on both
+    # wires. The branches themselves remain identical.
+    for wire in (chat, responses):
         assert wire["type"] == "object"
         # ``reasoning`` is REQUIRED Host InvocationContext/audit metadata —
         # the family schema declares it itself (not left to Agent schema
@@ -179,9 +177,9 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["reasoning"]["type"] == "string"
         assert wire["properties"]["summarize"]["type"] == "boolean"
-        branches = wire["properties"]["input"][combinator]
+        branches = wire["properties"]["input"]["anyOf"]
         assert [branch["title"] for branch in branches] == [
-            "search input", "browse input", "manual input",
+            "search input", "browse input", "settings inventory input", "manual input",
         ]
         for branch in branches:
             assert branch["additionalProperties"] is False
@@ -190,7 +188,7 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
             assert "reasoning" not in branch["properties"]
             assert "_reasoning" not in branch["properties"]
         assert branches[1]["properties"]["cursor"]["type"] == ["string", "null"]
-        assert branches[2]["properties"] == {}
+        assert branches[3]["properties"] == {}
 
 
 def test_web_root_all_of_correlation_survives_chat_and_responses_wires():
@@ -213,7 +211,7 @@ def test_web_root_all_of_correlation_survives_chat_and_responses_wires():
         assert "allOf" in wire
         conditions = wire["allOf"]
         assert [c["if"]["properties"]["action"]["const"] for c in conditions] == [
-            "search", "browse", "manual",
+            "search", "browse", "settings", "manual",
         ]
         for condition in conditions:
             assert condition["if"]["required"] == ["action"]
@@ -263,7 +261,7 @@ def test_web_final_agent_schema_root_is_exactly_action_input_reasoning_summarize
         assert params["additionalProperties"] is False
         assert set(params["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert "summary" not in params["properties"]
-        for branch in params["properties"]["input"]["oneOf"]:
+        for branch in params["properties"]["input"]["anyOf"]:
             assert "reasoning" not in branch["properties"]
             assert "_reasoning" not in branch["properties"]
             assert "summarize" not in branch["properties"]

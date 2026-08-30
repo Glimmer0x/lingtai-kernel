@@ -400,7 +400,7 @@ def test_schema_root_is_closed_action_input_reasoning_summarize(tmp_path):
     assert summarize_prop["type"] == "boolean"
     # No public `summary` alias, and no branch admits `reasoning`/`_reasoning`/
     # `summarize` inside its own input.
-    for branch in schema["properties"]["input"]["oneOf"]:
+    for branch in schema["properties"]["input"]["anyOf"]:
         assert "summary" not in branch["properties"]
         assert "summarize" not in branch["properties"]
         assert "reasoning" not in branch["properties"]

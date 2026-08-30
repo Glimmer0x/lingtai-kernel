@@ -12,13 +12,15 @@ related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
   - tests/test_web_canonical_provider_routing.py
+  - tests/test_web_settings_action.py
 maintenance: |
   LABT v2, migrated 2026-08 from tests/test_web_canonical_provider_routing.py
   (previously filed as C003/C004 under src/lingtai/tools/telegram/BEHAVIORS.md;
   re-homed here so web_search owns its own behavior tests). Keep guards pointed
   at real `web` contract clauses (frontmatter name `web`): § Provider ownership
   and routing for default selection / backend eligibility / error hierarchy /
-  DDG fallback, and § Contract rules for link_ref and browse independence.
+  DDG fallback, § Settings ownership for five-field SHOW/redaction, and §
+  Contract rules for link_ref and browse independence.
   Update the matching LABT here in the same change as the contract clause; keep
   the paired ANATOMY.md reciprocal.
 ---
@@ -27,7 +29,8 @@ maintenance: |
 LABT v2. Self-contained agent-executable behavioral tests for the `web`
 capability (`src/lingtai/tools/web_search/`): W001 covers canonical provider
 default selection and hot settings, W002 covers routing constraints, typed
-failures, and DuckDuckGo fallback. Both guard clauses in
+failures, and DuckDuckGo fallback, and W003 covers the settings owner. All three
+guard clauses in
 `src/lingtai/tools/web_search/CONTRACT.md` (frontmatter name `web`).
 
 ## Behavior W001 — Web canonical provider routing: default selection and hot config
@@ -88,3 +91,33 @@ PASS when the selected engine, source, provider set, hot-read settings, and reti
 ### Pass / Fail
 
 PASS when error codes, fallback engine, secrets-free results, link_ref, and browse independence all hold; FAIL on any wrong error code, secret leakage, or browse that inherits provider state.
+
+## Behavior W003 — Web five-field settings SHOW and redaction
+
+- **id**: W003
+- **title**: web settings exposes truthful live facts without mutation
+- **guards**: `web` § Settings ownership ([CONTRACT.md](CONTRACT.md#settings-ownership))
+- **runner**: any LingTai agent with the `web` tool
+- **prerequisites**: isolated workdir and process environment; admitted recording search services; no network; `tests/test_web_settings_action.py` is the bottom assertion.
+- **estimate**: 15 minutes
+
+### Steps
+
+1. Call `web(action="settings", input={})` with no Web env or owner files.
+2. Set valid owner env/file values and inventory again, then run one recording search.
+3. Make each hot-read source invalid and inspect the settings result.
+4. Attempt a non-empty settings input and inspect the workdir/environment afterward.
+5. Inventory configured credentials containing sentinels and verify every `comment` target in `web-manual`.
+
+### Expected evidence
+
+- [ ] Public action order is `search`, `browse`, `settings`, `manual`; inventory has the exact nine ordered Web row keys and every row has only `key`, `current`, `default`, `configurable`, and `comment`.
+- [ ] Hot env values shadow valid files while composed/50000 defaults remain truthful; invalid env/file truth yields fixed `SETTINGS_UNAVAILABLE` with no partial rows.
+- [ ] Non-empty input fails and no file or process environment is changed; there is no set/reset/mutation result shape.
+- [ ] Credential `current` and `default` are `<redacted>`; no sentinel, credential-env value, private flag, or absolute workdir path appears.
+- [ ] Every comment names an existing `web-manual` heading containing meaning, accepted values, precedence/address, timing, authorization/sensitivity, and the real change procedure.
+- [ ] The recording search still receives the query exactly once through the env-selected admitted engine.
+
+### Pass / Fail
+
+PASS when exact rows, defaults, manual targets, fail-closed inventory, no-write behavior, redaction, and ordinary search evidence all match; FAIL on extra projected fields, partial rows, a leaked credential/path, SHOW mutation, or search/browse regression.
