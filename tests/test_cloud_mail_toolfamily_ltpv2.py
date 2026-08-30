@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
+from pathlib import Path
 
 from lingtai.mcp_servers.cloud_mail import manager as cloud_mail_mgr
 from lingtai.mcp_servers.cloud_mail._family import (
@@ -12,11 +14,22 @@ from lingtai.mcp_servers.cloud_mail._family import (
     _cloud_mail_input_schemas,
     handle_cloud_mail,
 )
+from lingtai.mcp_servers.cloud_mail.settings import (
+    ACCOUNTS_COMMENT,
+    CONFIG_ENV,
+    CONFIG_PATH_COMMENT,
+    CloudMailSettingsProvider,
+)
 
 
 class _CountingManager:
-    def __init__(self) -> None:
+    def __init__(self, *, config_path: str | None = None) -> None:
         self.calls: list[dict] = []
+        self._config_path = Path(config_path) if config_path is not None else None
+
+    @property
+    def config_path(self) -> Path | None:
+        return self._config_path
 
     def handle(self, args: dict) -> dict:
         self.calls.append(dict(args))
@@ -119,6 +132,107 @@ def test_manual_action_without_manager_returns_bundled_skill():
     assert isinstance(result["manual"], str) and result["manual"].strip()
 
 
+def test_settings_provider_uses_only_the_applied_startup_snapshot(monkeypatch):
+    manager = _CountingManager(config_path="resolved-config.json")
+    monkeypatch.setenv(CONFIG_ENV, "unrelated-later-value.json")
+    provider = CloudMailSettingsProvider(manager)
+
+    rows = provider()
+    assert [row.key for row in rows] == ["config_path", "accounts"]
+    assert [row.current for row in rows] == ["resolved-config.json", "configured"]
+    assert [row.default for row in rows] == [None, None]
+    assert [row.configurable for row in rows] == [True, True]
+    assert [row.comment for row in rows] == [
+        CONFIG_PATH_COMMENT,
+        ACCOUNTS_COMMENT,
+    ]
+    assert [row._sensitive for row in rows] == [True, True]
+    assert CONFIG_PATH_COMMENT == "cloud-mail-mcp-manual#config-path"
+    assert ACCOUNTS_COMMENT == "cloud-mail-mcp-manual#accounts-document"
+    assert "### Config path" in cloud_mail_mgr._SKILL_BODY
+    assert "### Accounts document" in cloud_mail_mgr._SKILL_BODY
+    assert manager.calls == []
+
+
+def test_settings_success_is_exact_five_field_redacted_projection():
+    manager = _CountingManager(config_path="resolved-config.json")
+    result = handle_cloud_mail(
+        manager,
+        {"action": "settings", "input": {}, "reasoning": "inventory"},
+    )
+
+    assert result == {
+        "settings": [
+            {
+                "key": "config_path",
+                "current": "<redacted>",
+                "default": "<redacted>",
+                "configurable": True,
+                "comment": "cloud-mail-mcp-manual#config-path",
+            },
+            {
+                "key": "accounts",
+                "current": "<redacted>",
+                "default": "<redacted>",
+                "configurable": True,
+                "comment": "cloud-mail-mcp-manual#accounts-document",
+            },
+        ]
+    }
+    assert manager.calls == []
+    serialized = json.dumps(result)
+    assert "resolved-config" not in serialized
+    assert CONFIG_ENV not in serialized
+    assert "configured" not in serialized
+
+
+def test_settings_requires_empty_input_and_fails_whole_without_startup_truth():
+    expected = {
+        "status": "failed",
+        "error_code": "SETTINGS_UNAVAILABLE",
+        "message": "settings inventory is unavailable",
+    }
+    for manager in (None, _CountingManager()):
+        result = handle_cloud_mail(
+            manager,
+            {"action": "settings", "input": {}, "reasoning": "diagnose startup"},
+        )
+        assert result == expected
+        assert "settings" not in result
+
+    rejected = handle_cloud_mail(
+        _CountingManager(config_path="resolved-config.json"),
+        {
+            "action": "settings",
+            "input": {"set": "config_path"},
+            "reasoning": "probe",
+        },
+    )
+    assert rejected == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": "invalid cloud_mail input",
+    }
+
+
+def test_family_validation_and_no_manager_operational_stub_stay_unchanged():
+    invalid_calls = (
+        {"action": "bogus", "input": {}, "reasoning": "x"},
+        {"action": "accounts", "input": {"address": "x@y.com"}, "reasoning": "x"},
+        {"action": "send", "input": {}, "reasoning": "x"},
+    )
+    for call in invalid_calls:
+        rejected = handle_cloud_mail(None, call)
+        assert rejected["status"] == "failed"
+        assert rejected["error_code"] in {"ACTION_REQUIRED", "INVALID_ARGUMENT"}
+
+    unavailable_stub = handle_cloud_mail(
+        None,
+        {"action": "accounts", "input": {}, "reasoning": "inspect accounts"},
+    )
+    assert unavailable_stub == {}
+
+
 def test_openai_responses_scrub_preserves_family_root_and_action_branches():
     from lingtai.llm.openai.adapter import _scrub_responses_schema
 
@@ -142,6 +256,10 @@ def test_manual_documents_the_ltp_v2_envelope_and_summarize_profile():
     assert "summarize" in lowered
     assert "bulky-result" in lowered
     assert "short-result" in lowered
+    assert "exactly two rows" in body
+    assert "<redacted>" in body
+    assert "full Cloud Mail relaunch" in body
+    assert "there is no set/reset or other mutation operation" in body
 
 
 def test_manual_never_teaches_the_retired_check_n_alias():

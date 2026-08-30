@@ -6,22 +6,25 @@ validated family, mirroring ``telegram/_family.py``.
 
 Action *composition* belongs to the package's plugin descriptor (`plugin.py`):
 this module declares Cloud Mail's own actions and their strict `input`
-branches, and `CLOUD_MAIL_PLUGIN` appends the reserved `manual` action from
-the packaged `SKILL.md`. `manual` therefore never routes through the manager
-and cannot be omitted, re-schema'd, or rebound to other material from here.
+branches, and `CLOUD_MAIL_PLUGIN` inserts the reserved `settings` action before
+the packaged `manual` action. Neither reserved action routes through the
+business manager or can be re-schema'd from here.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from .plugin import CLOUD_MAIL_ACTIONS, CLOUD_MAIL_DECLARED_ACTIONS, CLOUD_MAIL_PLUGIN
+from lingtai.tools.tool_family import SettingsProvider
+from lingtai.tools.tool_family.settings import build_settings_child
 
-# The package's own actions plus the plugin-appended reserved ``manual``. Kept
-# local to avoid importing the manager (which consumes this schema).
+from .plugin import CLOUD_MAIL_ACTIONS, CLOUD_MAIL_DECLARED_ACTIONS, CLOUD_MAIL_PLUGIN
+from .settings import CloudMailSettingsProvider
+
+# The package's own actions plus plugin-inserted ``settings`` and ``manual``.
+# Kept local to avoid importing the manager (which consumes this schema).
 _DECLARED_ACTIONS = CLOUD_MAIL_DECLARED_ACTIONS
 _ACTIONS = CLOUD_MAIL_ACTIONS
-
 
 def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
     return {"anyOf": [schema, {"type": "null"}]}
@@ -138,7 +141,8 @@ def cloud_mail_schema() -> dict[str, Any]:
                     "recipient/subject/content), read (full content by compound "
                     "id '<account>:<emailId>'), send (requires user credentials "
                     "in config), accounts (redacted status), add_user (create a "
-                    "Cloud Mail user). Call manual "
+                    "Cloud Mail user), settings (redacted owner inventory). "
+                    "Call manual "
                     + CLOUD_MAIL_PLUGIN.manual_action_description()
                 ),
             },
@@ -204,14 +208,17 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
     return True
 
 
-def build_cloud_mail_family(manager: Any | None):
+def build_cloud_mail_family(
+    manager: Any | None,
+    *,
+    settings_provider: SettingsProvider | None = None,
+):
     """Bind action handlers to ``manager`` (or produce no-op stubs).
 
     Only Cloud Mail's own actions are handler-bound to ``manager`` here.
-    ``manual`` is appended from ``CLOUD_MAIL_PLUGIN`` and answers directly
-    from the packaged ``SKILL.md``, with or without a live manager — the same
-    payload the manager's own ``_manual()`` returns, minus the possibility of
-    the business boundary replacing it.
+    ``settings`` uses the generic bounded SHOW child with its owner provider,
+    and ``manual`` answers directly from ``CLOUD_MAIL_PLUGIN``'s packaged
+    ``SKILL.md``. Neither enters the business manager.
     """
     schemas = _cloud_mail_input_schemas()
 
@@ -221,11 +228,23 @@ def build_cloud_mail_family(manager: Any | None):
         return lambda _input: {}
 
     handlers = {action: _handler(action) for action in _DECLARED_ACTIONS}
+    if CLOUD_MAIL_PLUGIN.settings:
+        provider = (
+            settings_provider
+            if settings_provider is not None
+            else CloudMailSettingsProvider(manager)
+        )
+        handlers["settings"] = build_settings_child(provider).handler
     handlers["manual"] = lambda _input: CLOUD_MAIL_PLUGIN.manual_payload()
     return handlers, schemas
 
 
-def handle_cloud_mail(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
+def handle_cloud_mail(
+    manager: Any | None,
+    args: Mapping[str, Any] | None,
+    *,
+    settings_provider: SettingsProvider | None = None,
+) -> dict[str, Any]:
     raw = dict(args or {})
     if set(raw) - {"action", "input", "reasoning", "summarize"}:
         return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "unsupported cloud_mail argument"}
@@ -241,7 +260,10 @@ def handle_cloud_mail(manager: Any | None, args: Mapping[str, Any] | None) -> di
     schema = _cloud_mail_input_schemas()[action]
     if not _basic_validate(raw["input"], schema):
         return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "invalid cloud_mail input"}
-    handlers, _schemas = build_cloud_mail_family(manager)
+    handlers, _schemas = build_cloud_mail_family(
+        manager,
+        settings_provider=settings_provider,
+    )
     return handlers[action](raw["input"])
 
 

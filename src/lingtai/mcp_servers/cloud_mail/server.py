@@ -3,7 +3,8 @@
 Exposes a single ``cloud_mail`` MCP tool with the strict LTP-v2 envelope
 (``action``/``input``/``reasoning``/``summarize``, see ``_family.py``) that
 dispatches through ``CloudMailManager`` (check/read/search/send/accounts/
-add_user). Inbound mail flows into the host agent's inbox via LICC.
+add_user). Reserved settings/manual actions stay manager-independent. Inbound
+mail flows into the host agent's inbox via LICC.
 
 Configuration:
     LINGTAI_CLOUD_MAIL_CONFIG  — path to a JSON config file (required).
@@ -51,8 +52,18 @@ from .licc import push_inbox_event
 from .manager import CloudMailManager, DESCRIPTION, SCHEMA
 from ._family import handle_cloud_mail
 from .plugin import CLOUD_MAIL_PLUGIN
+from .settings import CONFIG_ENV, CloudMailSettingsProvider
 
 log = logging.getLogger("lingtai_cloud_mail")
+
+_MANAGER_UNAVAILABLE = {
+    "status": "error",
+    "error": (
+        "Cloud Mail manager not initialized — server boot failed. "
+        "Check stderr for the exception class, then verify the environment "
+        f"and configuration (most often a missing {CONFIG_ENV} or invalid config)."
+    ),
+}
 
 _SERVER_INSTRUCTIONS = (
     "lingtai-cloud-mail: REST email via a self-hosted Cloud Mail deployment "
@@ -62,12 +73,14 @@ _SERVER_INSTRUCTIONS = (
     "https://github.com/maillab/cloud-mail"
 )
 
-CONFIG_ENV = "LINGTAI_CLOUD_MAIL_CONFIG"
-
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
+def _load_config_with_path() -> tuple[dict, Path]:
+    """Load the document and retain the exact successfully resolved path."""
+    return _config.load_config_file(CONFIG_ENV, label="Cloud Mail")
+
 
 def load_config() -> dict:
     """Read config from the path in LINGTAI_CLOUD_MAIL_CONFIG.
@@ -75,7 +88,7 @@ def load_config() -> dict:
     Path is resolved relative to LINGTAI_AGENT_DIR (or cwd as fallback)
     when not absolute. Plaintext only — no *_env indirection.
     """
-    return _config.load_config_file(CONFIG_ENV, label="Cloud Mail")[0]
+    return _load_config_with_path()[0]
 
 
 def accounts_from_config(cfg: dict) -> list[dict]:
@@ -107,7 +120,7 @@ def build_manager() -> tuple[CloudMailManager, Path]:
     Returns (manager, working_dir). Inbound rows discovered by polling are
     pushed to the host agent inbox via LICC.
     """
-    cfg = load_config()
+    cfg, config_path = _load_config_with_path()
     accounts = accounts_from_config(cfg)
 
     agent_dir_raw = os.environ.get("LINGTAI_AGENT_DIR")
@@ -126,6 +139,7 @@ def build_manager() -> tuple[CloudMailManager, Path]:
     mgr = CloudMailManager(
         accounts=accounts,
         working_dir=working_dir,
+        config_path=config_path,
         on_inbound=_on_inbound,
     )
     return mgr, working_dir
@@ -137,7 +151,9 @@ def build_manager() -> tuple[CloudMailManager, Path]:
 
 def build_server(manager: CloudMailManager | None) -> Server:
     """Construct the MCP server. ``manager`` is None when eager start failed;
-    in that case every tool call returns an error explaining why."""
+    operational calls and settings fail closed while manual remains usable."""
+    settings_provider = CloudMailSettingsProvider(manager)
+
     async def _list_tools(
         _ctx: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
@@ -159,18 +175,16 @@ def build_server(manager: CloudMailManager | None) -> Server:
         if params.name != CLOUD_MAIL_PLUGIN.name:
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
-        if manager is None:
-            result = {
-                "status": "error",
-                "error": (
-                    "Cloud Mail manager not initialized — server boot failed. "
-                    "Check stderr for the underlying exception (most often a "
-                    f"missing {CONFIG_ENV} or invalid config)."
-                ),
-            }
+        if manager is None and arguments.get("action") not in {"settings", "manual"}:
+            result = dict(_MANAGER_UNAVAILABLE)
         else:
             try:
-                result = await asyncio.to_thread(handle_cloud_mail, manager, arguments)
+                result = await asyncio.to_thread(
+                    handle_cloud_mail,
+                    manager,
+                    arguments,
+                    settings_provider=settings_provider,
+                )
             except Exception as e:
                 result = {
                     "status": "error",
@@ -202,7 +216,9 @@ async def serve() -> None:
         log.info("Cloud Mail polling running")
     except Exception as e:
         log.error(
-            "eager start failed; tool calls will return errors until fixed: %s", e,
+            "eager start failed; operational tool calls will return errors "
+            "until fixed (%s)",
+            type(e).__name__,
         )
         manager = None
 
