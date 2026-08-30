@@ -365,7 +365,16 @@ class AgentNotificationStateAdapter:
     :mod:`lingtai.kernel.notifications`.
     """
 
-    __slots__ = ("_dismiss", "_delay", "_add", "_drop", "_edit", "_list", "_log")
+    __slots__ = (
+        "_dismiss",
+        "_delay",
+        "_add",
+        "_drop",
+        "_edit",
+        "_list",
+        "_read_settings",
+        "_log",
+    )
 
     def __init__(
         self,
@@ -376,6 +385,7 @@ class AgentNotificationStateAdapter:
         drop_hook: Callable[[str], dict[str, Any]],
         edit_hook: Callable[[str, dict[str, Any]], dict[str, Any]],
         list_hooks: Callable[[], list[dict[str, Any]] | dict[str, Any]],
+        read_settings: Callable[[], tuple[int, int]],
         log: Callable[..., None],
     ) -> None:
         self._dismiss = dismiss
@@ -384,6 +394,7 @@ class AgentNotificationStateAdapter:
         self._drop = drop_hook
         self._edit = edit_hook
         self._list = list_hooks
+        self._read_settings = read_settings
         self._log = log
 
     def dismiss(
@@ -417,6 +428,9 @@ class AgentNotificationStateAdapter:
 
     def list_hooks(self) -> list[dict[str, Any]] | dict[str, Any]:
         return self._list()
+
+    def read_settings(self) -> tuple[int, int]:
+        return self._read_settings()
 
     def log(self, event_type: str, **fields: Any) -> None:
         self._log(event_type, **fields)
@@ -1577,7 +1591,9 @@ def agent_host_ports(
             drop_hook,
             edit_hook,
             list_hooks,
+            notification_delay_max_seconds,
         )
+        from lingtai.kernel.meta_block import _notification_persistent_max_chars
 
         ports["notification_state"] = AgentNotificationStateAdapter(
             dismiss=partial(dismiss_channel, agent, invoked_by="notification"),
@@ -1586,6 +1602,10 @@ def agent_host_ports(
             drop_hook=partial(drop_hook, agent),
             edit_hook=partial(edit_hook, agent),
             list_hooks=partial(list_hooks, agent),
+            read_settings=lambda: (
+                _notification_persistent_max_chars(agent),
+                notification_delay_max_seconds(),
+            ),
             log=agent._log,
         )
     elif plugin_name == "shell":

@@ -337,16 +337,40 @@ def test_official_soul_mount_preserves_real_flow_and_packaged_manual(mcp_agent):
     assert manual["manual_path"].endswith("capabilities/soul-manual/SKILL.md")
 
 
-def test_official_notification_mount_preserves_core_state_and_packaged_manual(mcp_agent):
+def test_official_notification_mount_preserves_core_state_and_packaged_manual(
+    mcp_agent, monkeypatch
+):
     """The Notification declaration reaches real Core state only through its port."""
     from lingtai.kernel.notifications import submit
     from lingtai.tools.notification import DECLARATION
 
+    monkeypatch.delenv("LINGTAI_NOTIFICATION_MAX_CHARS", raising=False)
+    monkeypatch.delenv("LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS", raising=False)
+    assert DECLARATION.public_actions == (
+        "check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add",
+        "drop", "edit", "list", "delay", "settings", "manual",
+    )
     assert DECLARATION.requires == ("workdir", "notification_state")
     assert mcp_agent.official_tool_plugins["notification"] is DECLARATION
     assert [schema.name for schema in mcp_agent._tool_schemas].count("notification") == 1
 
     handler = mcp_agent._tool_handlers["notification"]
+    settings_path = mcp_agent.working_dir / "settings" / "system.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        '{"schema_version":2,"notification_max_chars":3000}',
+        encoding="utf-8",
+    )
+    settings = handler(
+        {"action": "settings", "input": {}, "reasoning": "effective values"}
+    )
+    assert [row["key"] for row in settings["settings"]] == [
+        "notification.max_chars",
+        "notification.delay_max_seconds",
+    ]
+    assert [row["current"] for row in settings["settings"]] == [3_000, 600]
+    assert mcp_agent._build_system_prompt()
+
     check = handler({"action": "check", "input": {}, "reasoning": "probe"})
     assert check["_notification_placeholder"] is True
 

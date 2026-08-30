@@ -265,6 +265,7 @@ related_files:
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_persistent_cap.py
   - tests/test_notification_schema_wire_scrub.py
+  - tests/test_notification_settings.py
   - tests/test_notification_store.py
   - tests/test_notification_sync.py
   - tests/test_notification_tool.py

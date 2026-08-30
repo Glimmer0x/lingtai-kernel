@@ -8,10 +8,10 @@ producer, dismissal, delay, and Store state; the declared plugin receives those
 operations through one narrow ``notification_state`` host port rather than a
 whole Agent.
 
-The public tool name, nine operational actions, reserved ``manual`` action,
-strict per-action input schemas, result shapes, and Core authorization gates are
-unchanged.  The difference is composition only: a static declaration is bound
-to the least-privilege host facade and mounted by the kernel registrar.
+The public tool name, nine operational actions, strict operational input/result
+shapes, and Core authorization gates are unchanged. This slice adds the generic
+reserved read-only ``settings`` action immediately before ``manual``. The family
+is bound to the least-privilege host facade and mounted by the kernel registrar.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from .schema import (
     NOTIFICATION_DECLARED_ACTIONS,
     get_description as _schema_description,
 )
+from .settings import notification_settings
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
@@ -222,9 +223,14 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
         children.append(
             ChildTool("manual", DECLARATION.manual_input_schema, _unused, title="manual input")
         )
-        return ToolFamily(DECLARATION.name, children)
+        return ToolFamily(
+            DECLARATION.name,
+            children,
+            settings_provider=tuple,
+        )
 
     state = host.notification_state
+    read_settings = state.read_settings
     handlers: dict[str, Callable[["NotificationStatePort", dict[str, Any]], dict[str, Any]]] = {
         "check": _check,
         "dismiss_channel": _dismiss_channel,
@@ -255,7 +261,11 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
         for action in DECLARATION.actions
     ]
     children.append(build_manual_child(host.workdir, DECLARATION.manual))
-    return ToolFamily(DECLARATION.name, children)
+    return ToolFamily(
+        DECLARATION.name,
+        children,
+        settings_provider=lambda: notification_settings(read_settings),
+    )
 
 
 def get_description(lang: str = "en") -> str:
@@ -309,15 +319,16 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind,
     requires=("workdir", "notification_state"),
     glossary_package=__package__,
+    settings=True,
 )
 
-# Public compatibility views derived from the declaration.  `manual` is present
-# once and last, but is not an operational declaration action.
+# Public compatibility views derived from the declaration. Reserved `settings`
+# and `manual` are present once at the end but are not operational actions.
 ACTION_ORDER = DECLARATION.public_actions
 INPUT_SCHEMAS = DECLARATION.public_input_schemas()
 
-# Import-time schema-only composition catches duplicate action/reserved-manual
-# defects before boot.  Its children never dispatch.
+# Import-time schema-only composition catches duplicate reserved-action defects
+# before boot. Its children never dispatch or read settings.
 _FAMILY = _build_family(None)
 
 

@@ -178,10 +178,13 @@ capability names and lazy adapters.
   unchanged execution engine behind an internal-only flat call shape.
 - `notification/` — always-on declared official family owning the public
   `notification` action set (`check`, three atomic dismiss actions, hook-registry
-  actions, `delay`, and `manual`; `src/lingtai/tools/notification/ANATOMY.md`).
+  actions, `delay`, read-only `settings`, and `manual`;
+  `src/lingtai/tools/notification/ANATOMY.md`).
   Its static `DECLARATION` is registered through the official host-plugin route,
   binds only `workdir` and `notification_state`, and preserves the ToolFamily
   LTP v2 surface without receiving the Agent or a direct intrinsic dispatcher.
+  Its settings provider reads two effective scalars fresh through that same
+  narrow port and owns no configuration object or writer.
   Its Host adapters retain presentation-only rules while Notification Core owns
   all producer guards, Store mutation, and delay/timer policy.
 - `context/` — mandatory intrinsic owning the public `context` family: the
@@ -300,7 +303,8 @@ prune, launch, config-write, or mount authority. Its validated skills are named
 only in the protected Plugin prompt field and never enter the vanilla skills
 catalog. `src/lingtai/tools/notification/__init__.py` is the eighth slice: its
 `DECLARATION` binds only `workdir`/`notification_state` and delegates Core policy
-through a callback-only adapter without exposing the Agent or Store.
+through a callback-only adapter without exposing the Agent, Store,
+configuration object, or writer, including its two-row settings projection.
 `src/lingtai/tools/soul/__init__.py` is the tenth slice: its `DECLARATION`
 preserves the public `inquiry | flow | config | voice | dismiss | manual`
 family and binds the five operational children only to `workdir` plus the

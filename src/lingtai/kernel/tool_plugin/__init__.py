@@ -492,6 +492,9 @@ class NotificationStatePort(Protocol):
     def list_hooks(self) -> list[dict[str, Any]] | dict[str, Any]:
         """Read hook manifests through Notification Core and its Store."""
 
+    def read_settings(self) -> tuple[int, int]:
+        """Read the effective payload cap and delay ceiling for this agent."""
+
     def log(self, event_type: str, **fields: Any) -> None:
         """Record a bounded notification action diagnostic."""
 

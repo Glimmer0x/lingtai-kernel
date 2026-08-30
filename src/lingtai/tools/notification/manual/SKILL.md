@@ -7,13 +7,16 @@ description: >
   Routes channel/sync mechanics and dismissal safety into nested references;
   large-result compaction is owned by
   `context-manual` → `reference/summarize-manual/SKILL.md`.
-version: 0.12.0
-tags: [lingtai, notifications, channels, dismiss, delay, alarm, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-08-22T00:00:00Z"
+version: 0.13.0
+tags: [lingtai, notifications, channels, dismiss, delay, alarm, settings, manual, force, stale, nudge, hooks, whitelist]
+last_changed_at: "2026-08-29T00:00:00Z"
 related_files:
+- src/lingtai/tools/notification/ANATOMY.md
+- src/lingtai/tools/notification/CONTRACT.md
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/kernel/tool_plugin/CONTRACT.md
 - src/lingtai/tools/notification/schema.py
+- src/lingtai/tools/notification/settings.py
 - src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
 - src/lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md
 maintenance: |
@@ -31,12 +34,14 @@ operation either — that is `context(action='summarize')`.
 
 ## Quick start
 
-The resident tool schema is the source of truth for the ten actions, their
+The resident tool schema is the source of truth for the eleven actions, their
 per-action `input` fields, and the `action` + `input` + `reasoning` envelope
 (arguments live inside `input`, never at the root). What it does not say:
 
 - `manual` returns **this router body** — it is documentation retrieval, not a
   notification-state read.
+- `settings` accepts exactly `input={}` and only shows current configuration;
+  it has no set, reset, or other mutation form.
 - Optional fields are declared required-but-nullable, and `null` is treated
   exactly like omission. The one trap: `reason: null` does **not** satisfy the
   post-molt acknowledgement requirement.
@@ -66,6 +71,47 @@ Delaying `daemon` is the one exception to hiding: the daemon channel stays
 readable (check, snapshot, and the bounded daemon summary keep working) and only
 stops waking you until the delay ends. `delay-alarm` itself cannot be delayed. A damaged private delay record fails open
 (target visible) rather than silently suppressing notification delivery.
+
+The five-field SHOW row is `notification.delay_max_seconds`. Its meaning is the
+finite nonzero delay ceiling described above; `current` is the live effective
+integer and `default` is `600`. Resolution is
+`LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` followed by the fixed default.
+Accepted configured values are positive integer strings. Missing uses `600`;
+blank, non-numeric, zero, and negative input fall back to `600`; the delay
+action logs its existing bounded diagnostic, while SHOW performs no log write.
+The value is non-sensitive and is read at every delay action, so an environment
+value already present in the process applies to the next call. The row is
+`configurable: true` because the existing launcher or configured `env_file`
+procedure can change that source outside SHOW.
+
+To change it, obtain the configuration owner's approval, then edit the exact
+variable in the agent's existing `env_file` or launcher/supervisor environment.
+Do not add an `init.json` field or create a Notification settings file. An
+`env_file` edit or launcher change needs the normal authorized refresh/relaunch
+to enter the process. Call `notification(action='settings', input={},
+reasoning='verify delay ceiling')` again and confirm
+`notification.delay_max_seconds.current`; SHOW never writes the environment or
+performs the refresh.
+
+## Notification settings
+
+`notification(action='settings', input={}, reasoning='inventory')` is a
+read-only progressive-disclosure action. Normal success contains exactly these
+rows and exactly the five projected fields `key`, `current`, `default`,
+`configurable`, and `comment`:
+
+- `notification.max_chars` →
+  `notification-manual#block-size-cap-persistent-and-attention-lanes`
+- `notification.delay_max_seconds` →
+  `notification-manual#consumer-delay-and-expiry-alarm`
+
+The `comment` pointer is where meaning, accepted values, precedence, canonical
+source names, apply timing, sensitivity, authorization notes, and the real
+change procedure live. Neither row is sensitive; channel payloads, events,
+accounts, file paths, delay state, hook manifests, and session state are not
+settings rows. If either effective value cannot be resolved or serialized, the
+whole call fails with the fixed `SETTINGS_UNAVAILABLE` result; there are no
+partial rows or per-row unavailable placeholders.
 
 ## Root `summarize`
 
@@ -221,15 +267,33 @@ lanes with ONE shared bar (`LINGTAI_NOTIFICATION_MAX_CHARS`):
   cannot be written, the marker carries `spill_failed` and the block points
   the agent at the producer tool for the full content.
 
-The cap is **live-configurable** with the environment variable
-`LINGTAI_NOTIFICATION_MAX_CHARS` (positive integer; values above `10000` clamp
-back to `10000`; values below `2048` clamp UP to `2048` on BOTH lanes so the
-terminal recovery envelope always fits; missing/blank/
-non-numeric/zero/negative values fall back to `10000`). It is read at every
-payload build, so setting it in the agent's `env_file` and refreshing applies
-it without editing `init.json`. This is a context-size steering knob only: it
-never grants access and never changes which messages are considered
-delivered.
+The five-field SHOW row is `notification.max_chars`. `current` is the same
+effective clamped value the live Agent consumes and `default` is `10000`.
+Resolution is a valid live `LINGTAI_NOTIFICATION_MAX_CHARS` value, then the
+existing `notification_max_chars` field in closed-v2
+`<agent>/settings/system.json` through `Agent.resolve_notification_max_chars()`,
+then `10000`. Positive values above `10000` clamp back to `10000`; values below
+`2048` clamp up to `2048` on both lanes. A missing, blank, non-numeric, zero, or
+negative environment value falls through to the valid System-v2 field, then
+the default. A malformed, unknown-field, wrong-version, or otherwise invalid
+System document is rejected whole and contributes no file-layer value. The
+value is non-sensitive, both sources are consulted at every payload build, and
+the row is `configurable: true` through these existing owner procedures.
+
+To change the environment source, obtain the configuration owner's approval
+and edit `LINGTAI_NOTIFICATION_MAX_CHARS` in the existing `env_file` or
+launcher/supervisor environment; refresh/relaunch is required for an `env_file`
+or launcher change to enter the process. To change the file layer instead, use
+the existing authorized File/Shell procedure to edit
+`<agent>/settings/system.json` as a closed `schema_version: 2` document and set
+only its `notification_max_chars` field while preserving any other valid v2
+fields. Do not add a Notification JSON document or an `init.json` field, and do
+not widen the closed System grammar. The file layer is hot-read. Call
+`notification(action='settings', input={}, reasoning='verify notification
+cap')` again and confirm `notification.max_chars.current`; SHOW itself never
+writes configuration, refreshes, or launches anything. This is a context-size
+steering knob only: it never grants access and never changes which messages are
+considered delivered.
 
 ## Nested reference catalog
 
@@ -258,6 +322,7 @@ delivered.
 | `notification_persistent` and `notification.attention` block size cap; `LINGTAI_NOTIFICATION_MAX_CHARS` (floor `2048` / ceiling `10000`); `notification-overflow-<ts>.json` and `notification-attention-overflow-<digest8>.json` spill files; compacted copy; message-id preservation; marker-only degradation | this section (`Block size cap (persistent and attention lanes)`) |
 | External-hook registration; `.notification/hooks.json`; `add`/`drop`/`edit`/`list`; whitelist gate; warn-and-flag on blocked channels | this section (`Hooks & whitelist`) + `reference/channel-model/SKILL.md` (effective allowlist) |
 | Temporarily hide one channel; `delay`; 0 or live configured seconds (default cap 600); replacement/cancellation; expiry, restart recovery, or `delay-alarm` | this section (`Consumer delay and expiry alarm`) + `reference/channel-model/SKILL.md` |
+| Show Notification settings; exact five fields; `notification.max_chars`; `notification.delay_max_seconds`; authorized change and verification procedures | this section (`Notification settings`) and each row's exact `comment` target |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
 | Tool-result ranking, digest quality, `context(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../context-manual/reference/summarize-manual/SKILL.md` |
 | Active goal source-of-truth and cancellation/completion | `../system-manual/reference/goal-manual/SKILL.md` |
@@ -269,7 +334,8 @@ The producer-verb preference and `force` semantics are resident (meta_guidance
 `notification_handling` and the schema's `_FORCE_DESCRIPTION`). The two facts
 neither of them states:
 
-- Neither `check` nor `manual` writes notification state.
+- Neither `check`, `settings`, nor `manual` writes notification state or runtime
+  configuration.
 - `force=true` does **not** override protected source-of-truth channels.
 
 Producer guards exist so that clearing a mirror is never mistaken for handling
