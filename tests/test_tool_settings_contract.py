@@ -156,7 +156,7 @@ def test_public_export_and_exact_production_opt_ins():
         assert ("settings" in item.public_actions) is (name in expected_official)
     psyche_actions = importlib.import_module(
         "lingtai.tools.psyche").get_schema()["properties"]["action"]["enum"]
-    assert ("settings" in psyche_actions) is False
+    assert ("settings" in psyche_actions) is True
 
 
 def test_parent_contract_states_declaration_provider_opt_in_not_owner_file():

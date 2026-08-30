@@ -926,10 +926,12 @@ envelope.
 **Current state (the paragraph above is migration history).** That family no
 longer exists, and neither do the `pad`/`lingtai`/`knowledge`/`skills` public
 roots that briefly succeeded it. The four durable domains are now taught by one
-read-only root, `psyche` (`pad | lingtai | knowledge | skills | manual`,
+read-only root, `psyche` (`pad | lingtai | knowledge | skills | settings |
+manual`,
 `src/lingtai/tools/psyche/CONTRACT.md`, the equation
-`pad + lingtai + knowledge + skills = psyche`): every action returns that domain's
-manual and mutates nothing. Those four packages remain as private lifecycle
+`pad + lingtai + knowledge + skills = psyche`): five actions return the domain
+or routing manual; `settings` returns the two fully redacted Psyche-owned Pad
+rows. Every action mutates nothing. Those four packages remain as private lifecycle
 owners — Pad/LingTai composers and the Skills/Knowledge catalogs plus the
 Knowledge legacy migration — and register no tool. Generic durable mutation
 belongs to `file.write`/`file.edit`, which never hot-load prompt state; the
@@ -941,8 +943,8 @@ context lifecycle is `context` (`molt | summarize | rebuild | manual`,
 prompt source, then applies pending/new summaries, then requests provider
 replay; bare `{}` remains valid with zero pending summaries. Refresh and molt
 invoke that same internal reconstruction contract as passive scenarios. Name
-actions moved to `system`. There is no `psyche` root/module/alias and no public
-`system(action='summarize')`. `context` alone consumes `_tc_id`; its action
+actions moved to `system`. There is no alias for the dissolved Psyche actions
+and no public `system(action='summarize')`. `context` alone consumes `_tc_id`; its action
 named `summarize` remains unrelated to the root boolean control.
 
 The legacy a-priori result-summarization flag under the literal key `summary`

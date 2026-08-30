@@ -31,9 +31,11 @@ def _actions(module) -> list[str]:
 
 def test_public_action_sets_are_the_locked_inventories():
     # The four durable domains now share one read-only root.
-    assert _actions(psyche_tool) == ["pad", "lingtai", "knowledge", "skills", "manual"]
+    assert _actions(psyche_tool) == [
+        "pad", "lingtai", "knowledge", "skills", "settings", "manual",
+    ]
     assert psyche_tool.ACTION_ORDER == (
-        "pad", "lingtai", "knowledge", "skills", "manual",
+        "pad", "lingtai", "knowledge", "skills", "settings", "manual",
     )
     assert _actions(context_tool) == ["molt", "summarize", "rebuild", "manual"]
 

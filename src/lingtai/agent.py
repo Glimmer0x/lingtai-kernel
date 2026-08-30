@@ -253,6 +253,10 @@ class Agent(BaseAgent):
         self._forced_disable = frozenset(_forced_disable or ())
         self._turn_origin_policy = _turn_origin_policy
         self._requires_turn_origin_policy = _requires_turn_origin_policy
+        # Psyche SHOW reports only the Pad configuration successfully consumed
+        # by canonical reconstruction. Direct construction begins at the two
+        # meaningful defaults; ambient init/source edits never mutate this pair.
+        self._psyche_settings_snapshot: tuple[str, str | None] = ("", None)
 
         # Default karma authority for the primary agent (本我)
         kwargs.setdefault("admin", {"karma": True})
@@ -2116,6 +2120,7 @@ class Agent(BaseAgent):
             resolve_file,
             _resolve_capabilities,
         )
+        psyche_pad_file = data.get("pad_file")
         env_file = data.get("env_file")
         import os
 
@@ -2437,7 +2442,7 @@ class Agent(BaseAgent):
         # manual, MCP route, and mechanical identity source is wired. The session
         # replay below must observe this same complete builder state, and the
         # system/system.md mirror must be byte-identical to it.
-        self._reconstruct_context(data)
+        self._reconstruct_context(data, psyche_pad_file=psyche_pad_file)
 
         # Re-seal
         self._sealed = True
@@ -2452,7 +2457,12 @@ class Agent(BaseAgent):
             tools=list(self._tool_handlers.keys()),
         )
 
-    def _reconstruct_context(self, data: dict | None = None) -> None:
+    def _reconstruct_context(
+        self,
+        data: dict | None = None,
+        *,
+        psyche_pad_file: str | None = None,
+    ) -> None:
         """Recompose every canonical prompt source, then publish the final prompt.
 
         This is the one internal reconstruction contract used by active
@@ -2462,13 +2472,19 @@ class Agent(BaseAgent):
         final flush is deliberately last, ensuring provider replay observes the
         fully composed prompt rather than an intermediate Pad/LingTai section.
         """
-        self._reload_prompt_sections(data)
+        self._reload_prompt_sections(data, psyche_pad_file=psyche_pad_file)
         self._token_decomp_dirty = True
         self._flush_system_prompt()
 
-    def _reload_prompt_sections(self, data: dict | None = None) -> None:
+    def _reload_prompt_sections(
+        self,
+        data: dict | None = None,
+        *,
+        psyche_pad_file: str | None = None,
+    ) -> None:
         """Authoritative composer for every configured/durable prompt section."""
-        if data is None:
+        resolve_init_files = data is None
+        if resolve_init_files:
             data = self._read_init()
             # Directly constructed/testing agents may legitimately have no
             # init.json, but an existing unreadable/invalid file is a failed
@@ -2479,6 +2495,16 @@ class Agent(BaseAgent):
                 if (self._working_dir / "init.json").is_file():
                     raise RuntimeError("init.json exists but could not be read")
                 data = {}
+
+        if "pad_file" in data:
+            resolved_pad_file = data["pad_file"]
+            if resolved_pad_file is not None and not isinstance(
+                resolved_pad_file, str
+            ):
+                raise RuntimeError("resolved pad_file must be a string or null")
+            psyche_pad_file = resolved_pad_file
+
+        if resolve_init_files:
             # Resolve active *_file fields (covenant_file, base_prompt_file,
             # lingtai_file, comment_file). Retired prompt-override `_file` fields
             # are legacy-known and not resolved — see _setup_from_init.
@@ -2603,6 +2629,18 @@ class Agent(BaseAgent):
             self._prompt_manager.delete_section("rules")
 
         # --- Pad (pad.md + pinned pad_append.json references) ---
+        # Configured Pad content is an initial seed, not an authoritative
+        # rewrite: preserve a nonempty durable Pad authored after startup.
+        pad_seed = data.get("pad") or ""
+        if not isinstance(pad_seed, str):
+            raise RuntimeError("resolved pad must be a string or null")
+        pad_path = system_dir / "pad.md"
+        if pad_seed and (
+            not pad_path.is_file()
+            or pad_path.read_text(encoding="utf-8") == ""
+        ):
+            pad_path.write_text(pad_seed, encoding="utf-8")
+
         # Delegate to the single canonical composer rather than re-reading
         # pad.md alone — otherwise the post-molt hook ordering silently drops
         # the pinned append references. `_pad_load` composes both.
@@ -2739,6 +2777,11 @@ class Agent(BaseAgent):
             self._prompt_manager.write_section("comment", comment)
         else:
             self._prompt_manager.delete_section("comment")
+
+        # Commit settings discovery state only after the entire canonical
+        # section reconstruction succeeds. A later ambient edit or a failed
+        # reconstruction therefore cannot replace consumer-applied truth.
+        self._psyche_settings_snapshot = (pad_seed, psyche_pad_file)
 
     def _build_launch_cmd(self) -> list[str] | None:
         """Return the command to relaunch this agent via lingtai-agent run."""

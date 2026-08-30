@@ -207,8 +207,8 @@ SYSTEM_INIT_CONCRETE_TOOL_EXCLUSIONS = frozenset(
     {
         "/addons",
         "/mcp",
-        # Psyche owns the live Pad prompt inputs. Its later owner change may
-        # expose them, fully redacted; System must not stack duplicate rows.
+        # Psyche owns and exposes the live Pad inputs, fully redacted; System
+        # must not stack duplicate rows.
         "/pad",
         "/pad_file",
         "/lingtai",

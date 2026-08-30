@@ -53,10 +53,11 @@ manual under `tools/context/manual/` is the sole canonical source and is install
 at the longstanding `context-manual` path. Any same-name collision fails loudly.
 No OLD
 `psyche` action is reachable anywhere, and none is aliased here. A public
-root named `psyche` does exist again — it is the manual-only family for the four
+root named `psyche` does exist again — it is the read-only family for the four
 durable domains (`pad + lingtai + knowledge + skills = psyche`,
-`src/lingtai/tools/psyche/CONTRACT.md`) — but it carries only five strict-empty
-manual loaders. `psyche.context_molt`, `psyche.pad_edit`, `psyche.lingtai_update`,
+`src/lingtai/tools/psyche/CONTRACT.md`) — it carries five strict-empty manual
+loaders plus redacted settings SHOW for its two Pad inputs.
+`psyche.context_molt`, `psyche.pad_edit`, `psyche.lingtai_update`,
 `psyche.name_set`, and every other old spelling fail as unknown actions: root
 reuse is not action compatibility. The lifecycle actions live here; name changes
 remain `system.name_set | system.name_nickname`. Pad body and LingTai identity
