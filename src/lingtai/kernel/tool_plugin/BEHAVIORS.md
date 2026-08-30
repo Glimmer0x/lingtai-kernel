@@ -10,6 +10,7 @@ related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/mcp/settings.py
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/daemon/__init__.py
@@ -92,7 +93,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.file import DECLARATION as file; print(mcp.name, mcp.actions, mcp.public_actions, mcp.requires); print(file.name, file.actions, file.public_actions, file.requires)"
    ```
 
-   Expect `mcp ('info',) ('info', 'manual') ('workdir', 'prompt_section')` and
+   Expect `mcp ('info',) ('info', 'settings', 'manual') ('workdir', 'prompt_section')` and
    `file ('read', 'write', 'edit', 'glob', 'grep') ('read', 'write', 'edit',
    'glob', 'grep', 'manual') ('workdir', 'file_io')`. No `Agent` was constructed;
    each reserved `manual` action is appended, not declared.
@@ -132,13 +133,13 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    its typed `web_runtime` composition is not in existence yet — only
    `setup` composes and grants it.
 
-2. Prove the public model-facing surface is unchanged by the recut:
+2. Prove the public model-facing surface contains the bounded owner addition:
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import get_schema; s = get_schema(); print(sorted(s['properties']), s['properties']['action']['enum'], s['additionalProperties'])"
    ```
 
-   Expect `['action', 'input', 'reasoning', 'summarize'] ['info', 'manual']
+   Expect `['action', 'input', 'reasoning', 'summarize'] ['info', 'settings', 'manual']
    False`.
 
 3. Prove a declaration is granted exactly its `requires` and nothing more:
@@ -283,9 +284,9 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 ### Expected evidence
 
 - [ ] Step 1: MCP and File `DECLARATION`s import and validate with no Agent;
-      `manual` is in each `public_actions` but not in either `actions`.
-- [ ] Step 2: the closed LTP root and the `["info", "manual"]` enum are
-      unchanged.
+      reserved children are in `public_actions` but not in `actions`.
+- [ ] Step 2: the closed LTP root and MCP's
+      `["info", "settings", "manual"]` enum are exact.
 - [ ] Step 3: only `requires` ports are granted; an ungranted port raises
       `AttributeError`; `tool_mount` is not grantable at all; a standard-table
       port such as `plugin_catalog` is unreachable for a declaration that did

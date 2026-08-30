@@ -189,7 +189,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   No adapter exposes an Agent or generic dispatcher; `agent_host_ports` and
   `register_agent_tool_plugins` construct the private registrar mount seam.
 - `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
-  Its static declaration binds the per-host family and protected prompt
+  Its static declaration opts into the reserved SHOW-only settings child and
+  binds the per-host family and protected prompt
   section; Avatar, Context, Daemon, Email, File, Plugin, Notification, Shell,
   Soul, System, Task Card, Vision, and Web are separately accepted vertical
   slices. The later-family target register is now empty; the reserved list is

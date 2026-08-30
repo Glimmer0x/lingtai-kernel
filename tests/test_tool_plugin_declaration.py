@@ -119,7 +119,7 @@ def test_all_fourteen_official_families_mount_exactly_once_together(tmp_path):
 
 
 def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(mcp_agent):
-    """Boot registration claims the declaration and dispatches both actions."""
+    """Boot registration claims the declaration and preserves existing dispatch."""
     from lingtai.tools.mcp import DECLARATION
 
     assert DECLARATION.requires == ("workdir", "prompt_section")

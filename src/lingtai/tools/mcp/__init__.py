@@ -15,12 +15,15 @@ Symmetric to the ``knowledge`` / ``skills`` capabilities:
   section and reporting health while ``manual`` returns the manual body.
 
 Tool surface: ``info`` returns the current registry and a runtime health
-snapshot without the manual body; ``manual`` returns the umbrella manual body on
-demand. Both are action children of one LTP v2 ``ToolFamily`` (see
+snapshot without the manual body; ``settings`` shows the two MCP-owned
+top-level init settings; ``manual`` returns the umbrella manual body on demand.
+All three are action children of one LTP v2 ``ToolFamily`` (see
 ``lingtai/tools/CONTRACT.md`` "Envelope"): the public tool name stays ``mcp`` and
-the public action values stay ``info``/``manual``, now carried in the canonical
+the public action values are ``info``/``settings``/``manual``, carried in the
+canonical
 ``action`` + ``input`` + ``reasoning`` + ``summarize`` envelope with a strict
-empty ``input`` per action. Neither action's observable result changed.
+empty ``input`` per action. The existing actions' observable results are
+unchanged.
 
 Ownership: this module is the agent-callable *tool* slice only. The registry
 machinery it renders (validation, JSONL I/O, catalog load, identity projection,
@@ -38,7 +41,7 @@ longer receives the whole ``Agent``: :func:`_bind` gets a ``ToolPluginHost``
 granting exactly the two ports this capability actually consumes — ``workdir``
 (read the registry and the installed manual) and ``prompt_section`` (rewrite
 its own protected ``mcp`` section). Nothing about the public tool — name,
-``["info", "manual"]`` action enum, strict-empty inputs, result shapes
+``["info", "settings", "manual"]`` action enum, strict-empty inputs, result shapes
 including the tool-specific ``mcp_manual`` body key — changed with it.
 
 Usage: ``Agent(capabilities=["mcp"])`` or via init.json.
@@ -58,6 +61,7 @@ from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .settings import MCPSettingsProvider
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -147,7 +151,8 @@ def _flatten_manual_result(mcp_result: dict) -> dict:
 _DESCRIPTION = (
     "SIGNPOST ONLY: this tool does not register, activate, configure, or "
     "troubleshoot MCP servers by itself. `info` only re-reads the registry and "
-    "returns registry health; `manual` returns the mcp-manual body. "
+    "returns registry health; `settings` shows MCP-owned configuration; "
+    "`manual` returns the mcp-manual body. "
     "Your per-agent MCP server registry. The <registered_mcp> catalog in your "
     "system prompt lists every MCP server currently registered. Before using "
     "this tool (registering, deregistering, updating, or troubleshooting MCP "
@@ -158,10 +163,9 @@ _DESCRIPTION = (
     "system(action=\"refresh\")."
 )
 
-# Both actions are signpost-only reads that take no arguments at all, so both
-# children share the one canonical strict-empty ``input`` — the same literal
-# the generic ``manual`` child registers, reused rather than hand-copied so the
-# schema-only and dispatching families cannot advertise different shapes.
+# The owner-defined action and reserved manual action take no arguments; the
+# injected settings child is strict-empty too. Reuse the manual literal for the
+# declared actions so schema-only and dispatching families cannot drift.
 # ``ToolFamily.build_schema`` deep-copies per child, and dispatch reads only
 # ``properties``, so one shared object is safe.
 _EMPTY_INPUT: dict[str, Any] = MANUAL_INPUT_SCHEMA
@@ -169,13 +173,14 @@ _EMPTY_INPUT: dict[str, Any] = MANUAL_INPUT_SCHEMA
 _ACTION_DESCRIPTION = (
     "info: signpost-only action; re-reads the registry and returns "
     "a runtime health snapshot (registry contents, problems, registry path) "
-    "without the manual body. manual: return only the mcp-manual skill body. "
-    "Neither action mutates MCP configuration."
+    "without the manual body. settings: show the MCP-owned init.addons and "
+    "fully redacted init.mcp configuration rows. manual: return only the "
+    "mcp-manual skill body. No action mutates MCP configuration."
 )
 
 
 def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
-    """Build the two-child ``mcp`` family; the registry is declared exactly once.
+    """Build the three-child ``mcp`` family; the registry is declared exactly once.
 
     With a granted ``host``, children are bound to real handlers for dispatch.
     With ``None``, the module-level schema-only family is built: its handlers
@@ -220,6 +225,7 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
             ChildTool("info", info_input, info_handler, title="info input"),
             manual_child,
         ],
+        settings_provider=MCPSettingsProvider(host.workdir.path if host else None),
     )
 
 
@@ -229,9 +235,8 @@ def get_description(lang: str = "en") -> str:
 
 def get_schema(lang: str = "en") -> dict:
     # Composed by the generic ToolFamily infra from each child's own canonical
-    # ``input_schema``. The public action enum stays exactly ``["info",
-    # "manual"]``; the pre-migration hand-written action description is
-    # preserved verbatim so the signpost promise the model reads is unchanged.
+    # ``input_schema``. The settings child is injected immediately before the
+    # reserved manual child by the generic family seam.
     schema = _FAMILY.build_schema()
     schema["properties"]["action"]["description"] = _ACTION_DESCRIPTION
     return schema
@@ -253,13 +258,13 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
         # The generic ``ToolFamily`` dispatcher validates ``action``,
         # type-checks and strips root ``summarize``, rejects unknown root
         # fields, and rejects any ``input`` key outside the selected action's
-        # own declared schema — both actions declare a strict empty input, so
+        # own declared schema — all actions declare a strict empty input, so
         # any extra input field fails here, before ``_reconcile`` re-reads the
         # registry or the manual child touches the filesystem.
         #
-        # mcp's exact pre-migration unknown-action envelope is preserved here,
-        # in the Host layer, rather than by changing the generic dispatcher's
-        # own canonical error shape. Two pre-migration facts the generic
+        # mcp's existing unknown-action envelope mechanics stay in the Host
+        # layer rather than changing the generic dispatcher's canonical error
+        # shape. Two pre-migration facts the generic
         # dispatcher does not reproduce on its own are restored before
         # delegating, both proven by ``test_mcp_show_unknown_action_returns_error``:
         # a missing ``action`` key renders the empty-string default (not
@@ -272,9 +277,13 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
         # exists ahead of the delegation below.
         action = args.get("action", "") if isinstance(args, Mapping) else ""
         if action not in family.child_names:
+            choices = ", ".join(repr(name) for name in family.child_names[:-1])
             return {
                 "status": "error",
-                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
+                "message": (
+                    f"unknown action: {action!r}, only {choices}, or "
+                    f"{family.child_names[-1]!r} is supported"
+                ),
             }
         result = family.handle(args)
         if action == "manual" and "content" in result:
@@ -320,6 +329,7 @@ DECLARATION = ToolPluginDeclaration(
     manual="mcp",
     description=_DESCRIPTION,
     binder=_bind,
+    settings=True,
     # Earned from this slice, not enumerated: ``workdir`` replaces the private
     # ``agent._working_dir`` read, ``prompt_section`` replaces the
     # ``agent.update_system_prompt("mcp", ..., protected=True)`` call. ``mcp``

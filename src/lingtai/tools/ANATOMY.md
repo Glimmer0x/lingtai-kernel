@@ -140,8 +140,8 @@ capability names and lazy adapters.
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `plugin/` — the `plugin` capability: the per-agent Agent Plugins
   (agent-plugins.org, v1.0.0) catalog and registration snapshot, structural twin
-  of `mcp` with the same tool/service split plus Plugin's reserved read-only
-  `settings` child (`info`/`settings`/`manual`)
+  of `mcp` with the same tool/service split; both independently opt into the
+  reserved read-only `settings` child (`info`/`settings`/`manual`)
   (`src/lingtai/tools/plugin/ANATOMY.md`, `src/lingtai/tools/plugin/CONTRACT.md`).
   A plugin *declared* in `init.json` `manifest.plugins` is registered at boot —
   its validated `skills/` are named in the protected `plugins` prompt field and

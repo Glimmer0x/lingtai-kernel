@@ -1,7 +1,7 @@
 """Parity evidence for the `mcp` ToolFamily migration.
 
-`mcp` keeps its public tool name and its exact public action values
-(`info` / `manual`) while moving to the LTP v2 action-separated envelope
+`mcp` keeps its public tool name and adds its opted-in SHOW child between the
+existing `info` / `manual` actions in the LTP v2 action-separated envelope
 (`action` + `input` + `reasoning` + `summarize`) built on the generic
 `lingtai.tools.tool_family` infrastructure.
 
@@ -9,15 +9,14 @@ What these tests pin, beyond the pre-existing `tests/test_mcp_capability.py`
 and `tests/test_mcp_identity_discovery.py` behavior suites:
 
 - the composed schema's exact public surface and Chat/Responses wire parity;
-- that both actions declare a canonical strict-empty `input`, so any extra
+- that all actions declare a canonical strict-empty `input`, so any extra
   input field fails *before* the handler performs any I/O;
 - that `info` still only re-reads the registry (no manual body, no mutation);
 - that `manual` returns the exact manual body/path with no registry rescan or
   registry mutation, flattened back to mcp's own `mcp_manual` public shape
   with no double wrap;
-- that the unknown-action envelope is byte-identical to the pre-migration one,
-  including the two shapes the generic dispatcher does not reproduce on its
-  own (missing action, unhashable action).
+- that the unknown-action envelope keeps its established shape and malformed
+  action handling while listing the additive settings action.
 """
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ from lingtai.services.mcp_registry import REGISTRY_FILENAME
 from lingtai.tools.mcp import get_schema
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
-_UNKNOWN_ACTION_HINT = "only 'info' or 'manual' is supported"
+_UNKNOWN_ACTION_HINT = "only 'info', 'settings', or 'manual' is supported"
 
 
 @pytest.fixture
@@ -64,20 +63,21 @@ def test_schema_exposes_exact_public_actions_and_envelope():
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
-    # Public name/actions are unchanged by the migration.
-    assert schema["properties"]["action"]["enum"] == ["info", "manual"]
+    assert schema["properties"]["action"]["enum"] == ["info", "settings", "manual"]
     # `reasoning` is required Host metadata declared by the family itself.
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["properties"]["reasoning"]["type"] == "string"
     assert schema["properties"]["summarize"]["type"] == "boolean"
 
 
-def test_both_actions_declare_canonical_strict_empty_input():
+def test_all_actions_declare_canonical_strict_empty_input():
     from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
     schema = get_schema()
-    branches = schema["properties"]["input"]["oneOf"]
-    assert [b["title"] for b in branches] == ["info input", "manual input"]
+    branches = schema["properties"]["input"]["anyOf"]
+    assert [b["title"] for b in branches] == [
+        "info input", "settings inventory input", "manual input",
+    ]
     for branch in branches:
         assert branch["type"] == "object"
         assert branch["properties"] == {}
@@ -86,9 +86,7 @@ def test_both_actions_declare_canonical_strict_empty_input():
         # Root envelope fields never leak into a child input branch.
         for leaked in ("action", "reasoning", "_reasoning", "summarize"):
             assert leaked not in branch["properties"]
-    # Both children share the one canonical strict-empty literal that
-    # `build_manual_child` itself registers, so the schema-only family cannot
-    # advertise a shape the dispatching family does not validate against.
+    # Every public child uses the canonical strict-empty shape.
     for branch in branches:
         assert {k: v for k, v in branch.items() if k != "title"} == MANUAL_INPUT_SCHEMA
 
@@ -113,13 +111,13 @@ def test_schema_only_and_dispatching_families_declare_identical_children(mcp_age
 def test_schema_correlates_each_action_const_to_its_own_input():
     schema = get_schema()
     conditions = schema["allOf"]
-    assert len(conditions) == 2
+    assert len(conditions) == 3
     seen = {}
     for condition in conditions:
         action = condition["if"]["properties"]["action"]["const"]
         assert condition["if"]["required"] == ["action"]
         seen[action] = condition["then"]["properties"]["input"]
-    assert set(seen) == {"info", "manual"}
+    assert set(seen) == {"info", "settings", "manual"}
     for action_input in seen.values():
         assert action_input["additionalProperties"] is False
         assert action_input["properties"] == {}
@@ -133,13 +131,15 @@ def test_schema_survives_chat_and_responses_wires():
     chat = _build_tools([fn])[0]["function"]["parameters"]
     responses = _build_responses_tools([fn])[0]["parameters"]
 
-    for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+    for wire in (chat, responses):
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
-        assert wire["properties"]["action"]["enum"] == ["info", "manual"]
-        branches = wire["properties"]["input"][combinator]
-        assert [b["title"] for b in branches] == ["info input", "manual input"]
+        assert wire["properties"]["action"]["enum"] == ["info", "settings", "manual"]
+        branches = wire["properties"]["input"]["anyOf"]
+        assert [b["title"] for b in branches] == [
+            "info input", "settings inventory input", "manual input",
+        ]
 
 
 def test_real_agent_registers_exactly_one_public_mcp_tool(mcp_agent):
@@ -149,7 +149,7 @@ def test_real_agent_registers_exactly_one_public_mcp_tool(mcp_agent):
     schemas = [s for s in _build_tool_schemas(agent) if s.name == "mcp"]
     assert len(schemas) == 1
     params = schemas[0].parameters
-    assert params["properties"]["action"]["enum"] == ["info", "manual"]
+    assert params["properties"]["action"]["enum"] == ["info", "settings", "manual"]
     assert params["required"] == ["action", "input", "reasoning"]
 
 
@@ -281,7 +281,7 @@ def test_manual_reports_degraded_when_manual_missing(mcp_agent):
 # Envelope enforcement: fail before handler I/O
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("action", ["info", "manual"])
+@pytest.mark.parametrize("action", ["info", "settings", "manual"])
 def test_extra_input_field_is_rejected_before_any_io(mcp_agent, monkeypatch, action):
     import lingtai.services.mcp_registry as registry_service
     import lingtai.tools.tool_family.manual as manual_child_module
@@ -410,7 +410,7 @@ def test_mcp_error_results_are_never_summarized():
 # Unknown action parity
 # ---------------------------------------------------------------------------
 
-def test_unknown_action_envelope_is_byte_identical_to_pre_migration(mcp_agent):
+def test_unknown_action_envelope_preserves_shape_with_current_actions(mcp_agent):
     agent, _ = mcp_agent
     handler = _handler(agent)
 

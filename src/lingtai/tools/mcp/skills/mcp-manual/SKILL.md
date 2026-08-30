@@ -26,7 +26,8 @@ description: >
   and HTTP server config; where `mcp_registry.jsonl` lives and how to mutate
   it (`write`/`edit`/`bash` — the `mcp` capability itself is read-only); the
   `<homepage>` fallback doc field; and how `init.json`'s `addons:` list and
-  `mcp:` activation entries relate to the registry. Replaces the deprecated
+  `mcp:` activation entries relate to the registry; and the bounded,
+  read-only five-field settings inventory. Replaces the deprecated
   `lingtai-mcp` skill.
 
   Does NOT cover the protocol spec. `lingtai-kernel-anatomy
@@ -37,12 +38,14 @@ description: >
   callback contract and to `src/lingtai/services/mcp_registry.py` for
   validator internals. Read this for *what to do*, anatomy for *how it
   works*.
-version: 3.4.2
-last_changed_at: 2026-08-20T00:00:00Z
+version: 3.5.0
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
 - src/lingtai/tools/mcp/__init__.py
+- src/lingtai/tools/mcp/settings.py
 - src/lingtai/tools/mcp/ANATOMY.md
 - src/lingtai/tools/mcp/CONTRACT.md
+- tests/test_mcp_settings.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -112,13 +115,14 @@ If neither path yields docs, fall back to the MCP's own runtime self-description
 
 ## Tool surface
 
-Two actions, called through the standard envelope
+Three actions, called through the standard envelope
 `mcp(action=..., input={}, reasoning="...")`. `action`, `input`, and `reasoning`
-are all required; neither action takes any arguments, so `input` is always the
+are all required; no action takes arguments, so `input` is always the
 empty object `{}` — passing any field inside it is rejected before the tool does
 anything. The optional root `summarize` boolean is presentation only.
 
 - `mcp(action="info", input={}, reasoning="...")` returns current registry contents and a runtime health snapshot (registry path, count, problems) without the manual body.
+- `mcp(action="settings", input={}, reasoning="...")` returns the bounded, read-only MCP configuration inventory described below.
 - `mcp(action="manual", input={}, reasoning="...")` returns this manual body on demand, without re-reading the registry.
 
 Every worked call in this manual and its `reference/` docs is written in this
@@ -145,6 +149,26 @@ Each `registered` entry may also carry a non-secret **`identity`** block, so you
 Identity comes from the addon-written, non-secret document at `system/mcp_identities/<name>.json` (schema `lingtai.mcp.identity.v1`), surfaced both here and as an `<identity>` block under the server in your `<registered_mcp>` prompt section. It is a **strict allowlist projection** — only non-secret identity fields (alias, provider username/id/display name, non-secret routing counts) are ever shown; tokens, passwords, app secrets, refresh/access tokens, headers, and any unrecognized field are dropped. The block appears only for servers that have published an identity file (currently the curated messaging addons: `telegram`, `feishu`, `wechat`, `whatsapp`); it is absent otherwise and reflects each account's last-cached state (no live network call). For richer per-account detail, the addon's own `accounts` action remains authoritative.
 
 All registry mutations happen via `write` / `edit` / `bash`. The `mcp` capability never writes to the registry.
+
+## Configuration settings
+
+`mcp(action="settings", input={}, reasoning="...")` is SHOW-only. Success is exactly
+`{"settings":[...]}`; every row has exactly `key`, `current`, `default`,
+`configurable`, and `comment`, in that order. The complete response is
+bounded to 65,536 UTF-8 bytes. A source/read/serialization failure returns one
+fixed no-row failure, never exception text or a partial inventory. This action
+has no set/reset form and writes no file.
+
+| Key | Meaning and source | Default | Configurable | Change and verify |
+|---|---|---|---|---|
+| `init.addons` | The fresh canonical effective top-level `addons` list read through the same init composition as boot/refresh. It is configuration truth, not the decompressed registry or live-client health. | `[]` | `true` | With explicit authorization, edit top-level `init.json` `addons`, call `system(action="refresh")`, then SHOW again and confirm the list. Decompression is append-only, so removing a name does not delete its registry row. |
+| `init.mcp` | The fresh canonical effective top-level `mcp` object. The entire nested object — both `current` and `default` — is always projected as `"<redacted>"`; no server name, command, argument, path, environment entry, or credential reference is exposed. | Logically `{}`; SHOW still renders `"<redacted>"`. | `true` | With explicit authorization, edit top-level `init.json` `mcp`, call `system(action="refresh")`, and use `info` plus the target addon's runtime action to verify behavior. SHOW remains redacted by design. A full relaunch is required when an already-healthy child must pick up a changed launch spec. |
+
+These rows exclude `mcp_registry.jsonl`, identity documents,
+`mcp/servers.json`, curated-addon private config/session files, Task Cards,
+agent identity, and live client/process state. Registry membership still gates
+top-level `init.mcp` activation; the legacy `mcp/servers.json` route remains
+a separate source and never changes either settings row.
 
 ## Runtime venv swap (latest-main owner rollout)
 
