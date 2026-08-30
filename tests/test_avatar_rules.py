@@ -344,7 +344,10 @@ class TestAvatarRulesAction:
             # Omitted action must fail deterministically and spawn nothing.
             omitted = mgr.handle({"name": "child", "confirm": True})
             assert "error" in omitted
-            assert omitted["error"] == "unknown action: '', only 'spawn', 'rules', or 'manual' is supported"
+            assert omitted["error"] == (
+                "unknown action: '', only 'spawn', 'rules', 'settings', "
+                "or 'manual' is supported"
+            )
             launch.assert_not_called()
             assert not (parent_dir.parent / "child").exists()
 

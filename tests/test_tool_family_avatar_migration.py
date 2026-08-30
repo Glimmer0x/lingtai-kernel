@@ -10,6 +10,20 @@ from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES, ToolPluginHos
 from lingtai.tools import avatar
 from lingtai.tools.avatar import AvatarManager
 from lingtai.tools.avatar._launcher import AvatarLaunchReceipt
+from lingtai.tools.avatar.settings import (
+    AVATAR_NAME_MAX_CHARACTERS,
+    AVATAR_NAME_MIN_CHARACTERS,
+    BOOT_POLL_INTERVAL_SECONDS,
+    BOOT_STDERR_TAIL_BYTES,
+    BOOT_WAIT_SECONDS,
+    MISSION_MIN_CHARACTERS,
+    MISSION_PLACEHOLDER_PREFIXES,
+    SPAWN_COMMENT_DEFAULT,
+    SPAWN_CONFIRM_DEFAULT,
+    SPAWN_DRY_RUN_DEFAULT,
+    SPAWN_TYPE_DEFAULT,
+    SPAWN_TYPES,
+)
 
 
 class _Workdir:
@@ -59,13 +73,225 @@ def test_avatar_declaration_is_static_and_matches_its_composed_public_surface():
 
     assert declaration.name == "avatar"
     assert declaration.actions == ("spawn", "rules")
-    assert declaration.public_actions == ("spawn", "rules", "manual")
+    assert declaration.public_actions == ("spawn", "rules", "settings", "manual")
+    assert declaration.settings is True
     assert declaration.requires == ("workdir", "avatar_parent")
     assert declaration.name in OFFICIAL_TOOL_PLUGIN_NAMES
     assert avatar.get_schema()["properties"]["action"]["enum"] == list(
         declaration.public_actions
     )
     assert dict(avatar._CHILD_SPECS)["manual"] is declaration.manual_input_schema
+
+
+def test_avatar_settings_inventory_is_exact_fresh_and_excludes_private_state(
+    tmp_path,
+):
+    parent_dir = _parent_dir(tmp_path)
+    private_parent = "private-parent-identity"
+    private_runtime = "/private/runtime/location"
+    host = ToolPluginHost.grant(
+        avatar.DECLARATION,
+        {
+            "workdir": _Workdir(parent_dir),
+            "avatar_parent": _AvatarParent(
+                name=private_parent,
+                venv_path=private_runtime,
+                rules=True,
+            ),
+        },
+    )
+    manager = AvatarManager(host, launcher=_Launcher())
+
+    result = manager(
+        {"action": "settings", "input": {}, "reasoning": "inventory policy"}
+    )
+
+    def row(key, current, default, comment):
+        return {
+            "key": key,
+            "current": current,
+            "default": default,
+            "configurable": False,
+            "comment": comment,
+        }
+
+    call_defaults = "avatar-manual#spawn-call-defaults"
+    validation = "avatar-manual#spawn-validation-policy"
+    lifecycle = "avatar-manual#spawn-lifecycle-policy"
+    expected_rows = [
+        row(
+            "spawn.type.default",
+            SPAWN_TYPE_DEFAULT,
+            SPAWN_TYPE_DEFAULT,
+            call_defaults,
+        ),
+        row("spawn.type.allowed", list(SPAWN_TYPES), list(SPAWN_TYPES), validation),
+        row(
+            "spawn.comment.default",
+            SPAWN_COMMENT_DEFAULT,
+            SPAWN_COMMENT_DEFAULT,
+            call_defaults,
+        ),
+        row(
+            "spawn.dry_run.default",
+            SPAWN_DRY_RUN_DEFAULT,
+            SPAWN_DRY_RUN_DEFAULT,
+            call_defaults,
+        ),
+        row(
+            "spawn.confirm.default",
+            SPAWN_CONFIRM_DEFAULT,
+            SPAWN_CONFIRM_DEFAULT,
+            call_defaults,
+        ),
+        row(
+            "spawn.name.minimum_characters",
+            AVATAR_NAME_MIN_CHARACTERS,
+            AVATAR_NAME_MIN_CHARACTERS,
+            validation,
+        ),
+        row(
+            "spawn.name.maximum_characters",
+            AVATAR_NAME_MAX_CHARACTERS,
+            AVATAR_NAME_MAX_CHARACTERS,
+            validation,
+        ),
+        row(
+            "spawn.mission.minimum_characters",
+            MISSION_MIN_CHARACTERS,
+            MISSION_MIN_CHARACTERS,
+            validation,
+        ),
+        row(
+            "spawn.mission.placeholder_prefixes",
+            sorted(MISSION_PLACEHOLDER_PREFIXES),
+            sorted(MISSION_PLACEHOLDER_PREFIXES),
+            validation,
+        ),
+        row(
+            "spawn.boot.wait_seconds",
+            BOOT_WAIT_SECONDS,
+            BOOT_WAIT_SECONDS,
+            lifecycle,
+        ),
+        row(
+            "spawn.boot.poll_interval_seconds",
+            BOOT_POLL_INTERVAL_SECONDS,
+            BOOT_POLL_INTERVAL_SECONDS,
+            lifecycle,
+        ),
+        row(
+            "spawn.boot.stderr_tail_bytes",
+            BOOT_STDERR_TAIL_BYTES,
+            BOOT_STDERR_TAIL_BYTES,
+            lifecycle,
+        ),
+        row("spawn.preset_policy", "parent-default", "parent-default", lifecycle),
+        row(
+            "spawn.environment_policy",
+            "inherit-launcher-process",
+            "inherit-launcher-process",
+            lifecycle,
+        ),
+        row(
+            "spawn.lifecycle_policy",
+            "detached-independent",
+            "detached-independent",
+            lifecycle,
+        ),
+        row("spawn.admin_inheritance", "none", "none", lifecycle),
+    ]
+
+    assert result == {"settings": expected_rows}
+    assert all(
+        list(item) == ["key", "current", "default", "configurable", "comment"]
+        for item in result["settings"]
+    )
+    assert len({item["key"] for item in result["settings"]}) == len(expected_rows)
+    forbidden_keys = {
+        "rules.authorization_policy",
+        "rules.authorized",
+        "spawn.parent_identity",
+        "runtime.venv_path",
+        "configuration.capability_arguments",
+    }
+    assert forbidden_keys.isdisjoint(item["key"] for item in result["settings"])
+    assert private_parent not in repr(result)
+    assert private_runtime not in repr(result)
+
+    result["settings"][1]["current"].append("mutated-display-copy")
+    fresh = manager({"action": "settings", "input": {}})
+    assert fresh == {"settings": expected_rows}
+
+    manual = (Path(avatar.__file__).parent / "manual" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    headings = {
+        call_defaults: "Spawn call defaults",
+        validation: "Spawn validation policy",
+        lifecycle: "Spawn lifecycle policy",
+    }
+    for comment in {item["comment"] for item in fresh["settings"]}:
+        assert f"### {headings[comment]}" in manual
+
+
+def test_avatar_settings_is_show_only_and_has_no_environment_peer(
+    tmp_path,
+    monkeypatch,
+):
+    parent_dir = _parent_dir(tmp_path)
+    manager = AvatarManager(_host(parent_dir), launcher=_Launcher())
+    monkeypatch.setenv("LINGTAI_AVATAR_BOOT_WAIT_SECONDS", "99")
+    before = {
+        path.relative_to(parent_dir): path.read_bytes()
+        for path in parent_dir.rglob("*")
+        if path.is_file()
+    }
+
+    shown = manager({"action": "settings", "input": {}})
+    rejected = [
+        manager({"action": "settings", "input": value})
+        for value in (
+            {"set": "spawn.type.default", "value": "deep"},
+            {"reset": "spawn.boot.wait_seconds"},
+            {"extra": True},
+        )
+    ]
+
+    rows = {item["key"]: item for item in shown["settings"]}
+    assert rows["spawn.boot.wait_seconds"]["current"] == BOOT_WAIT_SECONDS
+    assert all(
+        result
+        == {
+            "status": "failed",
+            "error_code": "INVALID_ARGUMENT",
+            "message": "unsupported avatar input field",
+        }
+        for result in rejected
+    )
+    after = {
+        path.relative_to(parent_dir): path.read_bytes()
+        for path in parent_dir.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert not (parent_dir / "settings").exists()
+
+
+def test_avatar_settings_provider_failure_is_one_bounded_result():
+    def unavailable():
+        raise RuntimeError("private provider detail")
+
+    family = avatar._build_family(
+        {"spawn": lambda _input: {}, "rules": lambda _input: {}},
+        settings_provider=unavailable,
+    )
+
+    assert family.handle({"action": "settings", "input": {}}) == {
+        "status": "failed",
+        "error_code": "SETTINGS_UNAVAILABLE",
+        "message": "settings inventory is unavailable",
+    }
 
 
 def test_avatar_manager_uses_only_granted_ports_for_local_manual_and_rules(tmp_path):
@@ -143,6 +369,7 @@ def test_agent_mounts_avatar_only_through_the_official_registrar(tmp_path):
         assert [schema.name for schema in agent._tool_schemas].count("avatar") == 1
         assert agent.get_capability("avatar") is agent._tool_handlers["avatar"]
         assert isinstance(agent.get_capability("avatar"), AvatarManager)
+        assert agent._build_system_prompt()
     finally:
         agent.stop(timeout=1.0)
 

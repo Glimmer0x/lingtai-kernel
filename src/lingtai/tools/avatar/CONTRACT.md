@@ -1,10 +1,12 @@
 ---
 name: avatar-contract
 tool: avatar
-contract_version: 4
+contract_version: 5
 related_files:
+  - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/_launcher.py
+  - src/lingtai/tools/avatar/settings.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/adapters/tool_plugin_host.py
@@ -28,7 +30,8 @@ maintenance: |
 
 `avatar` spawns independent peer agents (分身) as fully detached processes, and
 distributes shared rules across the avatar subtree. It registers **one** public
-tool, `avatar`, dispatched by an `action` enum (`spawn` | `rules` | `manual`).
+tool, `avatar`, dispatched by an `action` enum (`spawn` | `rules` | `settings`
+| `manual`).
 The implementation lives in `src/lingtai/tools/avatar/`; the code is the source
 of truth.
 
@@ -80,8 +83,18 @@ choice, not a contract requirement: per that package's "Implementation
 independence" rule, avatar could hand-write an equivalent `handle()` without
 changing any promise in this file.
 
+**contract_version 5** (additive): Avatar opts into the generic read-only
+`settings` action. It appears once immediately before `manual` and returns 16
+immutable call-default, validation, and lifecycle rows with exactly
+`key/current/default/configurable/comment`. All rows are
+`configurable:false`; Avatar gains no file, environment source, writer, or
+set/reset action. Parent identity, runtime/venv/auth, handoff, and
+invocation/session facts remain outside the inventory. Provider/JSON/size
+failure stays whole-inventory and bounded by the generic contract.
+
 ## Routing Card
-Guarded by: [AV001](BEHAVIORS.md#behavior-av001)
+Guarded by: [AV001](BEHAVIORS.md#behavior-av001),
+[AV002](BEHAVIORS.md#behavior-av002)
 
 
 **Use this when:**
@@ -106,11 +119,12 @@ storage; detached-process launch -> §Cross-platform invariants.
   whose root property set is exactly `action`, `input`, `reasoning`, and
   `summarize`, with `additionalProperties: false` and
   `required: ["action", "input", "reasoning"]`. `action` is the enum
-  (`spawn` | `rules` | `manual`) — schema-required, the same convention as
+  (`spawn` | `rules` | `settings` | `manual`) — schema-required, the same convention as
   `knowledge`, `mcp`, `skills`, `notification`, `system`, `soul`, and `daemon`.
   Each action's own strict, closed `input` schema is exposed to the model
   before invocation two ways, both generated from the one child registry: an
-  `input.oneOf` disclosure branch per action, and one root `allOf`/`if`/`then`
+  `input.anyOf` disclosure branch per action (required because `settings` and
+  `manual` both have strict empty input), and one root `allOf`/`if`/`then`
   condition per action correlating that action's `const` with that exact input
   shape. Dispatch re-validates independently and is always authoritative.
 - Action-specific required inputs (`name` for spawn, `rules_content` for rules)
@@ -122,6 +136,8 @@ storage; detached-process launch -> §Cross-platform invariants.
 - `action="rules"` writes a `.rules` signal to the caller and every descendant
   so each agent refreshes its own `system/rules.md`-derived prompt. It carries
   its own admin gate, independent of `spawn` — spawning never requires admin.
+- `action="settings"` calls the Avatar-owned provider for immutable defaults,
+  constraints, and lifecycle policy. It has no mutation or configuration I/O.
 - `action="manual"` is read-only: it returns the exact packaged
   `src/lingtai/tools/avatar/manual/SKILL.md` body plus its host-local
   `manual_path`, and performs no filesystem mutation (no spawn, no ledger
@@ -146,11 +162,12 @@ any-admin-value authorization decision for `rules`. `AvatarManager` never holds
 or accepts a whole Agent. The registrar still owns reservation, activation, and
 mounting; `setup(agent)` is composition wiring only.
 
-The declaration owns operational `spawn`/`rules`; it appends the reserved
-`manual` slot. Avatar owns that child directly so its longstanding local-manual
-contract remains unchanged: `manual` returns the packaged `manual/SKILL.md`
-body and its package-local path, never an installed intrinsic copy and never a
-manager/host side effect.
+The declaration owns operational `spawn`/`rules`; generic composition inserts
+the opted-in `settings` slot immediately before the reserved `manual` slot.
+Avatar owns the manual child directly so its longstanding local-manual contract
+remains unchanged: `manual` returns the packaged `manual/SKILL.md` body and its
+package-local path, never an installed intrinsic copy and never a manager/host
+side effect.
 
 ## Tool surface
 
@@ -160,7 +177,7 @@ Every call is `avatar(action=..., input={...}, reasoning="...", summarize?=bool)
 
 | Root field | Required | Meaning |
 |---|---|---|
-| `action` | yes | One of `spawn` \| `rules` \| `manual`. No default. |
+| `action` | yes | One of `spawn` \| `rules` \| `settings` \| `manual`. No default. |
 | `input` | yes | The selected action's own strict, closed object. |
 | `reasoning` | yes | Cross-cutting rationale. For `spawn` this **is** the mission brief and becomes the avatar's first prompt. Never an `input` property. |
 | `summarize` | no | Root-only result post-processing control, absent/false by default. Never action input, never reaches a handler. |
@@ -200,6 +217,31 @@ and before any write.
 caller. This gate applies only to `rules`; `spawn` never checks admin. The
 family must not hide this stronger action behind a weaker family posture.
 
+### `avatar` — `action="settings"`
+
+Input is exactly `{}`. Success is exactly `{"settings": [...]}`, with 16 rows
+in the owner-defined stable order. Every row has exactly five fields, in order:
+`key`, `current`, `default`, `configurable`, `comment`. The comments point to
+stable `avatar-manual#...` sections that own meaning, source, precedence,
+accepted values, timing, and the only valid change procedure. No source,
+precedence, sensitivity, diagnostic, or writer metadata is projected.
+
+The inventory contains only the pre-existing immutable spawn call defaults,
+validation constraints, boot observation values, preset/environment/lifetime
+policy, and cleared newborn-admin policy. Each fixed code value is both fresh
+effective `current` and truthful `default`, and each row is
+`configurable:false`. Per-call spawn inputs vary only one invocation. Avatar
+owns no `settings/avatar.json`, action settings file, `LINGTAI_AVATAR_*`
+environment peer, or alternate source.
+
+Parent identity, runtime/venv/auth, handoff values, ignored capability
+arguments, and invocation/session state are not settings and MUST NOT be read
+or returned. A non-empty input fails before the provider runs. Provider,
+malformed-row, non-JSON, or response-size failure produces the generic fixed
+bounded no-row failure; no partial inventory or exception detail is exposed.
+SHOW performs no filesystem, process, launcher, ledger, rules, privilege,
+configuration, or environment mutation.
+
 ### `avatar` — `action="manual"`
 
 Strict empty `input` (`{}`); any field is rejected. Performs no spawn or rules
@@ -214,9 +256,9 @@ nested inside another action's result envelope and never double-wrapped.
 
 ### Invalid or missing `action`
 
-An `action` value outside `spawn`/`rules`/`manual` — including an entirely
+An `action` value outside `spawn`/`rules`/`settings`/`manual` — including an entirely
 omitted `action` key — returns
-`{error: "unknown action: <repr>, only 'spawn', 'rules', or 'manual' is supported"}`
+`{error: "unknown action: <repr>, only 'spawn', 'rules', 'settings', or 'manual' is supported"}`
 (for the omitted case, `<repr>` is `''`) without touching the filesystem, the
 ledger, `.rules`, or launching any process. There is no default action: a
 `name`- or `rules_content`-shaped payload with `action` omitted still fails
@@ -293,7 +335,7 @@ live descendant.
   `venv_python` from the avatar's `init.json` → global runtime. The
   `lingtai.tools → lingtai` import edge is allowed only inside setup/handlers.
 - Boot verification polls for the avatar's `.agent.heartbeat` handshake file (up
-  to `_BOOT_WAIT_SECS = 5.0s`, 0.1s interval). If the child exits first, spawn
+  to the owner-declared 5.0s window, 0.1s interval). If the child exits first, spawn
   is `failed` and a bounded stderr tail is returned; if neither happens in the
   window, boot is `slow` and a warning is attached.
 
@@ -311,12 +353,13 @@ live descendant.
 | Unsafe / duplicate avatar names are rejected | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_spawn_rejects_unsafe_name`, `::test_spawn_duplicate_name_error` |
 | Shallow spawn does not copy identity files | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_spawn_does_not_copy_identity_files` |
 | `action="rules"` requires admin and non-empty content; `spawn` does not inherit that gate | `src/lingtai/tools/avatar/__init__.py` | `tests/test_avatar_rules.py::test_rules_requires_admin`, `::test_rules_requires_content`; `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_spawn_does_not_inherit_rules_permission_gate` |
+| `action="settings"` is immediately before `manual`, returns the exact 16 five-field fixed-policy rows, points to owner-manual anchors, excludes private/runtime/auth/handoff state, accepts no writer input or environment peer, and fails as one bounded result | `src/lingtai/tools/avatar/settings.py`, `src/lingtai/tools/avatar/__init__.py` | `tests/test_tool_family_avatar_migration.py::test_avatar_settings_inventory_is_exact_fresh_and_excludes_private_state`, `::test_avatar_settings_is_show_only_and_has_no_environment_peer`, `::test_avatar_settings_provider_failure_is_one_bounded_result`; `tests/test_tool_settings_contract.py` |
 | Rules are distributed recursively to descendants (cycle-safe) | `src/lingtai/tools/avatar/__init__.py` | `tests/test_avatar_rules.py::test_rules_distributes_recursively`, `::test_rules_root_not_duplicated_via_cycle` |
 | Spawning distributes existing rules to the newborn | `src/lingtai/tools/avatar/__init__.py` | `tests/test_avatar_rules.py::test_spawn_distributes_existing_rules`, `::test_spawn_deep_clone_also_gets_rules_signal` |
 | `_prepare_deep` refuses a non-sibling destination | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_prepare_deep_refuses_non_sibling_dst` |
 | `action="manual"` returns the exact packaged manual body and mutates nothing | `src/lingtai/tools/avatar/__init__.py` | `tests/test_tool_family_avatar_migration.py::test_avatar_manager_uses_only_granted_ports_for_local_manual_and_rules`, `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_manual_returns_exact_body_and_performs_no_mutation` |
 | Invalid `action` fails deterministically without touching other actions | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_invalid_action_fails_deterministically`, `::test_spawn_missing_name_fails_without_affecting_other_actions` |
-| `action` is schema-required (root `required: ["action", "input", "reasoning"]`) and runtime-required — a missing `action` never defaults to `spawn`, `rules`, or `manual`, regardless of which action's fields are present, and mutates nothing | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_missing_action_fails_deterministically_regardless_of_payload_shape`; `tests/test_avatar_rules.py::TestAvatarRulesAction::test_explicit_spawn_action_required` |
+| `action` is schema-required (root `required: ["action", "input", "reasoning"]`) and runtime-required — a missing `action` never defaults to `spawn`, `rules`, `settings`, or `manual`, regardless of which action's fields are present, and mutates nothing | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_missing_action_fails_deterministically_regardless_of_payload_shape`; `tests/test_avatar_rules.py::TestAvatarRulesAction::test_explicit_spawn_action_required` |
 | The daemon blacklists the canonical `avatar` name (not the retired two-tool names) | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_build_tool_surface_blacklist`, `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_daemon_excludes_avatar_from_child_surface` |
 
 ## Verification matrix
@@ -331,6 +374,7 @@ live descendant.
 | Omitted `action` never defaults to spawn | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_missing_action_fails_deterministically_regardless_of_payload_shape` | Call `avatar(input={"name": "x", "confirm": true}, reasoning="...")` with no `action`, confirm error + no spawned process | A model omitting `action` could accidentally spawn an untracked process |
 | Rules propagate to the whole subtree | `tests/test_avatar_rules.py::test_rules_distributes_recursively` | Set rules on a root, confirm `.rules` on each descendant | Descendants run stale/ungoverned rules |
 | `manual` action is read-only | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_manual_returns_exact_body_and_performs_no_mutation` | Call `avatar(action="manual", input={}, reasoning="...")`, confirm no new files | A "manual" call could accidentally spawn or mutate rules |
+| Settings SHOW is exact, fresh, bounded, read-only, and excludes private state | `tests/test_tool_family_avatar_migration.py` settings tests plus `tests/test_tool_settings_contract.py` | Call settings with `{}` and a set-shaped input; inspect exact fields/order/manual targets and no source mutation | A writer, stale result, partial inventory, or host-state leak could drift from the owner contract |
 
 Run before merging avatar changes:
 
@@ -338,7 +382,7 @@ Run before merging avatar changes:
 python -m pytest tests/test_avatar_launcher.py tests/test_layers_avatar.py \
   tests/test_avatar_rules.py tests/test_avatar_preset_inheritance.py \
   tests/test_avatar_timezone_inheritance.py \
-  tests/test_tool_family_avatar_migration.py -q
+  tests/test_tool_family_avatar_migration.py tests/test_tool_settings_contract.py -q
 ```
 
 ## Schema and glossary ownership

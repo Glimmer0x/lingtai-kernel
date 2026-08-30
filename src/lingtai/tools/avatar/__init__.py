@@ -20,6 +20,7 @@ Usage (LTP v2 envelope — one action, one strict child input):
     # avatar(action="spawn", input={"name": "researcher"}, reasoning="...")
     # avatar(action="spawn", input={"name": "clone", "type": "deep"}, reasoning="...")
     # avatar(action="rules", input={"rules_content": "..."}, reasoning="...")
+    # avatar(action="settings", input={}, reasoning="...")
     # avatar(action="manual", input={}, reasoning="...")
 
 The spawn mission brief is root ``reasoning`` (normalized to ``_reasoning`` by
@@ -44,9 +45,24 @@ from typing import TYPE_CHECKING, Any, Mapping
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
-from ..tool_family import ChildTool, ToolFamily
+from ..tool_family import ChildTool, SettingsProvider, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
+from .settings import (
+    AVATAR_NAME_MAX_CHARACTERS,
+    AVATAR_NAME_MIN_CHARACTERS,
+    BOOT_POLL_INTERVAL_SECONDS,
+    BOOT_STDERR_TAIL_BYTES,
+    BOOT_WAIT_SECONDS,
+    MISSION_MIN_CHARACTERS,
+    MISSION_PLACEHOLDER_PREFIXES,
+    SPAWN_COMMENT_DEFAULT,
+    SPAWN_CONFIRM_DEFAULT,
+    SPAWN_DRY_RUN_DEFAULT,
+    SPAWN_TYPE_DEFAULT,
+    SPAWN_TYPES,
+    AvatarSettingsProvider,
+)
 
 
 def _is_alive(working_dir) -> bool:
@@ -67,16 +83,6 @@ def _is_alive(working_dir) -> bool:
 # control chars, no dots. The structural chars are what make this dangerous;
 # the script itself is the agent's choice.
 _AVATAR_NAME_RE = re.compile(r"^[\w-]+$")  # \w is Unicode-aware in Py3 re
-_AVATAR_NAME_MAX_LEN = 64
-
-# Mission quality gate — minimum length below which we treat the mission as a
-# probable accidental spawn unless the caller explicitly confirms.
-_MISSION_MIN_CHARS = 20
-
-# Suspicious tokens that indicate a debug/test placeholder mission. Compared
-# case-insensitively against the trimmed mission (full match) and against the
-# first whitespace-delimited token (prefix match like "test something").
-_MISSION_SUSPICIOUS = {"test", "debug", "check", "tmp", "temp", "foo", "bar"}
 
 
 def _mission_looks_unsafe(mission: str) -> tuple[bool, str]:
@@ -89,11 +95,11 @@ def _mission_looks_unsafe(mission: str) -> tuple[bool, str]:
     trimmed = (mission or "").strip()
     if not trimmed:
         return True, "mission is empty"
-    if len(trimmed) < _MISSION_MIN_CHARS:
+    if len(trimmed) < MISSION_MIN_CHARACTERS:
         return True, f"mission is very short ({len(trimmed)} chars)"
     lower = trimmed.lower()
-    if lower in _MISSION_SUSPICIOUS or lower.startswith(
-        tuple(f"{w} " for w in _MISSION_SUSPICIOUS)
+    if lower in MISSION_PLACEHOLDER_PREFIXES or lower.startswith(
+        tuple(f"{word} " for word in MISSION_PLACEHOLDER_PREFIXES)
     ):
         return True, "mission looks like a debug/test placeholder"
     return False, ""
@@ -126,7 +132,7 @@ _SPAWN_INPUT_SCHEMA: dict[str, Any] = {
         },
         "type": {
             "type": ["string", "null"],
-            "enum": ["shallow", "deep", None],
+            "enum": [*SPAWN_TYPES, None],
             "description": (
                 "'shallow' (default): blank slate — init.json only. 'deep': "
                 "full copy of character, pad, and codex. Null for the default."
@@ -184,12 +190,15 @@ _DECLARED_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
 
 _DESCRIPTION = (
     "Spawn an independent agent (他我), set network rules for descendants, "
-    "or read the avatar manual. Requires an explicit action — no default. "
+    "inventory Avatar settings, or read the avatar manual. Requires an "
+    "explicit action — no default. "
     "avatar(action='spawn', input={'name': 'researcher', ...}, "
     "reasoning='<the avatar's mission>'): inherits init.json, boots on "
     "default preset; your reasoning becomes the avatar's first prompt. "
     "avatar(action='rules', input={'rules_content': '...'}, reasoning='...'): "
     "distribute rules to self + all descendants (requires karma). "
+    "avatar(action='settings', input={}, reasoning='...'): show immutable "
+    "defaults, constraints, and lifecycle policy. "
     "avatar(action='manual', input={}, reasoning='...'): return the "
     "avatar-manual skill body. See avatar-manual skill for full guidance."
 )
@@ -220,7 +229,11 @@ def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
     raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
 
-def _build_family(handlers: Mapping[str, Any] | None = None) -> ToolFamily:
+def _build_family(
+    handlers: Mapping[str, Any] | None = None,
+    *,
+    settings_provider: SettingsProvider | None = None,
+) -> ToolFamily:
     """Compose Avatar's declared actions plus its local, reserved manual child."""
     action_handlers = (
         {name: _unused for name, _ in _DECLARED_CHILD_SPECS}
@@ -241,6 +254,11 @@ def _build_family(handlers: Mapping[str, Any] | None = None) -> ToolFamily:
                 title="manual input",
             ),
         ],
+        settings_provider=(
+            settings_provider
+            if settings_provider is not None
+            else AvatarSettingsProvider()
+        ),
     )
 
 
@@ -269,13 +287,13 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind,
     requires=("workdir", "avatar_parent"),
     glossary_package=__package__,
+    settings=True,
 )
 
 # Kept as the compatibility-visible complete action/spec registry, but derived
 # from the declaration so schema-only and host-bound families cannot drift.
-_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
-    *_DECLARED_CHILD_SPECS,
-    ("manual", DECLARATION.manual_input_schema),
+_CHILD_SPECS: tuple[tuple[str, Mapping[str, Any]], ...] = tuple(
+    DECLARATION.public_input_schemas().items()
 )
 _SUPPORTED_ACTIONS_PHRASE = (
     "".join(f"{action!r}, " for action in DECLARATION.public_actions[:-1])
@@ -312,10 +330,12 @@ class AvatarManager:
         self._launcher = launcher
         # The spawn mission brief reaches ``_spawn`` out-of-band via
         # ``self._pending_reasoning``, set by ``handle()`` (see ``handle``).
-        self._family = _build_family({
-            "spawn": self._dispatch_spawn,
-            "rules": self._dispatch_rules,
-        })
+        self._family = _build_family(
+            {
+                "spawn": self._dispatch_spawn,
+                "rules": self._dispatch_rules,
+            }
+        )
         self._pending_reasoning: str | None = None
 
     # ------------------------------------------------------------------
@@ -396,14 +416,14 @@ class AvatarManager:
         newborn's first prompt and gates the mission-quality check."""
         parent_working_dir = self._host.workdir.path
         peer_name = args.get("name")
-        avatar_type = args.get("type", "shallow")
-        dry_run = bool(args.get("dry_run", False))
-        confirm = bool(args.get("confirm", False))
+        avatar_type = args.get("type", SPAWN_TYPE_DEFAULT)
+        dry_run = bool(args.get("dry_run", SPAWN_DRY_RUN_DEFAULT))
+        confirm = bool(args.get("confirm", SPAWN_CONFIRM_DEFAULT))
 
         if peer_name is None:
             return {"error": "name is required — pick a true name (真名) for the 他我 (e.g. 'researcher', '学者')"}
 
-        if avatar_type not in ("shallow", "deep"):
+        if avatar_type not in SPAWN_TYPES:
             return {"error": "type must be 'shallow' or 'deep'"}
 
         # Name doubles as working-dir basename. Enforce a safe, single-segment
@@ -412,17 +432,18 @@ class AvatarManager:
         # from the ledger and mail-routing layer).
         if (
             not isinstance(peer_name, str)
-            or not peer_name
+            or len(peer_name) < AVATAR_NAME_MIN_CHARACTERS
             or peer_name in (".", "..")
             or peer_name.startswith(".")
-            or len(peer_name) > _AVATAR_NAME_MAX_LEN
+            or len(peer_name) > AVATAR_NAME_MAX_CHARACTERS
             or not _AVATAR_NAME_RE.match(peer_name)
         ):
             return {
                 "error": (
                     f"Invalid avatar name '{peer_name}': must be a bare directory "
                     f"name — letters (any script), digits, underscore, or hyphen; "
-                    f"no slashes, dots, spaces, or leading '.'; 1-{_AVATAR_NAME_MAX_LEN} chars."
+                    f"no slashes, dots, spaces, or leading '.'; "
+                    f"{AVATAR_NAME_MIN_CHARACTERS}-{AVATAR_NAME_MAX_CHARACTERS} chars."
                 )
             }
 
@@ -497,7 +518,7 @@ class AvatarManager:
                     "mission_chars": len(preview_mission),
                     "mission_unsafe": unsafe,
                     "mission_reason": reason if unsafe else "",
-                    "comment": args.get("comment", ""),
+                    "comment": args.get("comment", SPAWN_COMMENT_DEFAULT),
                 },
                 "message": "Dry run — no process spawned, no files written.",
             }
@@ -571,7 +592,7 @@ class AvatarManager:
             first_prompt = f"{parent_prompt}\n\n{reasoning.strip()}"
 
         # Write avatar's init.json (modified copy of parent's).
-        avatar_comment = args.get("comment", "")
+        avatar_comment = args.get("comment", SPAWN_COMMENT_DEFAULT)
         avatar_init = self._make_avatar_init(
             parent_init, peer_name, comment=avatar_comment,
             parent_working_dir=parent_working_dir,
@@ -676,8 +697,11 @@ class AvatarManager:
                 stderr_tail = ""
                 try:
                     raw = stderr_path.read_bytes()
-                    if len(raw) > 2000:
-                        raw = b"...[truncated]...\n" + raw[-2000:]
+                    if len(raw) > BOOT_STDERR_TAIL_BYTES:
+                        raw = (
+                            b"...[truncated]...\n"
+                            + raw[-BOOT_STDERR_TAIL_BYTES:]
+                        )
                     stderr_tail = raw.decode("utf-8", errors="replace").strip()
                 except OSError:
                     pass
@@ -839,8 +863,8 @@ class AvatarManager:
     # Boot verification — how long to wait for the child to write .agent.heartbeat
     # before we conclude it crashed. Healthy boots finish well under 2s on local
     # disk; 5s is generous enough for slow systems to still pass.
-    _BOOT_WAIT_SECS = 5.0
-    _BOOT_POLL_INTERVAL = 0.1
+    _BOOT_WAIT_SECS = BOOT_WAIT_SECONDS
+    _BOOT_POLL_INTERVAL = BOOT_POLL_INTERVAL_SECONDS
 
     def _launch(self, working_dir: Path) -> tuple[AvatarLaunchReceipt, Path]:
         """Launch `lingtai-agent run <dir>` as a fully detached process.

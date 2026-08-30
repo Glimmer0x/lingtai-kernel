@@ -138,7 +138,7 @@ def test_public_export_and_only_this_owner_opts_in():
         name: importlib.import_module(f"lingtai.tools.{modules.get(name, name)}").DECLARATION
         for name in OFFICIAL_TOOL_PLUGIN_NAMES
     }
-    expected_official = {'system'}
+    expected_official = {"avatar", "system"}
     assert {name for name, item in declarations.items() if item.settings} == expected_official
     for name, item in declarations.items():
         assert ("settings" in item.public_actions) is (name in expected_official)
@@ -155,7 +155,7 @@ def test_parent_contract_states_declaration_provider_opt_in_not_owner_file():
     ).read_text(encoding="utf-8")
     contract = (repo / "src/lingtai/tools/CONTRACT.md").read_text(encoding="utf-8")
 
-    assert "System is currently the\nonly production family opted in" in manual
+    assert "Production families opt\nin only through their own reviewed vertical" in manual
     assert "declaration opt-in\n   plus this bound provider" in manual
     assert "may be absent" in manual
     assert "ToolPluginDeclaration(settings=True)" in contract

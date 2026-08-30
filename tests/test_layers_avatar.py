@@ -295,13 +295,13 @@ class TestMissionQualityGate:
         """The dry_run/confirm gates stay model-visible after the LTP v2 migration.
 
         Under the action-separated envelope they live inside the ``spawn``
-        branch of ``input.oneOf`` (and ``rules_content`` inside the ``rules``
+        branch of ``input.anyOf`` (and ``rules_content`` inside the ``rules``
         branch) rather than at the root, but they must still be declared with
         their gate types so the model can actually reach them.
         """
         from lingtai.tools.avatar import get_schema
         sch = get_schema("en")
-        branches = {b["title"]: b for b in sch["properties"]["input"]["oneOf"]}
+        branches = {b["title"]: b for b in sch["properties"]["input"]["anyOf"]}
         spawn_props = branches["spawn input"]["properties"]
         assert "dry_run" in spawn_props
         assert spawn_props["dry_run"]["type"] == ["boolean", "null"]
@@ -309,7 +309,9 @@ class TestMissionQualityGate:
         assert spawn_props["confirm"]["type"] == ["boolean", "null"]
         assert "rules_content" in branches["rules input"]["properties"]
         assert sch["required"] == ["action", "input", "reasoning"]
-        assert sch["properties"]["action"]["enum"] == ["spawn", "rules", "manual"]
+        assert sch["properties"]["action"]["enum"] == [
+            "spawn", "rules", "settings", "manual"
+        ]
 
     def test_description_points_to_avatar_manual_after_prompt_compaction(self):
         """The terse tool description should route safety guidance to the manual.
@@ -317,7 +319,7 @@ class TestMissionQualityGate:
         Prompt-token compaction moved verbose WARNING copy out of the always-on
         tool description and into avatar-manual. The safety contract now lives
         in the schema gates (dry_run/confirm, now inside the spawn branch of
-        ``input.oneOf``) plus the manual pointer, not in a long description
+        ``input.anyOf``) plus the manual pointer, not in a long description
         string.
         """
         from lingtai.tools.avatar import get_description, get_schema
@@ -326,7 +328,7 @@ class TestMissionQualityGate:
         assert "avatar-manual" in desc
         assert "WARNING" not in desc
         spawn_props = {
-            b["title"]: b for b in schema["properties"]["input"]["oneOf"]
+            b["title"]: b for b in schema["properties"]["input"]["anyOf"]
         }["spawn input"]["properties"]
         assert "confirm" in spawn_props
         assert "dry_run" in spawn_props
@@ -394,7 +396,7 @@ class TestUnifiedAvatarTool:
         Pre-migration the schema was a plain object with every action's fields
         merged at the root and no top-level combinators. It is now the
         action-separated envelope: four root fields, three of them required,
-        closed to anything else, with one ``input.oneOf`` branch per action.
+        closed to anything else, with one ``input.anyOf`` branch per action.
         """
         from lingtai.tools.avatar import get_schema
         sch = get_schema("en")
@@ -403,8 +405,10 @@ class TestUnifiedAvatarTool:
         assert sch["required"] == ["action", "input", "reasoning"]
         assert sch["additionalProperties"] is False
         assert sch["properties"]["action"]["type"] == "string"
-        assert sch["properties"]["action"]["enum"] == ["spawn", "rules", "manual"]
-        assert len(sch["properties"]["input"]["oneOf"]) == 3
+        assert sch["properties"]["action"]["enum"] == [
+            "spawn", "rules", "settings", "manual"
+        ]
+        assert len(sch["properties"]["input"]["anyOf"]) == 4
 
     def test_spawn_dispatch_preserves_behavior_and_reasoning(self, tmp_path, fake_avatar_launch):
         """action='spawn' preserves outputs and _reasoning → first-prompt propagation."""
@@ -500,7 +504,10 @@ class TestUnifiedAvatarTool:
                         working_dir=tmp_path / "test", capabilities=["avatar"],
                         admin={"karma": True})
         mgr = parent.get_capability("avatar")
-        expected_error = "unknown action: '', only 'spawn', 'rules', or 'manual' is supported"
+        expected_error = (
+            "unknown action: '', only 'spawn', 'rules', 'settings', "
+            "or 'manual' is supported"
+        )
 
         # Payload shaped like a valid rules call, but action omitted.
         rules_shaped = mgr.handle({"rules_content": "Be concise."})

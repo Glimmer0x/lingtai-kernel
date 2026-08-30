@@ -4,8 +4,8 @@ description: >
   Developer reference for opting one tool family into bounded, read-only
   settings discovery without changing other families.
 tags: [lingtai, system-manual, tool-family, settings]
-version: 4.0.1
-last_changed_at: 2026-08-28T00:00:00Z
+version: 4.0.2
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/tools/tool_family/ANATOMY.md
@@ -22,9 +22,9 @@ maintenance: |
 ---
 # ToolFamily settings SHOW reference
 
-Use this for one bounded family-owner change at a time. System is currently the
-only production family opted in; every later owner remains opted out until its
-own vertical change.
+Use this for one bounded family-owner change at a time. Production families opt
+in only through their own reviewed vertical change; no owner document or
+another family's opt-in enables them implicitly.
 
 ## Opt in
 
