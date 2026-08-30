@@ -252,6 +252,23 @@ def test_feishu_config_row_names_startup_show_and_redaction_owners() -> None:
     assert "SHOW redacts all three" in row[7]
 
 
+def test_telegram_rows_match_the_real_startup_parsers_and_settings_owner() -> None:
+    rows = {row[0].strip("`"): row for row in _registry_rows()}
+    config = rows["LINGTAI_TELEGRAM_CONFIG"]
+    poll = rows["LINGTAI_TASKCARD_POLL_INTERVAL"]
+
+    assert "LINGTAI_AGENT_DIR" in config[2] and "cwd" in config[2]
+    assert "Resolved and loaded at MCP startup" in config[4]
+    assert "settings.py" in config[6]
+    assert "SHOW redacts" in config[7]
+
+    assert "float()" in poll[2]
+    assert all(value in poll[2] for value in ("zero", "negative", "NaN", "infinities"))
+    assert "class/import snapshot" in poll[4]
+    assert "Nonnumeric text fails module load" in poll[5]
+    assert "strict settings SHOW unavailable" in poll[5]
+    assert "settings.py" in poll[6]
+
 def test_system_declaration_only_literals_do_not_satisfy_source_coverage() -> None:
     source = '''
 SYSTEM_ENVIRONMENT_SETTING_SPECS = ("LINGTAI_DECLARATION_ONLY_SPEC_FAKE",)

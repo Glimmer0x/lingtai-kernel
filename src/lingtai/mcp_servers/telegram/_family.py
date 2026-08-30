@@ -19,6 +19,7 @@ from lingtai.tools.tool_family import ChildTool, ToolFamily
 
 from . import updates as tg_updates
 from .plugin import TELEGRAM_ACTIONS, TELEGRAM_DECLARED_ACTIONS, TELEGRAM_PLUGIN
+from .settings import build_telegram_settings_provider
 
 # The package's own actions plus the plugin-appended reserved ``manual``. Kept
 # local to avoid importing the manager (which consumes this schema).
@@ -235,6 +236,7 @@ def _schema_only_family() -> ToolFamily:
             ChildTool(action, schemas[action], lambda _input: {})
             for action in _DECLARED_ACTIONS
         ],
+        settings_provider=build_telegram_settings_provider(None),
     )
 
 
@@ -248,7 +250,9 @@ def telegram_schema() -> dict[str, Any]:
     # discriminator still correlates each action to its exact closed branch;
     # use anyOf for the model-discovery list so native JSON-Schema validators do
     # not reject a valid input merely because another action's branch also fits.
-    schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
+    input_schema = schema["properties"]["input"]
+    if "oneOf" in input_schema:
+        input_schema["anyOf"] = input_schema.pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "Telegram action. Each action owns a strict input branch. Content-bearing "
         "send/reply/edit calls default to rendering_mode=\"Markdown\"; the agent may omit "
@@ -343,7 +347,10 @@ def build_telegram_family(manager: Any | None) -> ToolFamily:
         )
         for action in _DECLARED_ACTIONS
     ]
-    return TELEGRAM_PLUGIN.build_family(children)
+    return TELEGRAM_PLUGIN.build_family(
+        children,
+        settings_provider=build_telegram_settings_provider(manager),
+    )
 
 
 def handle_telegram(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
