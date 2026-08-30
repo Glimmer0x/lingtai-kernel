@@ -28,6 +28,15 @@ def _write_config(dir_path: Path) -> Path:
     return cfg
 
 
+def _write_manager_config(config_path: Path) -> None:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps({"poll_interval": 1.0}), encoding="utf-8")
+    (config_path.parent / "credentials.json").write_text(
+        json.dumps({"bot_token": "x", "user_id": "wxid_x"}),
+        encoding="utf-8",
+    )
+
+
 def _agent_layout(tmp_path: Path) -> tuple[Path, Path]:
     """Return (project_root, agent_dir) for ``<project>/.lingtai/<agent>/``."""
     project_root = tmp_path / "project"
@@ -161,6 +170,85 @@ def test_missing_agent_dir_falls_back_to_cwd(tmp_path, monkeypatch):
     assert diag["agent_dir"] is None
 
 
+@pytest.mark.parametrize(
+    "resolution_case",
+    ("absolute", "agent_relative", "legacy_root", "cwd", "normalized"),
+)
+def test_build_manager_snapshots_exact_loaded_config_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resolution_case: str,
+):
+    project_root, agent_dir = _agent_layout(tmp_path)
+    relative_path = Path(".secrets/wechat/owner-settings.json")
+
+    if resolution_case == "absolute":
+        selected_path = tmp_path / "absolute" / "owner-settings.json"
+        config_path_raw = str(selected_path)
+        monkeypatch.setenv("LINGTAI_AGENT_DIR", str(agent_dir))
+    elif resolution_case == "agent_relative":
+        selected_path = agent_dir / relative_path
+        config_path_raw = str(relative_path)
+        monkeypatch.setenv("LINGTAI_AGENT_DIR", str(agent_dir))
+    elif resolution_case == "legacy_root":
+        selected_path = project_root / relative_path
+        config_path_raw = str(relative_path)
+        monkeypatch.setenv("LINGTAI_AGENT_DIR", str(agent_dir))
+    elif resolution_case == "cwd":
+        selected_path = tmp_path / relative_path
+        config_path_raw = str(relative_path)
+        monkeypatch.delenv("LINGTAI_AGENT_DIR", raising=False)
+        monkeypatch.chdir(tmp_path)
+    else:
+        normalized_raw = ".secrets/wechat/intermediate/../owner-settings.json"
+        selected_path = agent_dir / Path(normalized_raw)
+        config_path_raw = normalized_raw
+        monkeypatch.setenv("LINGTAI_AGENT_DIR", str(agent_dir))
+        (agent_dir / ".secrets" / "wechat" / "intermediate").mkdir(
+            parents=True,
+        )
+
+    _write_manager_config(selected_path)
+    monkeypatch.setenv("LINGTAI_WECHAT_CONFIG", config_path_raw)
+
+    manager, _working_dir = server.build_manager()
+
+    assert manager._settings_config_path == str(selected_path)
+
+
+def test_build_manager_keeps_loaded_path_when_environment_changes_between_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _project_root, agent_dir = _agent_layout(tmp_path)
+    selected_path = agent_dir / ".secrets" / "wechat" / "loaded-settings.json"
+    _write_manager_config(selected_path)
+    monkeypatch.setenv("LINGTAI_AGENT_DIR", str(agent_dir))
+    monkeypatch.setenv(
+        "LINGTAI_WECHAT_CONFIG",
+        ".secrets/wechat/loaded-settings.json",
+    )
+    load_config_and_credentials = server.load_config_and_credentials
+
+    def load_then_change_environment():
+        loaded = load_config_and_credentials()
+        monkeypatch.setenv(
+            "LINGTAI_WECHAT_CONFIG",
+            ".secrets/wechat/different-settings.json",
+        )
+        return loaded
+
+    monkeypatch.setattr(
+        server,
+        "load_config_and_credentials",
+        load_then_change_environment,
+    )
+
+    manager, _working_dir = server.build_manager()
+
+    assert manager._settings_config_path == str(selected_path)
+
+
 # --- load path and status path share the same resolution --------------------
 
 def test_load_and_status_resolve_identically(tmp_path, monkeypatch):
@@ -172,10 +260,10 @@ def test_load_and_status_resolve_identically(tmp_path, monkeypatch):
     monkeypatch.setenv("LINGTAI_AGENT_DIR", str(agent_dir))
     monkeypatch.setenv("LINGTAI_WECHAT_CONFIG", ".secrets/wechat/config.json")
 
-    _file_cfg, _creds, config_dir = server.load_config_and_credentials()
+    _file_cfg, _creds, loaded_config_path = server.load_config_and_credentials()
     status_path = server._resolve_config_path_for_status(".secrets/wechat/config.json")
 
-    assert config_dir == cfg.parent
+    assert loaded_config_path == cfg
     assert status_path == cfg
 
 

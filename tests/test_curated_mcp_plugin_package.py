@@ -3,12 +3,11 @@
 A curated MCP is a plugin-style package: the same folder ships the server, the
 bundled ``SKILL.md``, and the stdio MCP declaration the curated catalog
 publishes. ``lingtai.mcp_servers._plugin.CuratedMcpPlugin`` binds those three
-and owns the one promise a package must not be able to break — the reserved
-``manual`` action, appended from the packaged skill rather than declared by the
-package.
+and owns reserved action composition: optional ``settings`` immediately before
+the ``manual`` action sourced from the packaged skill.
 
-These tests pin the packaging promise and the *unchanged* public Telegram and
-WeChat surfaces around it. They make no network call and stand up no account:
+These tests pin the packaging promise and the public Telegram and WeChat
+surfaces around it. They make no network call and stand up no account:
 the manual is account-independent and each family's dispatch boundary rejects
 every invalid envelope before any manager I/O.
 """
@@ -224,9 +223,11 @@ def test_wechat_declaration_launches_the_declaring_package_and_validates_as_a_re
     assert mcp_registry.validate_record(declaration) == (True, None)
 
 
-def test_wechat_package_does_not_declare_manual_and_the_plugin_appends_it_last():
+def test_wechat_package_declares_neither_reserved_child_and_plugin_orders_them():
     assert _plugin.MANUAL_ACTION not in WECHAT_DECLARED_ACTIONS
-    assert WECHAT_ACTIONS == (*WECHAT_DECLARED_ACTIONS, "manual")
+    assert "settings" not in WECHAT_DECLARED_ACTIONS
+    assert WECHAT_ACTIONS == (*WECHAT_DECLARED_ACTIONS, "settings", "manual")
+    assert WECHAT_ACTIONS[-2] == "settings"
     assert WECHAT_ACTIONS[-1] == "manual"
 
 
@@ -234,6 +235,11 @@ def test_wechat_composed_family_always_carries_a_manual_child_with_a_strict_empt
     family = wechat_family.build_wechat_family(None)
     assert family.has_manual()
     assert family.child_names == WECHAT_ACTIONS
+    assert wechat_family._wechat_input_schemas()["settings"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
     assert wechat_family._wechat_input_schemas()["manual"] == {
         "type": "object",
         "properties": {},
@@ -283,7 +289,10 @@ def test_wechat_public_schema_keeps_the_strict_action_family_shape():
     assert len(schema["allOf"]) == len(WECHAT_ACTIONS)
     assert "wechat-mcp-manual" in schema["properties"]["action"]["description"]
     branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
-    assert branch_titles == [f"{action} input" for action in WECHAT_ACTIONS]
+    assert branch_titles == [
+        "settings inventory input" if action == "settings" else f"{action} input"
+        for action in WECHAT_ACTIONS
+    ]
 
 
 def test_wechat_declared_actions_still_dispatch_flat_into_the_manager():

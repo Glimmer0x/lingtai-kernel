@@ -7,9 +7,9 @@ schema shape (``action``/``input``/``reasoning``/``summarize``), the
 cross-action field leakage, missing required root fields, and unknown
 actions/params (``ACTION_REQUIRED`` / ``INVALID_ARGUMENT``) before any
 manager I/O — then that every one of the 9 declared actions routes to the
-correct flat manager call, while the reserved ``manual`` action (appended by
-``WECHAT_PLUGIN``) bypasses the manager entirely and answers straight from the
-packaged skill. ``send``'s ``text``/``media_path`` is a
+correct flat manager call, while the reserved ``settings`` and ``manual``
+actions (appended by ``WECHAT_PLUGIN``) bypass manager actions. ``send``'s
+``text``/``media_path`` is a
 non-exclusive ``anyOf`` (the manager sends both in one call when both are
 given), not a ``oneOf`` choice — covered explicitly below.
 """
@@ -43,7 +43,7 @@ class _CountingManager:
 def _branches(schema: dict) -> dict[str, dict]:
     inputs = schema["properties"]["input"]
     branches = inputs.get("oneOf") or inputs.get("anyOf")
-    return {branch["title"].removesuffix(" input"): branch for branch in branches}
+    return dict(zip(WECHAT_ACTIONS, branches, strict=True))
 
 
 # ---------------------------------------------------------------------------
@@ -60,10 +60,11 @@ def test_root_schema_has_exactly_the_ltp_v2_envelope_fields():
     assert props["summarize"]["type"] == "boolean"
 
 
-def test_action_enum_is_exactly_the_ten_wechat_actions():
+def test_action_enum_is_exactly_the_eleven_wechat_actions():
     assert WECHAT_ACTIONS == (
         "send", "check", "read", "reply", "search",
-        "contacts", "add_contact", "remove_contact", "accounts", "manual",
+        "contacts", "add_contact", "remove_contact", "accounts",
+        "settings", "manual",
     )
 
 
@@ -115,6 +116,7 @@ def test_no_audit_or_presentation_field_leaks_into_any_action_branch():
         ("remove_contact", {"alias": "friend"}),
         ("remove_contact", {"user_id": "wxid_a@im.wechat"}),
         ("accounts", {}),
+        ("settings", {}),
         ("manual", {}),
     ],
 )
@@ -140,6 +142,7 @@ def test_valid_payload_accepted_per_action(action, valid_input):
         ("check", {"user_id": "leak"}),
         ("contacts", {"query": "leak"}),
         ("accounts", {"alias": "leak"}),
+        ("settings", {"poll_interval": 2}),
         ("manual", {"reasoning": "leak"}),
         # wrong types
         ("send", {"user_id": "a", "text": 5}),
@@ -224,8 +227,8 @@ def test_unsupported_root_argument_is_rejected_before_action_lookup():
 
 
 # ---------------------------------------------------------------------------
-# Dispatch routing: every one of the 10 actions reaches the correct flat
-# manager call with only its own validated input.
+# Dispatch routing: all nine operational actions reach the correct flat
+# manager call with only their own validated input.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -315,7 +318,7 @@ def test_send_still_rejects_neither_field_and_cross_branch_host_keys(bad_send_in
     assert manager.calls == []
 
 
-def test_dispatch_covers_all_ten_actions_exactly_once():
+def test_dispatch_covers_all_eleven_actions_exactly_once():
     manager = _CountingManager()
     inputs = {
         "send": {"user_id": "a", "text": "hi"},
@@ -327,15 +330,18 @@ def test_dispatch_covers_all_ten_actions_exactly_once():
         "add_contact": {"user_id": "a", "alias": "x"},
         "remove_contact": {"alias": "x"},
         "accounts": {},
+        "settings": {},
         "manual": {},
     }
     assert set(inputs) == set(WECHAT_ACTIONS)
     for action in WECHAT_ACTIONS:
         handle_wechat(manager, {"action": action, "input": inputs[action], "reasoning": "r"})
-    # ``manual`` is plugin-owned and never reaches the manager (see
-    # test_manual_bypasses_the_manager_and_answers_from_the_plugin); the other
-    # nine declared actions still dispatch flat, in stable order.
-    declared = [action for action in WECHAT_ACTIONS if action != "manual"]
+    # Both reserved children bypass manager actions; the nine declared actions
+    # still dispatch flat, in stable order.
+    declared = [
+        action for action in WECHAT_ACTIONS
+        if action not in {"settings", "manual"}
+    ]
     assert [c["action"] for c in manager.calls] == declared
 
 
@@ -444,7 +450,7 @@ def test_openai_responses_scrub_preserves_family_root_and_action_branches():
 
 
 # ---------------------------------------------------------------------------
-# B3 regression: check/contacts/accounts/manual all publish an empty-object
+# B3 regression: check/contacts/accounts/settings/manual publish empty-object
 # input branch, so a oneOf discovery list makes {} match more than one
 # branch — the same "instance is valid under each of ..." collision the
 # telegram schema documents. The published discovery list must be anyOf, not
@@ -457,18 +463,20 @@ def test_input_discovery_branch_is_anyof_not_oneof():
 
 
 def test_zero_input_action_schema_is_decisive_not_ambiguous():
-    """{} legitimately satisfies all four empty-object branches at once
-    (check/contacts/accounts/manual). Under oneOf that is an ambiguous
+    """{} legitimately satisfies five empty-object branches at once.
+
+    Under oneOf that is an ambiguous
     "matches more than one schema" rejection; under anyOf it is a clean,
     decisive accept — exactly what a real MCP client validating against the
     published discovery schema needs for a zero-input action to be usable."""
     branches = WECHAT_SCHEMA["properties"]["input"]["anyOf"]
     empty_branches = [b for b in branches if b.get("properties") == {}]
     assert {b["title"] for b in empty_branches} == {
-        "check input", "contacts input", "accounts input", "manual input",
+        "check input", "contacts input", "accounts input",
+        "settings inventory input", "manual input",
     }
     matches = sum(1 for b in empty_branches if _basic_validate({}, b))
-    assert matches == len(empty_branches) == 4
+    assert matches == len(empty_branches) == 5
 
 
 # ---------------------------------------------------------------------------

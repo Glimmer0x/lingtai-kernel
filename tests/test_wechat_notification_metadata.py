@@ -214,7 +214,11 @@ def test_server_closure_uses_real_licc_binding_and_propagates_result(
     monkeypatch.setattr(
         wechat_server,
         "load_config_and_credentials",
-        lambda: ({}, {"bot_token": "test-token", "user_id": "test-bot"}, tmp_path),
+        lambda: (
+            {},
+            {"bot_token": "test-token", "user_id": "test-bot"},
+            tmp_path / "config.json",
+        ),
     )
     calls: list[dict] = []
     outcomes = iter((False, True))

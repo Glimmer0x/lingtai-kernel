@@ -118,6 +118,7 @@ class WechatManager:
         on_inbound: Callable[[dict], bool | None],
         config_source: str | None = None,
         credentials_source: str | None = None,
+        settings_config_path: str | None = None,
     ) -> None:
         self._base_url = base_url
         self._cdn_base_url = cdn_base_url
@@ -129,6 +130,7 @@ class WechatManager:
         self._on_inbound = on_inbound
         self._config_source = config_source
         self._credentials_source = credentials_source
+        self._settings_config_path = settings_config_path
         self._last_verified_at: str | None = None
 
         # Filesystem dirs
