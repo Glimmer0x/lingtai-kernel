@@ -6,9 +6,9 @@ family — mirrors ``telegram/_family.py``.
 
 Action *composition* belongs to the package's plugin descriptor (`plugin.py`):
 this module declares IMAP's own actions and their strict `input` branches, and
-`IMAP_PLUGIN` appends the reserved `manual` action from the packaged
-`SKILL.md`. `manual` therefore never routes through the manager and cannot be
-omitted, re-schema'd, or rebound to other material from here.
+`IMAP_PLUGIN` inserts the reserved read-only `settings` action immediately
+before the packaged `manual`. Neither reserved action routes through the
+business manager.
 """
 from __future__ import annotations
 
@@ -18,9 +18,10 @@ from typing import Any
 from lingtai.tools.tool_family import ChildTool, ToolFamily
 
 from .plugin import IMAP_ACTIONS, IMAP_DECLARED_ACTIONS, IMAP_PLUGIN
+from .settings import imap_setting_rows
 
-# The package's own actions plus the plugin-appended reserved ``manual``. Kept
-# local to avoid importing the manager (which consumes this schema).
+# The package's own actions plus plugin-composed ``settings`` and ``manual``.
+# Kept local to avoid importing the manager (which consumes this schema).
 _DECLARED_ACTIONS = IMAP_DECLARED_ACTIONS
 _ACTIONS = IMAP_ACTIONS
 
@@ -264,6 +265,7 @@ def _schema_only_family() -> ToolFamily:
             ChildTool(action, schemas[action], lambda _input: {})
             for action in _DECLARED_ACTIONS
         ],
+        settings_provider=lambda: imap_setting_rows(None),
     )
 
 
@@ -277,7 +279,9 @@ def imap_schema() -> dict[str, Any]:
     # correlates each action to its exact closed branch; use anyOf for the
     # model-discovery list so native JSON-Schema validators do not reject a
     # valid input merely because another action's branch also fits.
-    schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
+    input_schema = schema["properties"]["input"]
+    if "oneOf" in input_schema:
+        input_schema["anyOf"] = input_schema.pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "send: send email via IMAP/SMTP (requires address, message; optional "
         "subject, cc, bcc, attachments). "
@@ -300,6 +304,7 @@ def imap_schema() -> dict[str, Any]:
         "edit_contact: update contact fields (requires address; optional "
         "name, note). "
         "accounts: list configured IMAP accounts and connection status. "
+        "settings: show the redacted five-field IMAP/SMTP settings inventory. "
         + IMAP_PLUGIN.manual_action_description()
     )
     return schema
@@ -367,13 +372,11 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
 
 
 def build_imap_family(manager: Any | None) -> ToolFamily:
-    """Compose the public family: manager-backed declared actions + plugin manual.
+    """Compose manager actions plus read-only settings and the plugin manual.
 
-    Only IMAP's own actions are built here. ``manual`` is appended by
-    ``IMAP_PLUGIN`` and answered directly from the packaged ``SKILL.md``,
-    with or without a live manager — the same payload the manager's own
-    ``_manual()`` returns, minus the possibility of the business boundary
-    replacing it.
+    Only IMAP's operational actions are built here. The plugin inserts
+    ``settings`` and ``manual``. The manual works without a manager; settings
+    returns the generic fixed failure when applied runtime truth is unavailable.
     """
     schemas = _imap_input_schemas()
     children = [
@@ -385,7 +388,10 @@ def build_imap_family(manager: Any | None) -> ToolFamily:
         )
         for action in _DECLARED_ACTIONS
     ]
-    return IMAP_PLUGIN.build_family(children)
+    return IMAP_PLUGIN.build_family(
+        children,
+        settings_provider=lambda: imap_setting_rows(manager),
+    )
 
 
 def handle_imap(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:

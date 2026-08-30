@@ -18,9 +18,7 @@ Config schema (plaintext, no env-indirection):
           "imap_host": "imap.gmail.com",      // optional, default Gmail
           "imap_port": 993,                    // optional
           "smtp_host": "smtp.gmail.com",       // optional
-          "smtp_port": 587,                    // optional
-          "allowed_senders": ["a@x.com"],      // optional allow-list
-          "poll_interval": 30                  // optional, seconds
+          "smtp_port": 587                     // optional
         }
       ]
     }
@@ -281,9 +279,7 @@ The value points to a JSON file; relative paths are resolved under
       "imap_host": "imap.gmail.com",
       "imap_port": 993,
       "smtp_host": "smtp.gmail.com",
-      "smtp_port": 587,
-      "allowed_senders": ["trusted@example.com"],
-      "poll_interval": 30
+      "smtp_port": 587
     }
   ]
 }
@@ -294,15 +290,26 @@ new configs should use the `accounts` list.
 
 ## Field notes
 
-- `email_address` and `email_password` are required for each account. Prefer an
-  app password or provider token; do not store a primary account password unless
-  the provider requires it.
+- `email_address` is required for each account. `email_password` is the SMTP
+  credential and is also the IMAP credential when no `auth` object is present.
+  Prefer an app password or provider token; do not store a primary account
+  password unless the provider requires it.
 - `imap_host`, `imap_port`, `smtp_host`, and `smtp_port` default to Gmail values
   when omitted. Set them explicitly for Outlook, custom domains, or other
   providers.
-- `allowed_senders` is optional. Use it to restrict inbound LICC wake events to
-  trusted addresses.
-- `poll_interval` is optional and defaults to 30 seconds.
+- IMAP OAuth accepts an `auth` object with type `microsoft_oauth2`, public
+  `client_id`, and a local `token_cache` path. SMTP still uses
+  `email_password`.
+- Legacy `allowed_senders` and `poll_interval` fields are accepted and retained
+  but are not applied by the current listener. They are not an authorization
+  boundary or polling control.
+
+The loader validates strict JSON and the outer account shape only. It does not
+eagerly enforce most value types, non-emptiness, endpoint ranges, or OAuth keys;
+unusable values can construct the manager and fail later at connection/login.
+Stop the MCP before an authorized private-file edit, relaunch it afterward, and
+use `imap(action="settings", input={}, reasoning="verify applied IMAP settings")`
+to verify the applied redacted snapshot.
 
 ## Ownership
 
@@ -328,15 +335,17 @@ Most often the server could not initialize the manager. Check:
    passwords or OAuth/app-specific tokens.
 
 Read `lingtai://status`; if `manager_initialized` is `false`, fix config and
-restart or refresh the host agent.
+relaunch the MCP through the deployment owner.
 
 ## Mail does not wake the host agent
 
 1. Confirm the account appears in `lingtai://status`.
 2. Confirm `listener_connected` and `listening` are true for that account.
-3. Check whether `allowed_senders` excludes the sender.
-4. Check the host agent's `.notification/mcp.imap.json` and logs for LICC
+3. Check the host agent's `.notification/mcp.imap.json` and logs for LICC
    delivery errors.
+
+The accepted legacy `allowed_senders` field is not enforced and must not be
+treated as an inbound authorization boundary.
 
 ## Send/reply fails
 
@@ -358,8 +367,9 @@ This onboarding surface is intentionally MCP-owned. LingTai's `/mcp` UI may rend
 but agents should read this resource directly when helping a human connect real email.
 
 IMAP setup is simpler than chat addons: there is no QR scan, no webhook, and no
-platform callback. The job is to collect provider settings, write the config, refresh
-the host agent, and verify both inbound IMAP and outbound SMTP.
+platform callback. The job is to collect provider settings, have the deployment owner
+write the private config while the MCP is stopped, relaunch the MCP, and verify both
+inbound IMAP and outbound SMTP.
 
 ## Prerequisites
 
@@ -389,9 +399,7 @@ Write a JSON file and point `LINGTAI_IMAP_CONFIG` at it:
       "imap_host": "imap.example.com",
       "imap_port": 993,
       "smtp_host": "smtp.example.com",
-      "smtp_port": 587,
-      "allowed_senders": ["trusted@example.com"],
-      "poll_interval": 30
+      "smtp_port": 587
     }
   ]
 }
@@ -402,15 +410,18 @@ the agent's secret/config file according to the local LingTai deployment convent
 
 ## Verification checklist
 
-1. Refresh/restart the host agent after config changes.
+1. Have the deployment owner relaunch the IMAP MCP after config changes.
 2. Read `lingtai://status`; confirm `manager_initialized: true` and the account is
    listed. Status is secret-redacted by design.
-3. Run `imap(action="accounts")`; confirm the account and listener fields look sane.
-4. Send a test email from an allowed sender to the configured mailbox.
-5. Run `imap(action="check", n=5)` or wait for the MCP notification.
-6. Send a test outbound message with `imap(action="send", ...)` to confirm SMTP.
-7. If inbound works but wake notifications do not, check `allowed_senders` and LICC
-   delivery logs.
+3. Run `imap(action="settings", input={}, reasoning="verify applied IMAP settings")`;
+   verify the complete redacted inventory.
+4. Run `imap(action="accounts", input={}, reasoning="verify account and listener status")`;
+   confirm the account and listener fields look sane.
+5. Send a test email to the configured mailbox.
+6. Run `imap(action="check", input={"n": 5}, reasoning="verify inbound IMAP delivery")`
+   or wait for the MCP notification.
+7. Send a test outbound message with `imap(action="send", input={"address": "recipient@example.com", "message": "SMTP setup test"}, reasoning="verify outbound SMTP delivery")` to confirm SMTP.
+8. If inbound works but wake notifications do not, check LICC delivery logs.
 
 ## Agent guidance
 
@@ -451,9 +462,9 @@ def _onboarding_html_template() -> str:
     <li>Enable IMAP in the provider dashboard if required.</li>
     <li>Create an app password or provider token; store it only in the local config/secret file.</li>
     <li>Set <code>LINGTAI_IMAP_CONFIG</code> to the config JSON path.</li>
-    <li>Refresh the host agent.</li>
-    <li>Check <code>lingtai://status</code> and run <code>imap(action=&quot;accounts&quot;)</code>.</li>
-    <li>Test inbound with <code>imap(action=&quot;check&quot;)</code> and outbound with <code>imap(action=&quot;send&quot;)</code>.</li>
+    <li>Have the deployment owner relaunch the IMAP MCP.</li>
+    <li>Check <code>lingtai://status</code> and run <code>imap(action=&quot;accounts&quot;, input={}, reasoning=&quot;verify account and listener status&quot;)</code>.</li>
+    <li>Test inbound with <code>imap(action=&quot;check&quot;, input={&quot;n&quot;: 5}, reasoning=&quot;verify inbound IMAP delivery&quot;)</code> and outbound with <code>imap(action=&quot;send&quot;, input={&quot;address&quot;: &quot;recipient@example.com&quot;, &quot;message&quot;: &quot;SMTP setup test&quot;}, reasoning=&quot;verify outbound SMTP delivery&quot;)</code>.</li>
   </ol>
   <p class=\"ok\">This template is static and secret-free. The agent may replace placeholders with non-secret provider metadata before opening it locally for the human.</p>
 </body>
@@ -478,13 +489,18 @@ def lingtai_resources(manager: IMAPMailManager | None = None) -> dict[str, tuple
 # Config loading
 # ---------------------------------------------------------------------------
 
+def _load_config_with_path() -> tuple[dict, Path]:
+    """Return the parsed config and the exact resolved startup authority."""
+    return _config.load_config_file("LINGTAI_IMAP_CONFIG", label="IMAP")
+
+
 def load_config() -> dict:
     """Read config from the path in LINGTAI_IMAP_CONFIG.
 
     Path is resolved relative to LINGTAI_AGENT_DIR (or cwd as fallback)
     if not absolute. Plaintext only — no *_env indirection.
     """
-    return _config.load_config_file("LINGTAI_IMAP_CONFIG", label="IMAP")[0]
+    return _load_config_with_path()[0]
 
 
 def _accounts_from_config(cfg: dict) -> list[dict]:
@@ -524,7 +540,7 @@ def build_manager() -> tuple[IMAPMailManager, FilesystemMailBridge | None, Path]
     testing); that case still gives a functional manager but no
     cross-agent relay.
     """
-    cfg = load_config()
+    cfg, config_path = _load_config_with_path()
     accounts = _accounts_from_config(cfg)
 
     agent_dir_raw = os.environ.get("LINGTAI_AGENT_DIR")
@@ -559,6 +575,7 @@ def build_manager() -> tuple[IMAPMailManager, FilesystemMailBridge | None, Path]
         working_dir=working_dir,
         tcp_alias=str(bridge_dir),
         on_inbound=_on_inbound,
+        config_path=config_path,
     )
     mgr._bridge = bridge
 
