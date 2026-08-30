@@ -331,6 +331,34 @@ def test_daemon_explicit_max_turns_beats_config_file(tmp_path):
     assert mgr._max_turns == 500
 
 
+def test_daemon_max_turns_env_beats_explicit_and_config(tmp_path, monkeypatch):
+    """A valid environment value is the final manager-construction override."""
+    _write_daemon_config(tmp_path / "daemon-agent", {"max_turns": 2500})
+    monkeypatch.setenv("LINGTAI_DAEMON_MAX_TURNS", "321")
+
+    agent = _make_agent(tmp_path, {"daemon": {"max_turns": 500}})
+
+    assert agent.get_capability("daemon")._max_turns == 321
+
+
+@pytest.mark.parametrize("bad", ("", "lots", "0", "-5", "3.5"))
+def test_daemon_invalid_max_turns_env_keeps_explicit_value(
+    tmp_path, monkeypatch, bad
+):
+    """Invalid environment input retains the explicit or owner-file result."""
+    _write_daemon_config(tmp_path / "daemon-agent", {"max_turns": 2500})
+    monkeypatch.setenv("LINGTAI_DAEMON_MAX_TURNS", bad)
+
+    agent = _make_agent(tmp_path, {"daemon": {"max_turns": 500}})
+    assert agent.get_capability("daemon")._max_turns == 500
+
+    _write_daemon_config(tmp_path / "daemon-file", {"max_turns": 2500})
+    file_agent = _make_agent(
+        tmp_path, ["daemon"], working_dir_name="daemon-file"
+    )
+    assert file_agent.get_capability("daemon")._max_turns == 2500
+
+
 def test_daemon_invalid_config_max_turns_falls_back_to_5000(tmp_path):
     """Non-positive-integer max_turns falls back to the built-in default."""
     for i, bad in enumerate(("lots", 0, -5, 3.5, True)):

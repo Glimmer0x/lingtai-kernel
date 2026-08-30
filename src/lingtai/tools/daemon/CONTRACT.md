@@ -7,13 +7,14 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 13
-last_changed_at: "2026-08-25"
+contract_version: 14
+last_changed_at: "2026-08-29"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/daemon/settings.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/__init__.py
@@ -53,6 +54,7 @@ related_files:
   - src/lingtai/llm/mimo/ANATOMY.md
   - tests/test_task_card_proactivity.py
   - tests/test_tool_family_daemon_migration.py
+  - tests/test_daemon_settings.py
   - tests/test_daemon.py
   - tests/test_daemon_empty_parity.py
   - tests/test_daemon_missing_finish_guidance.py
@@ -72,6 +74,7 @@ related_files:
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/daemon/settings.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/__init__.py
@@ -84,6 +87,7 @@ review_triggers:
   - src/lingtai/tools/daemon/manual/
   - src/lingtai/mcp_servers/daemon_common/
   - tests/test_daemon.py
+  - tests/test_daemon_settings.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
   - tests/test_daemon_missing_finish_guidance.py
@@ -139,8 +143,9 @@ ownership -> §Process and Terminal Boundaries.
 ## Scope
 
 - Canonical tool name: `daemon`.
-- The parent `daemon` tool exposes six actions: `emanate`, `list`, `ask`, `check`,
-  `reclaim`, `manual`; `action` is required, and so are `input` and `reasoning`
+- The parent `daemon` tool exposes seven actions: `emanate`, `list`, `ask`,
+  `check`, `reclaim`, `settings`, `manual`; `action` is required, and so are
+  `input` and `reasoning`
   (see §Tool Surface). Every LingTai emanation additionally receives
   the intrinsic `compact` tool, whose required `action` is explicit `run`
   (non-terminal reset) or `manual` (read-only procedures); omission is refused.
@@ -169,7 +174,7 @@ where those changes affect the invariants here.
 
 ## Tool Surface
 
-Guarded by: [D001](BEHAVIORS.md#behavior-d001), [D002](BEHAVIORS.md#behavior-d002), [D003](BEHAVIORS.md#behavior-d003), [D004](BEHAVIORS.md#behavior-d004), [D005](BEHAVIORS.md#behavior-d005)
+Guarded by: [D001](BEHAVIORS.md#behavior-d001), [D002](BEHAVIORS.md#behavior-d002), [D003](BEHAVIORS.md#behavior-d003), [D004](BEHAVIORS.md#behavior-d004), [D005](BEHAVIORS.md#behavior-d005), [D010](BEHAVIORS.md#behavior-d010)
 
 `daemon` is migrated to the LingTai Tool Protocol v2 action-separated envelope
 (`../CONTRACT.md`, `../tool_family/CONTRACT.md`) using the generic
@@ -177,13 +182,13 @@ Guarded by: [D001](BEHAVIORS.md#behavior-d001), [D002](BEHAVIORS.md#behavior-d00
 required `reasoning`, and optional `summarize`, with
 `required: ["action", "input", "reasoning"]` and
 `additionalProperties: false`. Exactly one model-facing tool named `daemon`
-remains registered: the six actions are internal `ChildTool`s and MUST NOT
+remains registered: the seven actions are internal `ChildTool`s and MUST NOT
 consume additional model tool slots, and no compatibility alias or second
 public root exists.
 
-The six canonical children are `emanate | list | ask | check | reclaim |
-manual`, each owning one strict, closed `input` schema. Every field the
-pre-migration flat root advertised to all six actions at once now lives in
+The seven canonical children are `emanate | list | ask | check | reclaim |
+settings | manual`, each owning one strict, closed `input` schema. Every field
+the pre-migration flat root advertised to all operational actions at once lives in
 exactly the branch that consumes it:
 
 | Action | `input` fields |
@@ -193,6 +198,7 @@ exactly the branch that consumes it:
 | `ask` | `id`, `message` |
 | `check` | `id`, `last`, `truncate` |
 | `reclaim` | — (canonical strict-empty `input`) |
+| `settings` | — (canonical strict-empty `input`) |
 | `manual` | — (canonical strict-empty `input`) |
 
 Optional fields are spelled as required-nullable properties, as strict
@@ -209,7 +215,7 @@ Dispatch is the second, always-authoritative enforcement layer: an unknown or
 unhashable `action`, an unknown root field, a non-object `input`, a non-boolean
 `summarize`, and any `input` key belonging to another action's branch are all
 refused before the daemon engine runs, fail-closed. The unknown-action envelope
-failure carries daemon's own six-action message.
+failure carries daemon's own seven-action message.
 
 The former flat root `summary` boolean is replaced by the canonical root
 `summarize`; `daemon` is on `kernel/tool_result_summary.py`'s
@@ -218,8 +224,9 @@ rather than silently ignored, and the legacy `summary` spelling remains
 accepted there for historical/pending calls.
 
 `DECLARATION` in `daemon/__init__.py` is Daemon's static official identity:
-its five operational actions use `_tool_family.py`'s strict schemas and the
-kernel appends the reserved installed `manual` child. Its binder receives only
+its five operational actions use `_tool_family.py`'s strict schemas, the generic
+family inserts opted-in `settings`, and the kernel appends the reserved
+installed `manual` child. Its binder receives only
 `workdir` plus the capability-native `daemon_runtime` port; it constructs the
 unchanged `DaemonManager` and `DaemonFamilyDispatcher` without retaining an
 Agent. The runtime port preserves the real current-agent service/model,
@@ -233,7 +240,35 @@ registered `manual` is `build_manual_child(workdir, DECLARATION.manual)`,
 returning canonical `content[0].text` / `structuredContent.manual_path`
 verbatim with no manager operation or double wrap.
 
-`list`, `check`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
+### Daemon settings ownership
+
+Daemon's declaration opts its family into the generic read-only
+`settings` action. Successful output is `{"settings": [...]}` with exactly
+`key`, `current`, `default`, `configurable`, and `comment` on every row. The
+provider returns exactly these owner keys in this order:
+
+| Key | Current truth | Default | Configurable | Manual section |
+|---|---|---:|---|---|
+| `max_turns` | manager's effective `_max_turns` | `5000` | yes | `daemon-manual#max-turns` |
+| `manager_pool_size` | manager's effective `_manager_pool_size` | `100` | yes | `daemon-manual#manager-pool-size` |
+| `system_prompt_budget_chars` | manager's effective `_system_prompt_budget_chars` | `20000` | yes | `daemon-manual#system-prompt-budget-chars` |
+| `timeout` | manager's effective `_timeout` | `3600.0` | yes | `daemon-manual#timeout` |
+
+`configurable` means an authorized owner procedure exists outside SHOW;
+`settings` has no set/reset/mutation operation. Missing manager truth, a
+provider exception, a malformed row, a non-finite or unserializable value, or
+an oversized complete response fails the whole action with the generic fixed
+bounded failure and returns no partial row. Sensitive settings in any family
+redact both `current` and `default`; Daemon's four owner rows are nonsensitive.
+
+`max_turns` is Daemon-owned. Its precedence is a valid
+`LINGTAI_DAEMON_MAX_TURNS` value, explicit capability/setup override, valid
+`daemon/daemon.json` `max_turns`, then `5000`. The other source and change
+procedures are defined at the stable manual anchors named above. In particular,
+`timeout` has only the launcher/capability setup layer and the `3600.0` default;
+per-run `emanate.timeout` is not this owner setting.
+
+`list`, `check`, `settings`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
 are the three side-effectful actions.
 
 `tasks[].task` is required and is the complete parent-controlled daemon system
@@ -987,6 +1022,8 @@ Re-check this contract when touching:
 - `src/lingtai/tools/daemon/__init__.py` backend routing, selected-skill catalog
   assembly, MCP registration handling, native config writers, compact handling,
   or completion enforcement.
+- `src/lingtai/tools/daemon/settings.py` row ownership, defaults, or manual
+  pointers.
 - `src/lingtai/tools/daemon/run_dir.py` artifact paths, `daemon.json`
   `call_parameters`, checkpoint sequence/latest/inbox fields, redaction-sensitive
   fields, terminal markers, terminal-notification receipt fields, or manifests.
@@ -1005,9 +1042,11 @@ Re-check this contract when touching:
 
 | Claim | Source | Test |
 |---|---|---|
-| `handle` dispatches the five actions; unknown actions error | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py` (dispatch), `tests/test_daemon_check.py::test_check_unknown_id_returns_error` |
+| the parent dispatches seven actions; unknown actions error | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/_tool_family.py` | `tests/test_tool_family_daemon_migration.py`, `tests/test_daemon_check.py::test_check_unknown_id_returns_error` |
 | Default `manager_pool_size` is 100 and the config reaches the manager/list output | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_daemon_default_manager_pool_size_is_100`, `::test_daemon_manager_pool_size_config_reaches_manager` |
+| `max_turns` precedence is valid `LINGTAI_DAEMON_MAX_TURNS`, explicit capability/setup, valid owner file, then 5000; invalid environment input retains the lower valid result | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_daemon_max_turns_env_beats_explicit_and_config`, `::test_daemon_invalid_max_turns_env_keeps_explicit_value` |
 | Per-agent `system_prompt_budget_chars` defaults to 20,000, accepts a positive `daemon/daemon.json` override, and safely falls back for malformed/non-positive values while retaining fail-loud/no-truncation rendering | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/system_prompt.py` | `tests/test_daemon.py::test_daemon_default_system_prompt_budget_is_20000_without_config`, `::test_daemon_config_system_prompt_budget_allows_larger_complete_prompt`, `::test_daemon_invalid_system_prompt_budget_falls_back_to_default` |
+| `settings` returns exactly the four owner rows and five public fields, has no mutation route, and fails as one fixed response when current manager truth is unavailable | `src/lingtai/tools/daemon/settings.py`, `src/lingtai/tools/daemon/_tool_family.py` | `tests/test_daemon_settings.py` |
 | Budget precedence: a valid `LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS` wins at manager construction (including `lingtai-agent daemon emanate` via the agent's `env_file`); invalid env or explicit capability values retain the file/default resolution and never drop the capability | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/cli_daemon.py` | `tests/test_daemon.py::test_daemon_system_prompt_budget_env_overrides_config`, `::test_daemon_invalid_system_prompt_budget_env_keeps_config_value`, `::test_daemon_invalid_explicit_system_prompt_budget_keeps_file_or_env`, `tests/test_cli_daemon.py::test_emanate_env_file_budget_overrides_daemon_json` |
 | Backend schema enum matches the ordered alias contract | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_backend_options.py::test_backend_schema_enum_matches_ordered_contract`, `::test_backend_metadata_consistency_keeps_hidden_legacy_claude` |
 | `check` returns state + events, honors `last`/`truncate`, validates inputs | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_check.py` |
@@ -1028,6 +1067,7 @@ Re-check this contract when touching:
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
 | Action dispatch + per-action shapes are stable | `tests/test_daemon.py`, `tests/test_daemon_check.py` | `emanate` a trivial task, then `check` its id | Agents cannot dispatch or inspect subagents |
+| Settings projection stays exact, owner-documented, and read-only | `tests/test_daemon_settings.py`, `tests/test_tool_settings_contract.py` | Call `settings`, inspect the five fields, use each `comment` to route to the manual, and confirm `list` is unchanged | Effective daemon settings drift or become falsely mutable |
 | Backend enum/alias contract stays consistent | `tests/test_daemon_backend_options.py::test_backend_schema_enum_matches_ordered_contract` | Pass an alias (`mimo`) and confirm it normalizes | Backend selection drifts from advertised names |
 | Terminal state is classified from the recorded snapshot | `tests/test_daemon_check.py::test_check_includes_terminal_event_for_done_emanation` | Run to completion, confirm `state=done` in `check` | Parent mis-reads timeout/cancel as success |
 | CLI `ask` never blocks the caller's tool thread | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs` | `ask` a hung CLI daemon, confirm immediate return | Parent loop stalls on a hung subprocess |
@@ -1039,7 +1079,7 @@ Re-check this contract when touching:
 Run before merging daemon tool-surface changes:
 
 ```bash
-python -m pytest tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py tests/test_mimo_responses_compaction.py -q
+python -m pytest tests/test_daemon_settings.py tests/test_tool_family_daemon_migration.py tests/test_tool_settings_contract.py tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py tests/test_mimo_responses_compaction.py -q
 ```
 
 ## Schema and Glossary Ownership

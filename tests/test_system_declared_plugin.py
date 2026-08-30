@@ -1900,6 +1900,7 @@ def test_system_settings_classification_covers_init_and_environment_registries()
     )
     assert "LINGTAI_TUI_DIR" in classification["system"]
     assert "LINGTAI_DAEMON_MANAGER_POOL_SIZE" in classification["concrete_tool"]
+    assert "LINGTAI_DAEMON_MAX_TURNS" in classification["concrete_tool"]
     assert "LINGTAI_DAEMON_MEMORY_RELIEF" in classification["system"]
     assert system_settings.SYSTEM_ENVIRONMENT_SETTING_OWNERS[
         "LINGTAI_DAEMON_MEMORY_RELIEF"
@@ -2039,6 +2040,7 @@ def test_system_manual_contains_declared_ltp_and_budget_settings_contract():
         "Psyche owns the live Pad prompt inputs",
         "resolve_env_checked",
         "LINGTAI_DAEMON_MANAGER_POOL_SIZE",
+        "LINGTAI_DAEMON_MAX_TURNS",
         "runtime.tool_batch_memory_relief",
         "LINGTAI_DAEMON_MANAGER_TOKEN",
         "LINGTAI_DAEMON_RUN_DIR",

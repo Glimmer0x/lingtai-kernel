@@ -4,13 +4,14 @@ The public/model-facing ``daemon`` tool is migrated to the LingTai Tool
 Protocol v2 action-separated shape (``action``/``input``/``reasoning``/
 ``summarize``, see ``../CONTRACT.md``) using the generic, optional
 ``tool_family`` infrastructure (``../tool_family/__init__.py``). ``emanate``,
-``list``, ``ask``, ``check``, ``reclaim``, and the reserved ``manual`` become
-six ``ChildTool``s with their own strict per-action ``input`` schemas —
+``list``, ``ask``, ``check``, ``reclaim``, the opted-in read-only
+``settings`` action, and the reserved ``manual`` become seven ``ChildTool``s
+with their own strict per-action ``input`` schemas —
 ``tasks``/``backend``/``max_turns``/``timeout`` live only in ``emanate``'s
 branch; ``contains``/``status``/``include_done`` only in ``list``'s;
 ``id``/``message`` only in ``ask``'s; ``id``/``last``/``truncate`` only in
-``check``'s; ``reclaim`` and ``manual`` take the canonical strict-empty
-``input``. The pre-migration flat root advertised all thirteen fields to all
+``check``'s; ``reclaim``, ``settings``, and ``manual`` take the canonical
+strict-empty ``input``. The pre-migration flat root advertised all thirteen fields to all
 six actions at once (``tasks`` sat next to ``truncate`` next to ``message``),
 so nothing at the schema level said which field belonged to which action.
 
@@ -74,7 +75,7 @@ DAEMON_DECLARED_ACTIONS: tuple[str, ...] = (
     "check",
     "reclaim",
 )
-DAEMON_ACTIONS: tuple[str, ...] = (*DAEMON_DECLARED_ACTIONS, "manual")
+DAEMON_ACTIONS: tuple[str, ...] = (*DAEMON_DECLARED_ACTIONS, "settings", "manual")
 
 
 def _backend_option_env_schema() -> dict[str, Any]:
@@ -374,7 +375,7 @@ def build_schema(
     """Compose the action-separated public ``daemon`` schema.
 
     Generated purely from the child registry by the generic ``ToolFamily``
-    infra (root ``allOf`` correlation plus ``input.oneOf`` disclosure) — this
+    infra (root ``allOf`` correlation plus composed ``input`` disclosure) — this
     is the schema registered for the public ``daemon`` tool, and the only one
     the package defines. Constructing the family here is also the registry's
     duplicate/reserved-``manual``-collision check.
@@ -399,6 +400,11 @@ def build_schema(
             ChildTool(action, schema, _unused, title=f"{action} input")
             for action, schema in specs
         ],
+        settings_provider=(
+            tuple
+            if declaration is not None and declaration.settings
+            else None
+        ),
     )
     return family.build_schema()
 
@@ -408,7 +414,7 @@ class DaemonFamilyDispatcher:
 
     Built per-agent, bound to one live ``DaemonManager``. ``handle()`` is the
     public ``daemon`` tool's registered handler: ``ToolFamily.handle()``
-    validates the envelope and dispatches to exactly one of the six
+    validates the envelope and dispatches to exactly one of the seven
     ``ChildTool`` handlers below, each of which flattens its own validated
     ``input`` mapping (injecting the matching ``action`` key, mirroring the
     legacy dispatch contract in ``DaemonManager.handle``) and calls
@@ -437,6 +443,12 @@ class DaemonFamilyDispatcher:
         if declaration is None:
             from . import DECLARATION
             declaration = DECLARATION
+        if declaration.settings:
+            from .settings import daemon_setting_rows
+
+            settings_provider = lambda: daemon_setting_rows(manager)
+        else:
+            settings_provider = None
         specs = declared_input_schemas(backend_enum)
         self._family = ToolFamily(
             declaration.name,
@@ -448,6 +460,7 @@ class DaemonFamilyDispatcher:
                 ChildTool("reclaim", specs["reclaim"], self._dispatch_reclaim, title="reclaim input"),
                 build_manual_child(manual_source, declaration.manual),
             ],
+            settings_provider=settings_provider,
         )
 
     @staticmethod
@@ -497,11 +510,11 @@ class DaemonFamilyDispatcher:
         # ``input`` keys, then returns the selected child's own raw canonical
         # result verbatim — no double wrap, no Host envelope. The one Host
         # normalization below narrows the generic dispatcher's action list to
-        # Daemon's exact six; the generic canonical error shape
+        # Daemon's exact seven; the generic canonical error shape
         # (``status``/``error_code``/``message``) is left untouched.
         result = self._family.handle(args)
         if result.get("error_code") == "ACTION_REQUIRED":
             result["message"] = (
-                "action must be one of emanate, list, ask, check, reclaim, or manual"
+                "action must be one of emanate, list, ask, check, reclaim, settings, or manual"
             )
         return result

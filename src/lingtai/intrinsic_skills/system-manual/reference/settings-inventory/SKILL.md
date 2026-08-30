@@ -5,8 +5,8 @@ description: >
   sources, defaults, accepted values, invalid behavior, redaction, timing,
   authorized change procedures, and explicit non-settings.
 tags: [lingtai, system, settings, init, llm, environment, read-only]
-version: 1.1.0
-last_changed_at: "2026-08-28T00:00:00Z"
+version: 1.1.1
+last_changed_at: "2026-08-29T00:00:00Z"
 related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/adapters/posix/mail.py
@@ -233,6 +233,7 @@ not System:
 - `LINGTAI_CLAUDE_MANAGED_ROOT`
 - `LINGTAI_CLOUD_MAIL_CONFIG`
 - `LINGTAI_DAEMON_MANAGER_POOL_SIZE`
+- `LINGTAI_DAEMON_MAX_TURNS`
 - `LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS`
 - `LINGTAI_FEISHU_CONFIG`
 - `LINGTAI_FILE_IO_BACKEND`
