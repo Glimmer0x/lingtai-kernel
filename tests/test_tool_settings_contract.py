@@ -134,7 +134,7 @@ def test_public_export_and_exact_production_opt_ins():
             getattr(module, f"{name.upper()}_PLUGIN"),
             getattr(module, f"{name.upper()}_ACTIONS"),
         )
-    expected_curated = {"cloud_mail", "feishu", "imap", "wechat", "whatsapp"}
+    expected_curated = {"cloud_mail", "feishu", "imap", "telegram", "wechat", "whatsapp"}
     assert {
         name for name, (plugin, _actions) in curated.items() if plugin.settings
     } == expected_curated
@@ -150,7 +150,7 @@ def test_public_export_and_exact_production_opt_ins():
     expected_official = {"avatar", "daemon", "email", "file", "mcp", "notification", "plugin", "shell", "soul", "system", "task_card", "vision", "web"}
     assert {name for name, item in declarations.items() if item.settings} == expected_official
     assert expected_curated | expected_official == {
-        "avatar", "cloud_mail", "daemon", "email", "feishu", "file", "imap", "mcp", "notification", "plugin", "shell", "soul", "system", "task_card", "vision", "web", "wechat", "whatsapp"
+        "avatar", "cloud_mail", "daemon", "email", "feishu", "file", "imap", "mcp", "notification", "plugin", "shell", "soul", "system", "task_card", "telegram", "vision", "web", "wechat", "whatsapp"
     }
     for name, item in declarations.items():
         assert ("settings" in item.public_actions) is (name in expected_official)

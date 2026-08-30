@@ -5,12 +5,12 @@ description: |
   you need detail beyond the one-line action descriptions: media.type='document'
   vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
   messages, reply vs send, read/check/search, rendering_mode/entities/native rich
-  messages, chat_action, dynamic slash commands,
+  messages, chat_action, dynamic slash commands, read-only settings inventory,
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.6.0
-last_changed_at: 2026-08-08T00:00:00Z
+version: 1.7.0
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
@@ -22,13 +22,18 @@ related_files:
 - src/lingtai/mcp_servers/telegram/render.py
 - src/lingtai/mcp_servers/telegram/server.py
 - src/lingtai/mcp_servers/telegram/_family.py
+- src/lingtai/mcp_servers/telegram/settings.py
+- src/lingtai/mcp_servers/telegram/service.py
 - src/lingtai/mcp_servers/telegram/task_card/_family.py
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
 - src/lingtai/mcp_servers/telegram/reference/rate-limits/SKILL.md
 - tests/test_telegram_structured_rendering.py
+- tests/test_telegram_settings.py
+- ENVIRONMENT_VARIABLES.md
 maintenance: |
-  Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
+  Tracks the MCP server's manager/config/settings behavior; update when setup,
+  settings precedence/redaction, or the public API surface changes.
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -64,7 +69,7 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
 
 | Need | Read |
 |---|---|
-| Send/reply/edit, media, reading, rich text, slash commands, `/taskcard`, errors | this file |
+| Send/reply/edit, media, reading, rich text, slash commands, settings, `/taskcard`, errors | this file |
 | Authoring or operating a programmable Task Card watcher | [`task_card/SKILL.md`](task_card/SKILL.md) |
 | Current Telegram quotas, `retry_after`, and safe 429 policy | [`reference/rate-limits/SKILL.md`](reference/rate-limits/SKILL.md) |
 | Normative resident/slot promises and code structure | [`task_card/CONTRACT.md`](task_card/CONTRACT.md), [`task_card/ANATOMY.md`](task_card/ANATOMY.md) |
@@ -249,6 +254,131 @@ Important behavior notes:
 - Do not edit or print `bot_token` values while documenting or debugging slash
   commands. `lingtai://status` reports only a redacted, non-secret view.
 
+## SETTINGS SHOW
+
+Call `telegram(action='settings', input={}, reasoning='inspect Telegram
+settings')` for read-only progressive disclosure. Success contains only
+`{"settings": [...]}`; each row contains exactly `key`, `current`, `default`,
+`configurable`, and a `comment` pointer to one section below. There is no set,
+reset, or other mutation form. Make an authorized change through the existing
+launcher, config-file, File, Shell, or `/taskcard` procedure named by the row,
+then call `settings` again to verify the new current value.
+
+If any current fact cannot be read, the whole action returns one bounded
+`SETTINGS_UNAVAILABLE` failure with no partial rows. Account authority rows
+render both `current` and `default` as `<redacted>`; the private redaction flag
+is never projected. Contact aliases/chat IDs, resident routes, Bot API update
+offsets, read markers, and inbox/sent records are operational state rather than
+settings and are not inventoried.
+
+### Telegram config path
+
+`config.path` is the exact successfully resolved account-authority JSON path
+captured when `LINGTAI_TELEGRAM_CONFIG` is loaded at startup. A relative value
+is resolved against `LINGTAI_AGENT_DIR`, or the process cwd when that variable
+is absent; there is no meaningful default. The path is sensitive because it can
+reveal deployment layout, so SHOW redacts it. An authorized owner changes the
+launcher's environment through the existing launcher/config procedure,
+restarts or refreshes the curated MCP, and verifies with a second SHOW.
+
+### Account aliases
+
+`accounts.aliases` is the live service-order snapshot of required
+`accounts[].alias` values; there is no meaningful default. Aliases bind compound
+message IDs and per-account state, so the aggregate value is redacted. Edit only
+the existing private JSON through the authorized File/config procedure, preserve
+every account's credentials and policy, then restart or refresh the MCP and
+verify with SHOW plus `telegram(action='accounts', ...)`.
+
+### Bot tokens
+
+`accounts.bot_tokens` is a fresh aggregate of the live accounts' required
+`accounts[].bot_token` values issued by BotFather. There is no default and the
+values are credentials: never place them in chat, logs, screenshots, examples,
+or a settings response. Rotate or replace a token in BotFather and the private
+JSON, keep its file permissions, then restart or refresh the MCP. SHOW verifies
+only that live truth is available and remains redacted; use the existing
+readiness/status path to verify the credential actually authenticates.
+
+### Allowed users
+
+`accounts.allowed_users` is a fresh aggregate of the live accounts' optional
+`accounts[].allowed_users` values. Omission, `null`, or an empty list becomes the
+meaningful unrestricted-admission state rather than a separate built-in list.
+Because the values identify authorized humans, both current and default are
+redacted. Edit the private JSON, restart or refresh the MCP, then verify admission
+with SHOW and the established Telegram account/status checks.
+
+### Account poll intervals
+
+`accounts.poll_intervals` is a fresh aggregate of each live account's startup
+`accounts[].poll_interval` snapshot and defaults to `1.0` second when omitted.
+The account constructor stores the configured value unchanged; this settings
+provider deliberately adds no finite, positive, or type rule that runtime does
+not enforce. The aggregate is redacted with account authority. Edit the private
+JSON carefully, restart or refresh the MCP, and verify the captured values with
+a second SHOW.
+
+### Slash-command menu
+
+`accounts.commands` is a deep-copied aggregate of the live accounts' optional
+`accounts[].commands` snapshots. Omission/`null` selects the built-in menu;
+`[]` clears the menu; otherwise use Telegram-compatible objects containing
+`command` and `description` as taught in **SLASH COMMANDS** above. The aggregate
+is redacted because it is bound to private accounts. Edit the private JSON and
+restart or refresh the MCP; startup applies `setMyCommands` best-effort. Verify
+via SHOW, the Telegram `/` picker, or the existing status resource.
+
+### Task Card poll interval
+
+`automatic.poll_interval_seconds` is the `TelegramManager` class/import snapshot
+parsed from `LINGTAI_TASKCARD_POLL_INTERVAL`; omission defaults to `5.0` seconds.
+It governs automatic journal tailing, programmable artifact polling, and resident
+edit throttling. The loader uses plain `float()`: nonnumeric text prevents module
+load, while zero, negative, `NaN`, and infinities are not rejected or normalized.
+A non-finite snapshot cannot be strictly JSON-serialized, so the all-or-nothing
+settings action returns `SETTINGS_UNAVAILABLE`. Change the launcher environment
+and fully restart the MCP process; verify a serializable captured value with SHOW.
+
+### Task Card delivery
+
+`automatic.enabled` is the effective `taskcard` boolean hot-read from
+`<workdir>/telegram/taskcard.json`, defaulting to `true`. It gates presentation
+of both automatic and programmable resident slots without stopping their
+mechanics. Use the existing `/taskcard on` or `/taskcard off` command; an
+authorized owner may instead atomically replace the JSON while preserving all
+sibling fields. It applies on the next Task Card operation; verify with
+`/taskcard` and a second SHOW.
+
+### Task Card normal rows
+
+`automatic.normal_rows` is the effective `normal_rows` integer hot-read from
+`<workdir>/telegram/taskcard.json`, defaulting to `1` and accepting `1..10`.
+It selects recent API-call groups, not individual tool rows. Use `/taskcard N`,
+or atomically replace the JSON while preserving siblings. It applies on the
+next automatic projection; verify with `/taskcard` and SHOW.
+
+### Task Card locale
+
+`automatic.locale` is the effective `locale` string hot-read from
+`<workdir>/telegram/taskcard.json`; accepted values are `en` and `zh`, with
+default `en`. Use `/taskcard lang en|zh`, or atomically replace the JSON while
+preserving siblings. It applies on the next projection; verify with
+`/taskcard` and SHOW.
+
+### Task Card display expression
+
+`automatic.display_expression` is the effective `display_expression` list
+hot-read from `<workdir>/telegram/taskcard.json`. The default is
+`["footer","header","rows","blank","divider","metadata","time","ask_agent"]`.
+A custom value must be a nonempty list of at most 32 entries drawn only from
+`header`, `rows`, `blank`, `footer`, `divider`, `metadata`, `time`, and
+`ask_agent`; an invalid list falls back wholesale to the default. There is no
+slash-command editor for this field. Use an authorized File/Shell procedure to
+atomically replace the JSON while preserving `taskcard`, `normal_rows`,
+`max_refreshes`, and `locale`. It applies on the next projection; verify the
+effective list with SHOW.
+
 ## AUTOMATIC TASK CARD: `events.jsonl` → resident broadcast
 
 The automatic slot is a bounded projection of the agent's durable behavior
@@ -325,9 +455,12 @@ chat-history cardinality. Normative source:
   clamped. Telegram's normal `/taskcard@BotName ...` mention form works in groups.
 - The preferences are agent-wide and shared by all configured Telegram accounts
   and chats. They persist across refresh/restart in
-  `<workdir>/telegram/taskcard.json` as `{"taskcard": bool, "normal_rows": N}`;
-  legacy boolean-only files remain valid and default `normal_rows` to 1. Writes
-  are atomic + fsynced, and memory changes only after durable write success.
+  `<workdir>/telegram/taskcard.json` as the five compatible fields `taskcard`,
+  `normal_rows`, `max_refreshes`, `locale`, and `display_expression`; sparse and
+  legacy boolean-only files remain valid and independently default missing or
+  invalid fields. Writes are atomic + fsynced, and memory changes only after
+  durable write success. `max_refreshes` is migration-only compatibility state,
+  not an active Telegram runtime ceiling.
 - Every Telegram message representation shown to the agent carries the current
   delivery boolean: structured message objects use `taskcard: true|false`, and
   textual preview lines use `taskcard: True|False`. Check/read/search items derive
@@ -416,9 +549,10 @@ LTP-v2 family with the closed root `{action, input, reasoning, summarize?}`
 (`action`, `input`, and `reasoning` required) and a closed action-owned input
 branch. `telegram` actions are exactly `send`, `check`, `read`, `reply`,
 `search`, `delete`, `edit`, `contacts`, `add_contact`, `remove_contact`,
-`accounts`, and `manual`. The family-owned `manual` action is the discovery path
-for these packaged docs. Do not use the retired flat/legacy shape, `_reasoning`,
-aliases, or a generic dispatcher.
+`accounts`, `settings`, and `manual`. The generic opt-in seam inserts `settings`
+immediately before the family-owned `manual` action, which remains the discovery
+path for these packaged docs. Do not use the retired flat/legacy shape,
+`_reasoning`, aliases, or a generic dispatcher.
 
 The public `task_card` tool is now intrinsic (`lingtai.tools.task_card`) and
 produces `<workdir>/taskcard/status` plus `<workdir>/taskcard/taskcard.md`.

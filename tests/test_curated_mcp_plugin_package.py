@@ -6,10 +6,10 @@ publishes. ``lingtai.mcp_servers._plugin.CuratedMcpPlugin`` binds those three
 and owns reserved action composition: optional ``settings`` immediately before
 the ``manual`` action sourced from the packaged skill.
 
-These tests pin the packaging promise and the public Telegram and WeChat
-surfaces around it. They make no network call and stand up no account:
-the manual is account-independent and each family's dispatch boundary rejects
-every invalid envelope before any manager I/O.
+These tests pin the packaging promise, Telegram's explicit settings opt-in, and
+the existing WeChat public surface around it. They make no network call and
+stand up no account: the manual is account-independent and each family's
+dispatch boundary rejects every invalid envelope before any manager I/O.
 """
 from __future__ import annotations
 
@@ -82,9 +82,10 @@ def test_catalog_loading_is_unchanged_and_still_the_runtime_source():
 # `manual` is mandatory, reserved, and sourced from the packaged skill
 # ---------------------------------------------------------------------------
 
-def test_package_does_not_declare_manual_and_the_plugin_appends_it_last():
+def test_package_declares_no_reserved_action_and_plugin_appends_both_in_order():
     assert _plugin.MANUAL_ACTION not in TELEGRAM_DECLARED_ACTIONS
-    assert TELEGRAM_ACTIONS == (*TELEGRAM_DECLARED_ACTIONS, "manual")
+    assert _plugin.RESERVED_SETTINGS_NAME not in TELEGRAM_DECLARED_ACTIONS
+    assert TELEGRAM_ACTIONS == (*TELEGRAM_DECLARED_ACTIONS, "settings", "manual")
     assert TELEGRAM_ACTIONS[-1] == "manual"
 
 
@@ -170,7 +171,10 @@ def test_public_schema_keeps_the_strict_action_family_shape():
     assert len(schema["allOf"]) == len(TELEGRAM_ACTIONS)
     assert "telegram-mcp-manual" in schema["properties"]["action"]["description"]
     branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
-    assert branch_titles == [f"{action} input" for action in TELEGRAM_ACTIONS]
+    assert branch_titles == [
+        "settings inventory input" if action == "settings" else f"{action} input"
+        for action in TELEGRAM_ACTIONS
+    ]
 
 
 def test_declared_actions_still_dispatch_flat_into_the_manager():

@@ -609,13 +609,18 @@ _ONBOARDING_HTML = """<!doctype html>
 # Config loading
 # ---------------------------------------------------------------------------
 
+def _load_config_with_source() -> tuple[dict, Path]:
+    """Load Telegram config and retain its exact resolved startup path."""
+    return _config.load_config_file("LINGTAI_TELEGRAM_CONFIG", label="Telegram")
+
+
 def load_config() -> dict:
     """Read config from the path in LINGTAI_TELEGRAM_CONFIG.
 
     Path is resolved relative to LINGTAI_AGENT_DIR (or cwd as fallback)
     if not absolute. Plaintext only — no *_env indirection.
     """
-    return _config.load_config_file("LINGTAI_TELEGRAM_CONFIG", label="Telegram")[0]
+    return _load_config_with_source()[0]
 
 
 def _accounts_from_config(cfg: dict) -> list[dict]:
@@ -632,7 +637,7 @@ def _accounts_from_config(cfg: dict) -> list[dict]:
 
 def build_manager() -> tuple[TelegramManager, Path]:
     """Construct manager + service from env + config. Returns (manager, working_dir)."""
-    cfg = load_config()
+    cfg, config_path = _load_config_with_source()
     accounts = _accounts_from_config(cfg)
 
     agent_dir_raw = os.environ.get("LINGTAI_AGENT_DIR")
@@ -656,7 +661,7 @@ def build_manager() -> tuple[TelegramManager, Path]:
         working_dir=working_dir,
         accounts_config=accounts,
         on_message=lambda alias, update: mgr_ref[0].on_incoming(alias, update),
-        config_source=os.environ.get("LINGTAI_TELEGRAM_CONFIG"),
+        config_source=str(config_path),
     )
 
     notification_store = PosixNotificationStoreAdapter(working_dir)

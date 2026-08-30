@@ -317,7 +317,8 @@ def test_schema_public_actions_only():
     action_schema = SCHEMA.get("properties", {}).get("action", {})
     enum_values = action_schema.get("enum", [])
     public = {"send", "check", "read", "reply", "search", "delete", "edit",
-              "contacts", "add_contact", "remove_contact", "accounts", "manual"}
+              "contacts", "add_contact", "remove_contact", "accounts",
+              "settings", "manual"}
     for v in enum_values:
         assert v in public, f"Unexpected public action: {v}"
 

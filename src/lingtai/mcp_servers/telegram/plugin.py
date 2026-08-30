@@ -8,8 +8,9 @@ the bundled ``SKILL.md`` its ``manual`` action returns, and the actions it
 appends the reserved action from the packaged skill and rejects any attempt to
 declare it here.
 
-``_family.py`` consumes this for the public schema and dispatch, ``server.py``
-for its server/manifest identity, and ``manager.py`` for the manual payload.
+``_family.py`` consumes this for the public schema, settings opt-in, and
+dispatch, ``server.py`` for its server/manifest identity, and ``manager.py``
+for the manual payload.
 The shipped ``lingtai/mcp_catalog.json`` entry must equal
 :meth:`~lingtai.mcp_servers._plugin.CuratedMcpPlugin.mcp_declaration`; the
 catalog file itself stays the runtime source the host reads.
@@ -25,6 +26,7 @@ TELEGRAM_PLUGIN = CuratedMcpPlugin(
     summary="Telegram bot client — Bot API send/receive with LICC inbox callback.",
     homepage="https://github.com/Lingtai-AI/lingtai-telegram",
     skill_name="telegram-mcp-manual",
+    settings=True,
 )
 
 #: Telegram's own public actions, in stable model-facing order. The reserved
