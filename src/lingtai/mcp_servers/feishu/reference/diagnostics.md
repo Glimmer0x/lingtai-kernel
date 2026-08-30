@@ -1,3 +1,16 @@
+---
+related_files:
+- src/lingtai/mcp_servers/ANATOMY.md
+- src/lingtai/mcp_servers/feishu/SKILL.md
+- src/lingtai/mcp_servers/feishu/server.py
+- src/lingtai/mcp_servers/feishu/manager.py
+- src/lingtai/mcp_servers/feishu/service.py
+- src/lingtai/mcp_servers/feishu/settings.py
+- tests/test_feishu_settings.py
+maintenance: |
+  Keep Feishu startup, admission, message, Task Card, and settings diagnostics
+  aligned with the package's redaction and manager-availability behavior.
+---
 # Feishu Bot diagnostics
 
 Use this runbook after the setup checklist in [`setup.md`](setup.md). Start from
@@ -46,9 +59,14 @@ the secret into the repository or loosening it to world-readable.
 
 ### `config must contain 'accounts' (list)` or account construction fails
 
-Require a non-empty array. Every item needs a unique `alias`, `app_id`, and
-`app_secret`; `allowed_users`, when present, contains sender `open_id` strings.
-An empty allowlist is not block-all.
+Use the documented non-empty array of account objects. The current loader
+checks only that `accounts` is truthy, then directly indexes `alias`, `app_id`,
+and `app_secret`; it does not separately enforce mapping/string types, unique
+aliases, the `cli_` prefix, or `open_id` element shapes. Missing required keys,
+non-iterable account data, or an allowlist whose values cannot be placed in a
+set fails construction. Duplicate aliases replace the lookup-map entry while
+remaining in service order. An omitted, null, or empty allowlist is not
+block-all; it is unrestricted compatibility behavior.
 
 ### Manager starts but the account identity is not verified
 

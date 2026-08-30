@@ -836,6 +836,7 @@ DESCRIPTION = (
     "media is not editable through this action). "
     "'contacts' to manage saved contacts (open_id aliases). "
     "'accounts' to list configured app accounts. "
+    "'settings' to show Feishu-owned configuration without changing it. "
     "Voice/audio messages are automatically transcribed using Whisper (local) "
     "and delivered as text. "
     "Rich feedback: automatic 'seen' (OK) and transient native Typing reactions "
