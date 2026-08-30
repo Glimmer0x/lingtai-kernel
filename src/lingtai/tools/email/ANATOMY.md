@@ -10,10 +10,13 @@ related_files:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/tools/email/manager.py
   - src/lingtai/tools/email/primitives.py
+  - src/lingtai/tools/email/settings.py
+  - src/lingtai/adapters/posix/mail.py
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/_family_schema.py
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - tests/test_email_official_tool_plugin.py
+  - tests/test_email_settings.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/email/glossary-en.md
   - src/lingtai/tools/email/glossary-zh.md
@@ -37,9 +40,9 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
 ## Components
 
 - `__init__.py` — Package surface and the LTP v2 family boundary. Re-exports the full public API of the former monolithic `email.py` for backward compatibility: all primitives, schema functions, and `EmailManager`. Registers the `email` generic-dismiss guard at import because `.notification/email.json` mirrors durable unread state. Owns the family composition and the module-level intrinsic protocol:
-  - `_schema_only_family()` / `_FAMILY` — the module-level schema-only `ToolFamily`. Email is an *intrinsic* (module-level `get_schema()`/`handle(agent, args)`, no per-Agent manager object to hang a family off at import), so this one never dispatches; constructing it at import is still load-bearing as the registry's duplicate/reserved-`manual`-collision check.
+  - `_schema_only_family()` / `_FAMILY` — the module-level schema-only `ToolFamily`. Email is an *intrinsic* (module-level `get_schema()`/`handle(agent, args)`, no per-Agent manager object to hang a family off at import), so this one never dispatches; constructing it at import is still load-bearing as the registry's duplicate/reserved-child collision check and supplies the Email settings provider for schema composition.
   - `get_schema()` — the composed model-facing schema. Shadows the legacy flat `schema.get_schema` (re-exported as `get_flat_schema`) and replaces the generic composer's neutral `action` description with Email's own `ACTION_ENUM_DESCRIPTION`.
-  - `_build_family(agent)` — the per-call dispatching family. Every non-`manual` child re-enters `EmailManager.handle` with its unchanged historical flat shape; `manual` is `build_manual_child(agent, "email")`, registered directly and unwrapped.
+  - `_build_family(agent)` — the per-call dispatching family. Every operational child re-enters `EmailManager.handle` with its unchanged historical flat shape; the generic seam injects `settings` from the Email provider, and `manual` is `build_manual_child(agent, "email")`, registered directly and unwrapped.
   - `_strip_nulls()` — turns provider-sent explicit `null`s back into absent keys so the manager's `args.get(...)`/`in args` defaulting is preserved.
   - `_adapt_manual_result()` — Host/presentation-only flattening of the canonical ManualTool result to Email's pinned `{status, manual, manual_path}` public shape, strictly *after* dispatch.
   - `handle(agent, args)` — strips `_tc_id`, renders the reserved `unread` rejection before dispatch, delegates to the family, then adapts `manual` and restores Email's own unknown/absent-action results.
@@ -49,21 +52,25 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
     `DaemonEmailAgentShim` lacks an official tool surface and intentionally gets
     manager/hook boot only, preserving its task-scoped daemon-email MCP route.
   - `EmailRuntimeRequest` / `EmailRuntimePort` — Email-owned manager-facing
-    request and typed operation. `_build_bound_family(host)` consumes exactly
-    `host.email_runtime`; `_strip_nulls()` runs before request construction.
+    request, typed operation, and applied pseudo-subscription snapshot read.
+    `_build_bound_family(host)` consumes exactly `host.email_runtime`;
+    `_strip_nulls()` runs before request construction.
   - `DECLARATION` / `_bind(host)` — static official-plugin declaration and
     host-bound composition. It requires exactly `workdir`/`email_runtime`;
-    operational children consume only `EmailRuntimePort`, and the reserved
-    manual child uses only `host.workdir`. The official mount supplies the one
+    operational children and settings provider consume only `EmailRuntimePort`,
+    while the reserved manual child uses only `host.workdir`. The official mount supplies the one
     model-facing schema while the module remains available to kernel hook
     resolution.
   - `AgentEmailRuntimeAdapter` lives in the production host adapter module, not
-    this family. It retains only a manager reader, rejects foreign Email actions,
+    this family. It retains only manager/settings readers, rejects foreign Email actions,
     looks up the current `agent._email_manager` at call time, and calls its
     `handle({"action": request.action, **dict(request.input)})` exactly once.
     It never captures `_intrinsics` or routes through the official handler.
+    The settings read returns the POSIX adapter's actual construction snapshot.
 
-- `_family_schema.py` — Canonical per-action data for the composed schema: `ACTION_ORDER` (the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and child registration order), one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. Holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
+- `_family_schema.py` — Canonical operational/manual action data for the composed schema: `ACTION_ORDER`, one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. The generic declaration seam inserts `settings` before `manual`, changing the disclosed input union to `anyOf` without hand-authoring a settings child. This module holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
+
+- `settings.py` — Email-owned read-only settings provider and single source for the fixed body, duplicate-loop, check-result, and unread-projection limits consumed by `manager.py`/`primitives.py`. `email_settings_rows()` adds the fully redacted `manifest.pseudo_agent_subscriptions` row from the effective mail-adapter construction snapshot. It raises when that snapshot is unavailable and defines no mutation type or handler.
 
 - `manual/SKILL.md` — the installed `email-manual` bundle the reserved `manual` child returns; `Agent._install_intrinsic_manuals()` copies it to `.library/intrinsic/capabilities/email/`.
 
@@ -113,7 +120,8 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
 - `_send(mode="abs")` embeds an explicit `_return_route` dict (`{"mode": "abs", "address": <sender abs workdir>, "sender_agent_id": <sender id>}`) into every dispatched payload AND the local `sent/{id}/message.json` record. This is the only safe return route across `.lingtai/` networks where short addresses can collide (issue #145). Recipients without the field — older messages — keep working through the existing absolute-`from` fallback in `_resolve_reply_target`.
 - `_mailman` runs as a daemon thread per recipient. It waits until `deliver_at`, then dispatches. The outbox entry is written synchronously before the thread starts.
 - `_mailman` with `skip_sent=True` (used by `_send`) deletes the outbox entry instead of moving it to `sent/`, because `_send` writes the `sent/` entry itself.
-- The model-facing root is one closed LTP v2 envelope (`action`, `input`, `reasoning`, `summarize`) over 14 internal children — one per public action — composed by the generic `ToolFamily` infra from the single `_family_schema.ACTION_ORDER`/`INPUT_SCHEMAS` registry. Children consume no model tool slots, so `email` still advertises exactly one tool. Because both the advertised schema and dispatch are generated from that one registry, an action cannot be advertised without being dispatchable. Cross-action `input` keys are rejected before any mailbox I/O — the property that matters most for a side-effecting family.
+- The model-facing root is one closed LTP v2 envelope (`action`, `input`, `reasoning`, `summarize`) over 15 internal children: thirteen unchanged operational actions, generic `settings` immediately before `manual`, and `manual`. Children consume no model tool slots, so `email` still advertises exactly one tool. The declaration opt-in and family provider drive advertised schema and dispatch. Cross-action `input` keys are rejected before any mailbox I/O.
+- `settings` is read-only and performs no mailbox I/O. Four public rows are installed-code limits; `manifest.pseudo_agent_subscriptions` is configurable through the existing init manifest but fully redacts current/default path lists. Every success row projects exactly `key`, `current`, `default`, `configurable`, and an exact `email-manual` section pointer in `comment`. Unavailable applied truth fails the whole action without partial rows. Mailbox/session paths, addresses, identities, contacts, content, attachments, and read state never enter this inventory.
 - The official manager-facing composition is domain-native: `EmailRuntimeRequest`
   is the only request shape accepted by `EmailRuntimePort`; `_strip_nulls()` runs
   before it is constructed. The host adapter rejects foreign actions before one

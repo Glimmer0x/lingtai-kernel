@@ -12,7 +12,8 @@ the already-migrated families are:
   disturb;
 * it keeps a **reserved non-public action** (``unread``) that is deliberately
   not a child and must keep its exact pre-migration rejection;
-* its 14 actions are by far the widest registry to migrate, so
+* its 13 operational actions plus reserved ``settings``/``manual`` children
+  form a wide registry, so
   ``action``-to-``input`` correlation and per-action key isolation carry more
   weight here than in a two-child family.
 
@@ -41,12 +42,13 @@ from tests._snapshot_helpers import (
 )
 from tests._workdir_lease_helpers import make_test_lease
 
-# The exact pre-migration public action list, restated here as a literal so a
-# silent edit to ACTION_ORDER cannot quietly redefine what this test asserts.
+# The operational/manual list stays pinned; the settings seam adds its reserved
+# child immediately before manual without editing ``ACTION_ORDER``.
 _PUBLIC_ACTIONS = [
     "send", "check", "read", "dismiss", "reply", "reply_all",
     "search", "archive", "delete",
     "contacts", "add_contact", "remove_contact", "edit_contact",
+    "settings",
     "manual",
 ]
 
@@ -107,9 +109,12 @@ def test_root_is_the_closed_ltp_v2_envelope_and_nothing_else():
         assert legacy not in schema["properties"]
 
 
-def test_public_action_values_and_order_are_unchanged():
+def test_settings_is_the_only_added_public_action_and_order_is_pinned():
     assert email_tool.get_schema()["properties"]["action"]["enum"] == _PUBLIC_ACTIONS
-    assert list(ACTION_ORDER) == _PUBLIC_ACTIONS
+    assert list(ACTION_ORDER) == [
+        action for action in _PUBLIC_ACTIONS if action != "settings"
+    ]
+    assert list(email_tool.DECLARATION.public_actions) == _PUBLIC_ACTIONS
 
 
 def test_reserved_unread_is_not_a_public_child_or_action():
@@ -123,17 +128,18 @@ def test_one_canonical_child_registry_drives_schema_and_dispatch(tmp_path):
     """The advertised actions and the dispatchable children are one list.
 
     This is the anti-drift proof the acceptance asks for: the ``action`` enum,
-    the ``input.oneOf`` branch order, the ``allOf`` condition order, and the
+    the ``input.anyOf`` branch order, the ``allOf`` condition order, and the
     real per-call dispatching family's ``child_names`` all come from
-    ``ACTION_ORDER``, so an action cannot be advertised without being
+    declaration plus settings provider, so an action cannot be advertised without being
     dispatchable (or vice versa).
     """
     schema = email_tool.get_schema()
     family = email_tool._build_family(_agent(tmp_path))
     assert list(family.child_names) == _PUBLIC_ACTIONS
     assert schema["properties"]["action"]["enum"] == list(family.child_names)
-    assert [b["title"] for b in schema["properties"]["input"]["oneOf"]] == [
-        f"{action} input" for action in family.child_names
+    assert [b["title"] for b in schema["properties"]["input"]["anyOf"]] == [
+        "settings inventory input" if action == "settings" else f"{action} input"
+        for action in family.child_names
     ]
     assert [
         c["if"]["properties"]["action"]["const"] for c in schema["allOf"]
@@ -145,7 +151,7 @@ def test_one_canonical_child_registry_drives_schema_and_dispatch(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("action", _PUBLIC_ACTIONS)
+@pytest.mark.parametrize("action", ACTION_ORDER)
 def test_every_action_input_schema_is_closed_and_self_describing(action):
     branch = INPUT_SCHEMAS[action]
     assert branch["type"] == "object"
@@ -161,7 +167,7 @@ def test_every_action_input_schema_is_closed_and_self_describing(action):
 def test_all_of_correlates_every_action_const_with_its_exact_branch_schema():
     schema = email_tool.get_schema()
     conditions = schema["allOf"]
-    branches = schema["properties"]["input"]["oneOf"]
+    branches = schema["properties"]["input"]["anyOf"]
     assert len(conditions) == len(branches) == len(_PUBLIC_ACTIONS)
     for condition, branch, action in zip(conditions, branches, _PUBLIC_ACTIONS):
         assert condition["if"]["properties"]["action"]["const"] == action
@@ -181,7 +187,7 @@ def test_manual_child_reuses_the_canonical_strict_empty_input_literal():
     byte-identical ``manual`` input.
     """
     assert INPUT_SCHEMAS["manual"] == MANUAL_INPUT_SCHEMA
-    branch = email_tool.get_schema()["properties"]["input"]["oneOf"][-1]
+    branch = email_tool.get_schema()["properties"]["input"]["anyOf"][-1]
     assert {k: v for k, v in branch.items() if k != "title"} == MANUAL_INPUT_SCHEMA
 
 
@@ -204,7 +210,7 @@ def test_action_specific_fields_live_only_in_their_own_branch():
         "name": {"add_contact", "edit_contact"},
     }
     for field, expected in owners.items():
-        actual = {a for a in _PUBLIC_ACTIONS if field in INPUT_SCHEMAS[a]["properties"]}
+        actual = {a for a in ACTION_ORDER if field in INPUT_SCHEMAS[a]["properties"]}
         assert actual == expected, field
 
 

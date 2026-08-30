@@ -2,7 +2,7 @@
 
 The generic wire proof (``tests/test_tool_family_wire_parity.py``) covers the
 infrastructure using ``web``. This file is ``email``'s own: it proves the same
-seam holds for the widest child registry migrated so far (14 actions), through
+seam holds for Email's 15-child public registry, through
 a **real Agent startup** — so what is asserted is the schema the model actually
 receives after ``_build_tool_schemas`` composition, not a unit-level
 ``get_schema()`` dict.
@@ -21,6 +21,7 @@ _PUBLIC_ACTIONS = [
     "send", "check", "read", "dismiss", "reply", "reply_all",
     "search", "archive", "delete",
     "contacts", "add_contact", "remove_contact", "edit_contact",
+    "settings",
     "manual",
 ]
 
@@ -43,7 +44,7 @@ def _email_schema(tmp_path):
 
 
 def test_email_is_exactly_one_model_facing_tool(tmp_path):
-    """Children consume no model tool slots: 14 actions, one advertised tool."""
+    """Children consume no model tool slots: 15 actions, one advertised tool."""
     from lingtai.agent import Agent
     from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
@@ -98,27 +99,24 @@ def test_action_input_all_of_correlation_survives_both_wires(tmp_path):
 
 
 def test_every_action_branch_is_disclosed_on_both_wires(tmp_path):
-    """All 14 branches reach the model on both routes, with closed inputs.
+    """All 15 branches reach the model on both routes, with closed inputs.
 
-    The two wires spell the discriminated union differently, and that
-    difference is the pre-existing OpenAI adapter's, not this migration's:
-    Chat Completions carries the composed ``input.oneOf`` through verbatim,
-    while ``_scrub_responses_schema`` rewrites it to ``anyOf`` for the
-    Responses route (identically for ``web``). This asserts the branch set and
-    their closedness on both, under whichever combinator that wire uses.
+    Settings opt-in makes the composed input union ``anyOf`` on both routes.
+    This asserts the branch set and their closedness on both wires.
     """
     email = _email_schema(tmp_path)
     chat = _build_tools([email])[0]["function"]["parameters"]
     responses = _build_responses_tools([email])[0]["parameters"]
 
-    assert "oneOf" in chat["properties"]["input"]
+    assert "anyOf" in chat["properties"]["input"]
     assert "anyOf" in responses["properties"]["input"]
 
     for params in (chat, responses):
         node = params["properties"]["input"]
-        branches = node.get("oneOf") or node["anyOf"]
+        branches = node["anyOf"]
         assert [b["title"] for b in branches] == [
-            f"{a} input" for a in _PUBLIC_ACTIONS
+            "settings inventory input" if a == "settings" else f"{a} input"
+            for a in _PUBLIC_ACTIONS
         ]
         for branch in branches:
             assert branch["additionalProperties"] is False

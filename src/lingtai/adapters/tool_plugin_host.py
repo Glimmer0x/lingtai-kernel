@@ -489,7 +489,7 @@ class AgentAvatarParentAdapter:
 
 
 class AgentEmailRuntimeAdapter:
-    """Email's narrow live-manager port over one call-time reader.
+    """Email's narrow live-manager and applied-settings read port.
 
     The adapter owns no Agent and never dispatches through an intrinsic or an
     official tool handler.  It validates the Email-owned action set before it
@@ -499,10 +499,15 @@ class AgentEmailRuntimeAdapter:
     without leaving an already-bound declared family stale.
     """
 
-    __slots__ = ("_read_manager",)
+    __slots__ = ("_read_manager", "_read_pseudo_agent_subscriptions")
 
-    def __init__(self, read_manager: Callable[[], Any]) -> None:
+    def __init__(
+        self,
+        read_manager: Callable[[], Any],
+        read_pseudo_agent_subscriptions: Callable[[], Any] | None = None,
+    ) -> None:
         self._read_manager = read_manager
+        self._read_pseudo_agent_subscriptions = read_pseudo_agent_subscriptions
 
     def handle_email(self, request: "EmailRuntimeRequest") -> "EmailResult":
         # Keep the action source of truth in Email's static declaration without
@@ -515,6 +520,18 @@ class AgentEmailRuntimeAdapter:
         if manager is None:
             return {"error": "Internal: email manager not initialized. boot() was not called."}
         return manager.handle({"action": request.action, **dict(request.input)})
+
+    def read_pseudo_agent_subscriptions(self) -> tuple[str, ...]:
+        """Read the mail adapter's effective, construction-time path snapshot."""
+        read = self._read_pseudo_agent_subscriptions
+        if read is None:
+            raise RuntimeError("Email pseudo-agent subscription snapshot is unavailable")
+        value = read()
+        if not isinstance(value, tuple) or not all(
+            isinstance(item, str) for item in value
+        ):
+            raise RuntimeError("Email pseudo-agent subscription snapshot is invalid")
+        return value
 
 
 class _DaemonPresetToolCollector:

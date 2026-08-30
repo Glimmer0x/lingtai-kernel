@@ -6,9 +6,9 @@ description: >
   communication and memory layers, collaboration topology, MCP/addon ownership,
   and (§11) the canonical `init.json` composition and preset runtime model.
   Route via `system-manual` when it is unclear whether this is the right node.
-version: 1.5.0
+version: 1.5.1
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, alarm, communication, memory, notifications, mcp, preset]
-last_changed_at: "2026-08-24T08:45:00Z"
+last_changed_at: "2026-08-29T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
@@ -356,10 +356,10 @@ policy does not read it. Agent `init.json` likewise does not own
 `snapshot_interval`, or `activeness`: old root keys are compatibility-known and
 ignored, while valid environment and `settings/system.json` v2 values override
 fixed defaults. Materialization and preset activation discard a preset context
-limit instead of handing it into init. Some runtime gaps
-(`pseudo_agent_subscriptions`, exact MCP reload/venv/prompt persistence detail)
-are open implementation questions, not resolved by this reference — do not
-infer a guarantee from a name alone.
+limit instead of handing it into init. Email's owner manual defines the exact
+`pseudo_agent_subscriptions` construction/relaunch lifecycle. Exact MCP reload,
+venv, and prompt-persistence details remain open implementation questions not
+resolved by this reference — do not infer a guarantee from a name alone.
 
 ### Preset identity and the two catalogs
 

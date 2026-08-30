@@ -159,8 +159,8 @@ verification live only in the manual section named by `comment`. Legacy
 The owner-local classification explicitly excludes settings assigned to Soul,
 Shell, Daemon, Notification, Email, File, Vision, Web, Task Card,
 Plugin/Psyche, MCP, and curated-addon ToolPlugins. In particular,
-`manifest.pseudo_agent_subscriptions` is Email-owned and is reserved for a
-future Email owner-local row that fully redacts its path lists; System does not
+`manifest.pseudo_agent_subscriptions` is Email-owned and is projected only by
+Email's owner-local row, which fully redacts both path lists; System does not
 project it. Psyche owns the live root `pad` / `pad_file` prompt inputs, so they
 are concrete-owner exclusions rather than inert compatibility fields. Daemon's
 manager-pool variable is a registered concrete-owner setting; its manager token

@@ -104,10 +104,9 @@ cross-cutting Agent/ToolExecutor result hints, not the Context ToolPlugin's
 public summarize action. Conversely, `manifest.pseudo_agent_subscriptions`
 belongs to the concrete Email ToolPlugin because CLI composition hands it
 directly to `PosixFilesystemMailAdapter`, which resolves the subscription
-paths. It is intentionally absent from System SHOW. A future Email-owner
-classification and coverage change must add its owner-local discovery row and
-fully redact both current and default path lists; this System repair does not
-edit Email implementation.
+paths. It is intentionally absent from System SHOW. The Email-owner inventory
+uses the generic sensitive-value seam to fully redact both current and default path lists;
+System neither duplicates that row nor exposes the paths.
 
 Authorized change procedure: after explicit owner/human authorization, edit
 the exact `init.json` field with the existing File or Shell capability. For a

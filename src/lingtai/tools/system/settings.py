@@ -215,8 +215,8 @@ SYSTEM_INIT_CONCRETE_TOOL_EXCLUSIONS = frozenset(
         "/lingtai_file",
         "/manifest/capabilities",
         "/manifest/plugins",
-        # Email owns these mail-adapter subscription paths. Its eventual
-        # owner-local discovery row must fully redact the path list.
+        # Email owns these mail-adapter subscription paths. Its owner-local
+        # discovery row fully redacts both current and default path lists.
         "/manifest/pseudo_agent_subscriptions",
         "/manifest/soul",
     }

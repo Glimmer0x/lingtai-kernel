@@ -1,15 +1,17 @@
 ---
 name: email-contract
 tool: email
-contract_version: 2
+contract_version: 3
 related_files:
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/adapters/posix/mail.py
   - src/lingtai/tools/registry.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/tools/email/_family_schema.py
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/manager.py
+  - src/lingtai/tools/email/settings.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/BEHAVIORS.md
   - src/lingtai/tools/email/manual/SKILL.md
@@ -20,13 +22,14 @@ related_files:
   - tests/test_tool_family_email_migration.py
   - tests/test_tool_family_email_wire_parity.py
   - tests/test_email_official_tool_plugin.py
+  - tests/test_email_settings.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
   same change and bump contract_version on breaking contract edits.
-  contract_version 2 records the LTP v2 / ToolFamily envelope migration: the
-  call shape moved to closed action/input/reasoning/summarize while the public
-  tool name, every action value, and every result shape stayed identical.
+  contract_version 3 adds Email's generic read-only settings inventory after
+  the LTP v2 / ToolFamily envelope migration. The public tool name and all
+  operational action/result shapes remain unchanged.
   Update this contract, the paired ANATOMY.md, the per-action schemas in
   _family_schema.py, and the kernel _LTP_V2_MIGRATED_FAMILIES allowlist
   together when the envelope or an action's input surface changes.
@@ -41,14 +44,14 @@ this one tool. The implementation lives in `src/lingtai/tools/email/`; the code 
 source of truth.
 
 ## Routing Card
-Guarded by: [EM001](BEHAVIORS.md#behavior-em001), [EM002](BEHAVIORS.md#behavior-em002)
+Guarded by: [EM001](BEHAVIORS.md#behavior-em001), [EM002](BEHAVIORS.md#behavior-em002), [EM003](BEHAVIORS.md#behavior-em003)
 
 
 **Use this when:**
 - You are editing the internal mailbox tool: send/check/read/reply/search/
   archive/delete or the contact book.
-- You are reviewing mailbox on-disk layout, unread digest republishing, or the
-  duplicate-send loop guard.
+- You are reviewing mailbox on-disk layout, unread digest republishing, the
+  duplicate-send loop guard, or Email's read-only settings inventory.
 - You need the ambiguous-reply (`#145`) return-route handling or the abs/peer
   send modes.
 
@@ -76,16 +79,17 @@ storage; abs/peer reply routing -> §Anchored claims.
 `email` is a migrated LTP v2 family (`src/lingtai/tools/CONTRACT.md`). The
 model-facing root is the closed envelope — exactly `action`, `input`,
 `reasoning`, and `summarize`, with `additionalProperties: false` and
-`required: [action, input, reasoning]`. The public tool name is unchanged, and
-so is every `action` value; only the call shape moved, from one open flat
-argument bag to one strict per-action `input` object.
+`required: [action, input, reasoning]`. The public tool name and all thirteen
+operational action values are unchanged. The generic opt-in seam adds only
+`settings`, immediately before the existing final `manual` action.
 
-Each action is one canonical internal child with its own closed
-`input_schema` (`src/lingtai/tools/email/_family_schema.py`); children consume
+Each operational/manual action is one canonical internal child with its own
+closed `input_schema` (`src/lingtai/tools/email/_family_schema.py`), and the
+generic seam supplies the closed settings child; children consume
 no model tool slots, so the family still advertises exactly one tool. The
 composed schema is built by the generic `ToolFamily` infra
-(`src/lingtai/tools/tool_family/`) from that one child registry, so the
-advertised `action` enum, the `input.oneOf` branches, the root `allOf`
+(`src/lingtai/tools/tool_family/`) from the declaration and provider, so the
+advertised `action` enum, the `input.anyOf` branches, the root `allOf`
 correlation, and dispatch cannot drift apart. `summarize` guidance profile:
 **bulky-result** for `check`, `read`, and `search` (mailbox listings and full
 bodies can be large); **short-result** for every other action, whose receipts
@@ -130,6 +134,7 @@ action's `input` properties — e.g. `email(action='read', input={'email_id':
 | `add_contact` | `address`, `name` | `note` | `{status: "added"/"updated", contact}` | `{error: "address is required"}`; `{error: "name is required"}` |
 | `remove_contact` | `address` | — | `{status: "removed", address}` | `{error: "address is required"}`; `{error: "Contact not found: ..."}` |
 | `edit_contact` | `address` | `name`, `note` | `{status: "updated", contact}` | `{error: "address is required"}`; `{error: "Contact not found: ..."}` |
+| `settings` | — (`input` is exactly `{}`) | — | `{"settings": [...]}` with exactly five fields per row | fixed whole-action failure when current truth/provider rows are unavailable or invalid |
 
 Missing/absent `action` returns `{error: "action is required"}`; an unrecognized
 action returns `{error: "Unknown email action: ..."}`. Both are Email's own
@@ -161,17 +166,54 @@ Envelope metadata never reaches an action implementation: `reasoning`,
 `base_agent._dispatch_tool` adds to every intrinsic's args) are all stripped at
 this family's own boundary.
 
+## Settings
+
+Email opts into the generic read-only settings action with the provider in
+`settings.py`. Success is only `{"settings": [...]}`. Every row contains
+exactly `key`, `current`, `default`, `configurable`, and `comment`; each
+`comment` points to the exact owner-manual heading for meaning, accepted
+values, source/precedence, configuration key, timing, sensitivity, and the
+authorized external change procedure.
+
+| Key | Current | Default | Configurable | Comment |
+|---|---:|---:|---|---|
+| `send.body_char_limit` | `50000` | `50000` | `false` | `email-manual#send-body-character-limit` |
+| `send.duplicate_free_passes` | `2` | `2` | `false` | `email-manual#duplicate-send-loop-guard` |
+| `check.result_token_limit` | `10000` | `10000` | `false` | `email-manual#check-result-token-limit` |
+| `unread.max_entries` | `10` | `10` | `false` | `email-manual#unread-notification-entry-limit` |
+| `manifest.pseudo_agent_subscriptions` | `<redacted>` | `<redacted>` | `true` | `email-manual#pseudo-agent-subscriptions` |
+
+The first four rows are installed-code facts consumed by Email operations.
+The fifth reads the actual paths resolved once by
+`PosixFilesystemMailAdapter` at construction. Its private sensitive flag fully
+redacts both current and meaningful default (`["../human"]`) and is never
+projected. If applied truth is unavailable or malformed, the provider raises
+and the complete action becomes the fixed generic `SETTINGS_UNAVAILABLE`
+failure with no partial rows or exception detail. Non-empty input is rejected;
+there is no set/reset/writer. The generic complete-response bound remains
+65,536 UTF-8 bytes.
+
+`manifest.pseudo_agent_subscriptions` is configurable only through that exact
+existing `init.json` manifest field. CLI composition supplies the absent-field
+default and constructs the mail adapter; ordinary refresh does not rebuild the
+adapter, so an authorized edit requires full relaunch. No Email environment or
+owner-file peer exists. Mailbox/session paths, addresses, identity, contacts,
+content, attachments, and read/archive state are excluded rather than merely
+redacted.
+
 ## Declared host plugin
 
 `email` is an official declared host plugin under
 [`src/lingtai/kernel/tool_plugin/CONTRACT.md`](../../kernel/tool_plugin/CONTRACT.md).
 Its module-level `DECLARATION` is static: it derives its thirteen operational
 actions and per-action schemas from the existing family registry, appends the
-reserved `manual` only through the declaration, and names the existing package
-manual destination `email`.
+generic reserved `settings` child through `settings=True`, appends `manual`
+only through the declaration, and names the existing package manual destination
+`email`.
 
-The Email package owns the manager-facing `EmailRuntimeRequest` value and
-`EmailRuntimePort.handle_email()` operation (`src/lingtai/tools/email/__init__.py`).
+The Email package owns the manager-facing `EmailRuntimeRequest` value plus
+`EmailRuntimePort.handle_email()` and the narrow applied-subscription read
+(`src/lingtai/tools/email/__init__.py`).
 Operational children receive one fixed action plus its validated input through
 that port; they never receive an Agent, a capability-name lookup, or a generic
 `dispatch(args)` vocabulary. Family normalization is `_strip_nulls()` before the
@@ -183,8 +225,8 @@ injected `official_plugin` in `src/lingtai/tools/registry.py`, so
 `BaseAgent._boot_official_intrinsics()` invokes `email.boot(agent)` on
 construction and refresh. That boot creates/replaces `EmailManager` first, then
 calls `register_agent_tool_plugins(..., extra_ports_for=...)`. Its sole extra
-port is `AgentEmailRuntimeAdapter(lambda: getattr(agent, "_email_manager",
-None))`. The adapter owns no Agent object: it rejects an undeclared action,
+port is `AgentEmailRuntimeAdapter` with call-time manager and mail-adapter
+snapshot readers. The adapter owns no Agent object: it rejects an undeclared action,
 looks up the current manager at invocation time, and calls exactly once with
 `{"action": request.action, **dict(request.input)}`. It never captures
 `agent._intrinsics` and never recurses through the official handler. Thus a
@@ -213,6 +255,10 @@ foreign-action rejection before manager invocation, normalization-before-request
 one real-Agent mount, canonical package manual, one model-facing schema, no
 capability/manifest row for null or disabled input, and call-time observation of
 a manager replacement after refresh.
+`tests/test_email_settings.py` proves exact row/order/field equality,
+source-backed constants, full subscription-list redaction, stable manual
+anchors, whole-inventory failure, strict SHOW-only input, the applied POSIX
+construction snapshot, and an unchanged ordinary contacts call.
 
 ## State & storage
 
@@ -267,7 +313,8 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | Sender identity is carried on inbound mail and surfaced on read | `src/lingtai/tools/email/manager.py:_inject_identity` | `tests/test_email_identity.py` |
 | Abs-mode replies resolve via `_return_route`, guarding the `#145` ambiguous self-route | `src/lingtai/tools/email/manager.py:_resolve_reply_target` | `tests/test_email_abs_reply_route.py` |
 | The model-facing root is the closed LTP v2 envelope and nothing else | `src/lingtai/tools/email/__init__.py:get_schema` | `tests/test_tool_family_email_migration.py::test_root_is_the_closed_ltp_v2_envelope_and_nothing_else` |
-| All 14 public action values and their order are unchanged | `src/lingtai/tools/email/_family_schema.py:ACTION_ORDER` | `tests/test_tool_family_email_migration.py::test_public_action_values_and_order_are_unchanged` |
+| Thirteen operational action values remain pinned and generic `settings` is immediately before `manual` | `src/lingtai/tools/email/__init__.py:DECLARATION` | `tests/test_tool_family_email_migration.py::test_settings_is_the_only_added_public_action_and_order_is_pinned`, `tests/test_email_settings.py::test_declaration_opts_in_immediately_before_manual` |
+| Settings shares operational constants, projects five ordered fields, fully redacts subscriptions, and has no writer | `src/lingtai/tools/email/settings.py` | `tests/test_email_settings.py` |
 | One child registry drives both the advertised schema and dispatch | `src/lingtai/tools/email/__init__.py:_build_family` | `tests/test_tool_family_email_migration.py::test_one_canonical_child_registry_drives_schema_and_dispatch` |
 | A cross-action key is rejected before any mailbox I/O or delivery | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_email_migration.py::test_cross_action_key_is_rejected_before_any_mailbox_io`, `::test_send_fields_cannot_be_smuggled_through_a_read_call` |
 | Reserved `unread` keeps its exact rejection and is not a public child | `src/lingtai/tools/email/__init__.py:handle` | `tests/test_tool_family_email_migration.py::test_reserved_unread_keeps_its_exact_rejection_before_dispatch` |
@@ -291,12 +338,13 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | Cross-action smuggle rejected before side effects | `tests/test_tool_family_email_migration.py::test_send_fields_cannot_be_smuggled_through_a_read_call` | Call `read` with `address`/`message` in `input` | Mail could leave the agent via a read-shaped call |
 | Email manager requests use the typed domain port and reject foreign actions | `tests/test_email_official_tool_plugin.py::test_email_runtime_port_is_domain_specific_and_rejects_foreign_action` | Bind the runtime adapter and inspect its request | A generic dispatcher leaks unrelated capability vocabulary |
 | Official Email mount creates no dynamic capability or persisted manifest row | `tests/test_email_official_tool_plugin.py::test_official_email_mount_keeps_real_agent_runtime_and_package_manual`, `::test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refresh` | Inspect `_capabilities` and `_build_manifest()` after construction and refresh | Avatar replay/identity state gains a false Email capability |
+| Settings is read-only and private state stays absent/redacted | `tests/test_email_settings.py` | Call SHOW and follow every `comment` into `email-manual` | Local paths or Email domain data leak, or output grows beyond five fields |
 | `email.boot` runs exactly once per construction and per refresh | `tests/test_email_official_tool_plugin.py::test_email_official_boot_runs_exactly_once_per_construction_and_refresh` | Count official boots, Email registrar calls, and `EmailManager` constructions per phase | A second boot silently repeats manager/grant/bind/mount work behind one final surface |
 
 Run before merging email changes:
 
 ```bash
-python -m pytest tests/test_layers_email.py tests/test_email_identity.py tests/test_email_abs_reply_route.py tests/test_system_dismiss.py tests/test_tool_family_email_migration.py tests/test_tool_family_email_wire_parity.py tests/test_email_official_tool_plugin.py -q
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_layers_email.py tests/test_email_identity.py tests/test_email_abs_reply_route.py tests/test_system_dismiss.py tests/test_tool_family_email_migration.py tests/test_tool_family_email_wire_parity.py tests/test_email_official_tool_plugin.py tests/test_email_settings.py
 ```
 
 ## Schema and glossary ownership

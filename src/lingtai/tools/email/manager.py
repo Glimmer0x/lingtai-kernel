@@ -20,7 +20,6 @@ from lingtai.kernel.time_veil import scrub_time_fields
 from lingtai.kernel.token_counter import count_tokens
 
 from .primitives import (
-    EMAIL_BODY_CHAR_LIMIT,
     _coerce_address_list,
     _email_time,
     _is_self_send,
@@ -39,6 +38,11 @@ from .primitives import (
     _save_read_ids,
     _sent_dir,
 )
+from .settings import (
+    EMAIL_BODY_CHAR_LIMIT,
+    EMAIL_CHECK_RESULT_TOKEN_LIMIT,
+    EMAIL_DUPLICATE_FREE_PASSES,
+)
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -51,7 +55,7 @@ class EmailManager:
         self._agent = agent
         # Track consecutive identical sends per recipient to block loops.
         self._last_sent: dict[str, tuple[str, int]] = {}
-        self._dup_free_passes = 2  # allow this many identical sends
+        self._dup_free_passes = EMAIL_DUPLICATE_FREE_PASSES
 
     @property
     def _mailbox_path(self) -> Path:
@@ -403,8 +407,12 @@ class EmailManager:
 
         result = {"status": "ok", "total": total, "showing": len(summaries), "emails": summaries}
         tokens = count_tokens(json.dumps(result, ensure_ascii=False))
-        if tokens > 10_000:
-            while summaries and count_tokens(json.dumps(result, ensure_ascii=False)) > 10_000:
+        if tokens > EMAIL_CHECK_RESULT_TOKEN_LIMIT:
+            while (
+                summaries
+                and count_tokens(json.dumps(result, ensure_ascii=False))
+                > EMAIL_CHECK_RESULT_TOKEN_LIMIT
+            ):
                 summaries.pop()
                 result["emails"] = summaries
                 result["showing"] = len(summaries)
