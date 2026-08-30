@@ -6,9 +6,9 @@ family, matching the Telegram MCP's split (``../telegram/_family.py``).
 
 Action *composition* belongs to the package's plugin descriptor (`plugin.py`):
 this module declares Feishu's own actions and their strict `input` branches,
-and `FEISHU_PLUGIN` appends the reserved `manual` action from the packaged
-`SKILL.md`. `manual` therefore never routes through the manager and cannot be
-omitted, re-schema'd, or rebound to other material from here.
+and `FEISHU_PLUGIN` inserts read-only `settings` before the reserved `manual`
+action from the packaged `SKILL.md`. Neither reserved action routes through
+the manager.
 """
 from __future__ import annotations
 
@@ -19,8 +19,9 @@ from lingtai.tools.tool_family import ChildTool, ToolFamily
 
 from ._errors import failure_result
 from .plugin import FEISHU_ACTIONS, FEISHU_DECLARED_ACTIONS, FEISHU_PLUGIN
+from .settings import build_feishu_settings
 
-# The package's own actions plus the plugin-appended reserved ``manual``. Kept
+# The package's own actions plus plugin-composed reserved settings/manual. Kept
 # local to avoid importing the manager (which consumes this schema).
 _DECLARED_ACTIONS = FEISHU_DECLARED_ACTIONS
 _ACTIONS = FEISHU_ACTIONS
@@ -312,6 +313,7 @@ def _schema_only_family() -> ToolFamily:
             ChildTool(action, schemas[action], lambda _input: {})
             for action in _DECLARED_ACTIONS
         ],
+        settings_provider=lambda: (),
     )
 
 
@@ -320,13 +322,15 @@ _SCHEMA_FAMILY = _schema_only_family()
 
 def feishu_schema() -> dict[str, Any]:
     schema = _SCHEMA_FAMILY.build_schema()
-    # check/contacts/accounts/manual all share the empty-object branch, so a
-    # strict oneOf here is ambiguous ({} matches more than one branch). The
+    # check/contacts/accounts/settings/manual all share the empty-object branch,
+    # so a strict oneOf here is ambiguous ({} matches more than one branch). The
     # root allOf discriminator still correlates each action to its exact
     # closed branch; use anyOf for the model-discovery list so native
     # JSON-Schema validators do not reject a valid input merely because
     # another action's branch also fits.
-    schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
+    input_schema = schema["properties"]["input"]
+    if "oneOf" in input_schema:
+        input_schema["anyOf"] = input_schema.pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "send: send text, markdown, post, card, media, share, or sticker content "
         "to a user or chat "
@@ -357,6 +361,8 @@ def feishu_schema() -> dict[str, Any]:
         "(open_id, alias; optional name, chat_id). "
         "remove_contact: remove a contact (alias or open_id). "
         "accounts: list configured app accounts. "
+        "settings: show the current Feishu-owned configuration inventory; "
+        "this action never changes configuration. "
         + FEISHU_PLUGIN.manual_action_description()
     )
     return schema
@@ -430,13 +436,11 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
 
 
 def build_feishu_family(manager: Any | None) -> ToolFamily:
-    """Compose the public family: manager-backed declared actions + plugin manual.
+    """Compose manager actions with package-owned settings and manual children.
 
-    Only Feishu's own actions are built here. ``manual`` is appended by
-    ``FEISHU_PLUGIN`` and answered directly from the packaged ``SKILL.md``,
-    with or without a live manager — the same payload the manager's own
-    ``_manual()`` returns, minus the possibility of the business boundary
-    replacing it.
+    Only Feishu's own actions are built here. The settings provider reads the
+    bound service, while ``manual`` answers directly from the packaged
+    ``SKILL.md`` even when no manager is available.
     """
     schemas = _feishu_input_schemas()
     children = [
@@ -448,7 +452,10 @@ def build_feishu_family(manager: Any | None) -> ToolFamily:
         )
         for action in _DECLARED_ACTIONS
     ]
-    return FEISHU_PLUGIN.build_family(children)
+    return FEISHU_PLUGIN.build_family(
+        children,
+        settings_provider=lambda: build_feishu_settings(manager),
+    )
 
 
 def handle_feishu(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -490,7 +497,7 @@ def handle_feishu(manager: Any | None, args: Mapping[str, Any] | None) -> dict[s
             return failure_result(
                 "invalid feishu input", error_code="INVALID_ARGUMENT",
             )
-    if manager is None and action != "manual":
+    if manager is None and action not in {"settings", "manual"}:
         return failure_result(
             "Feishu manager is not initialized",
             error_code="NOT_CONNECTED",

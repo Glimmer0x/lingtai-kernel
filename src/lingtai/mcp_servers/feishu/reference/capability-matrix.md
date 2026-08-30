@@ -1,3 +1,15 @@
+---
+related_files:
+- src/lingtai/mcp_servers/ANATOMY.md
+- src/lingtai/mcp_servers/feishu/SKILL.md
+- src/lingtai/mcp_servers/feishu/_family.py
+- src/lingtai/mcp_servers/feishu/plugin.py
+- src/lingtai/mcp_servers/feishu/settings.py
+- tests/test_feishu_settings.py
+maintenance: |
+  Keep the Feishu action inventory aligned with the public family, read-only
+  settings provider, owner manual, and focused tests.
+---
 # Feishu v1 capability matrix
 
 This matrix describes the bundled LingTai adapters at this release. It is a
@@ -34,10 +46,11 @@ provider concepts.
 
 ## Feishu action/content surface
 
-The public `feishu` family has 13 actions:
+The public `feishu` family has 14 actions:
 
 `send`, `check`, `read`, `reply`, `react`, `search`, `delete`, `edit`,
-`contacts`, `add_contact`, `remove_contact`, `accounts`, and `manual`.
+`contacts`, `add_contact`, `remove_contact`, `accounts`, `settings`, and
+`manual`. The `settings` action is read-only and accepts only an empty input.
 
 `send` and `reply` support:
 

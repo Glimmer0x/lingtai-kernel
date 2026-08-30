@@ -193,11 +193,11 @@ def test_openai_responses_scrub_preserves_family_root_and_action_branches():
 
 def test_published_input_schema_uses_anyof_and_empty_actions_are_unambiguous():
     """A conformant JSON-Schema oneOf rejects {} whenever more than one
-    branch matches it. check/contacts/accounts/manual all have an empty (or
-    all-optional) input branch, so the published discovery schema must use
-    anyOf rather than oneOf, matching Telegram's ``_family.py``. Strict
-    action<->input correlation still lives in the allOf discriminator and in
-    dispatch (``_basic_validate``/``handle_feishu``), not in this branch
+    branch matches it. check/contacts/accounts/settings/manual all have an
+    empty (or all-optional) input branch, so the published discovery schema
+    must use anyOf rather than oneOf, matching Telegram's ``_family.py``.
+    Strict action<->input correlation still lives in the allOf discriminator
+    and in dispatch (``_basic_validate``/``handle_feishu``), not in this branch
     list's own combinator choice.
     """
     input_schema = FEISHU_SCHEMA["properties"]["input"]
@@ -205,10 +205,15 @@ def test_published_input_schema_uses_anyof_and_empty_actions_are_unambiguous():
     assert "anyOf" in input_schema
 
     branches = input_schema["anyOf"]
-    empty_input_actions = {"check", "contacts", "accounts", "manual"}
     matching_titles = {
-        branch["title"].removesuffix(" input")
+        branch["title"]
         for branch in branches
         if _basic_validate({}, branch)
     }
-    assert matching_titles == empty_input_actions
+    assert matching_titles == {
+        "check input",
+        "contacts input",
+        "accounts input",
+        "settings inventory input",
+        "manual input",
+    }

@@ -1,3 +1,16 @@
+---
+related_files:
+- ENVIRONMENT_VARIABLES.md
+- src/lingtai/mcp_servers/ANATOMY.md
+- src/lingtai/mcp_servers/feishu/SKILL.md
+- src/lingtai/mcp_servers/feishu/server.py
+- src/lingtai/mcp_servers/feishu/service.py
+- src/lingtai/mcp_servers/feishu/settings.py
+- tests/test_feishu_settings.py
+maintenance: |
+  Keep Feishu app setup, protected account configuration, launcher-owned
+  environment, and rollout guidance aligned with the server and settings owner.
+---
 # Feishu Bot setup, canary, and rollback
 
 This guide is the operator-facing source for installing and rolling out the
@@ -77,10 +90,10 @@ The config fields are:
 | Field | Required | Meaning |
 |---|---:|---|
 | `accounts` | yes | Non-empty array of app accounts. |
-| `accounts[].alias` | yes | Unique local account name. It becomes the first segment of compound message IDs and selects account-local state. |
-| `accounts[].app_id` | yes | Feishu app ID (`cli_...`). It is an identifier, not the app credential secret. |
-| `accounts[].app_secret` | yes | Feishu app secret. Store it only in the secret config file. |
-| `accounts[].allowed_users` | no | Sender `open_id` values admitted for messages, passive events, and card actions. |
+| `accounts[].alias` | yes | Recommended stable, non-empty, unique local account name. It becomes the first segment of compound message IDs and selects account-local state. The current loader does not enforce type, non-emptiness, or uniqueness; later duplicates replace the lookup-map value while remaining in order. |
+| `accounts[].app_id` | yes | Recommended Feishu app ID string (`cli_...`). It is an identifier, not the app credential secret. The loader does not enforce the string type or prefix before account construction. |
+| `accounts[].app_secret` | yes | Feishu app secret. Store it only in the secret config file. The loader requires the key but adds no type/format validation. |
+| `accounts[].allowed_users` | no | Recommended list of sender `open_id` strings admitted for messages, passive events, and card actions. The loader applies truthiness plus `set()` rather than validating the element shape. |
 
 `allowed_users` has compatibility semantics: omitting it, setting it to `null`,
 or supplying an empty list disables the sender gate. A canary must therefore use
@@ -90,7 +103,8 @@ not replace this list.
 For multiple accounts:
 
 - each account starts its own REST client and WebSocket listener;
-- aliases must be unique and stable across upgrades;
+- aliases should be unique and stable across upgrades; this is operator
+  guidance, not a loader validation claim;
 - the first account is used when an outbound action omits `account`;
 - compound IDs remain
   `{account_alias}:{chat_id}:{feishu_message_id}` and must be passed back

@@ -1,8 +1,9 @@
 """LingTai Feishu MCP server.
 
 Exposes a single omnibus ``feishu`` MCP tool that dispatches to
-FeishuManager for all 13 actions (send, check, read, reply, react, search,
-delete, edit, contacts, add_contact, remove_contact, accounts, manual). Inbound Feishu events
+FeishuManager and package-owned children for all 14 actions (send, check, read,
+reply, react, search, delete, edit, contacts, add_contact, remove_contact,
+accounts, settings, manual). Inbound Feishu events
 flow into the host agent's inbox via LICC.
 
 Configuration:
@@ -230,10 +231,10 @@ def _profile_manifest(manager: FeishuManager | None) -> dict[str, Any]:
         "tools": [
             {
                 "name": FEISHU_PLUGIN.name,
-                "description": "Omnibus Feishu tool for messages, reactions, contacts, accounts, and its manual.",
+                "description": "Omnibus Feishu tool for messages, reactions, contacts, accounts, settings, and its manual.",
                 # Sourced from the plugin descriptor so the advertised action
                 # list cannot drift from the family the server actually serves
-                # (``manual`` included, because the plugin always appends it).
+                # (including the plugin-composed reserved actions).
                 "actions": list(FEISHU_ACTIONS),
             }
         ],
@@ -318,7 +319,7 @@ Common optional fields:
 
 Use the `feishu` tool with actions: `send`, `check`, `read`, `reply`, `react`,
 `search`, `delete`, `edit`, `contacts`, `add_contact`, `remove_contact`,
-`accounts`, and `manual`.
+`accounts`, `settings`, and `manual`.
 Compound message IDs have the form `account_alias:chat_id:feishu_message_id`.
 
 Voice messages received from Feishu are downloaded and transcribed locally with

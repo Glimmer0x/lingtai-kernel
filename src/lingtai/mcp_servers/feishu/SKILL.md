@@ -10,16 +10,19 @@ description: |
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
   automatic and programmable resident Task Cards, localized local-command
-  control cards, and side-effect caveats.
+  control cards, read-only Feishu settings discovery, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.15.0
-last_changed_at: 2026-08-03T00:00:00Z
+version: 1.16.0
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
+- ENVIRONMENT_VARIABLES.md
+- src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/feishu/account.py
 - src/lingtai/mcp_servers/feishu/manager.py
 - src/lingtai/mcp_servers/feishu/server.py
 - src/lingtai/mcp_servers/feishu/service.py
+- src/lingtai/mcp_servers/feishu/settings.py
 - src/lingtai/mcp_servers/feishu/control_cards.py
 - src/lingtai/mcp_servers/local_commands/core.py
 - src/lingtai/mcp_servers/feishu/task_card.py
@@ -30,8 +33,10 @@ related_files:
 - src/lingtai/mcp_servers/feishu/reference/setup.md
 - src/lingtai/mcp_servers/feishu/reference/diagnostics.md
 - src/lingtai/mcp_servers/feishu/reference/capability-matrix.md
+- tests/test_feishu_settings.py
 maintenance: |
-  Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
+  Tracks the MCP server's manager/config behavior and read-only settings
+  projection; update when the server's setup or API surface changes.
 ---
 
 # Feishu (Lark) MCP — usage manual (progressive disclosure)
@@ -50,6 +55,92 @@ packaged sidecar that matches the operational question:
 The sidecars are packaged with LingTai but are not embedded into the
 `action='manual'` result. Follow these relative paths only when that detail is
 needed; do not load all three for an ordinary message send.
+
+## SETTINGS SHOW
+
+Call `action='settings', input={}` to read the current Feishu-owned inventory.
+Every row contains only `key`, `current`, `default`, `configurable`, and the
+exact section pointer in `comment`. SHOW has no set or reset form and performs
+no configuration write. Make changes only through the existing owner
+procedures below, then call SHOW again after the stated live/relaunch boundary.
+If any current value is unavailable or not JSON-safe, the whole bounded
+inventory fails without partial rows or raw exception text.
+
+### Setting config path
+
+`config.path` is the `LINGTAI_FEISHU_CONFIG` reference captured by the running
+service at startup. The launcher environment is its only source, so there is
+no meaningful default or lower-precedence value. The startup resolver requires
+a non-empty reference, expands `~`, resolves a relative path against
+`LINGTAI_AGENT_DIR` or the MCP working directory, and then reads strict JSON;
+failure prevents manager construction. The reference is sensitive machine
+metadata, so SHOW redacts both `current` and `default`. An authorized owner
+changes the Feishu MCP environment through the existing Agent configuration
+procedure, refreshes or relaunches the MCP, and verifies with another SHOW.
+
+### Setting account aliases
+
+`accounts.aliases` is the service's ordered startup snapshot of
+`accounts[].alias`; the first entry is the default outbound account. The owner
+JSON selected by `LINGTAI_FEISHU_CONFIG` is the only source, there is no
+meaningful default, and a change requires MCP refresh or relaunch. The loader
+directly indexes the field but does not validate string type, non-emptiness, or
+uniqueness: duplicate aliases remain in order while later entries replace the
+lookup-map value. Use stable, non-empty, unique strings as operator guidance,
+not as a claimed runtime schema check. Edit the protected owner JSON and
+verify the rebuilt service with SHOW.
+
+### Setting account app ids
+
+`accounts.app_ids` is the ordered startup snapshot of the required
+`accounts[].app_id` fields paired with the aliases above. App IDs are public
+identifiers. The loader does not enforce string type or the conventional
+`cli_...` shape before account construction, so those are setup guidance and
+provider failures remain visible rather than being presented as schema
+validation. The owner JSON is the only source, there is no meaningful default,
+and changes require MCP refresh or relaunch before SHOW reflects them.
+
+### Setting account app secrets
+
+`accounts.app_secrets` represents the required `accounts[].app_secret` startup
+values paired with the configured accounts. The loader requires the key but
+does not add a stronger type/format validator. The owner JSON is the only
+source and there is no meaningful default. SHOW always renders both values as
+`<redacted>`. Rotate a secret in the Feishu Developer Console, update the
+protected JSON through the existing owner procedure, refresh or relaunch the
+MCP, and use SHOW only to verify that the complete inventory is available.
+
+### Setting account allowed users
+
+`accounts.allowed_users` represents each running account's sender-admission
+set. The optional owner-JSON field is the only source; omission, `null`, or any
+other falsy value means unrestricted compatibility behavior. A truthy value is
+passed to Python `set()` without a separate list/string/open-ID schema check,
+so use a non-empty list of sender `open_id` strings as operator guidance and
+allow construction failures to remain visible. Authorization data and the
+absence default are both redacted by SHOW. Edit the protected owner JSON,
+refresh or relaunch the MCP, and verify inventory availability; saved contacts
+never change this policy.
+
+### Setting task card enabled
+
+`taskcard.enabled` is the live service value for Feishu's Agent-wide resident
+card projection. At service construction, an exact boolean `taskcard` in
+`<workdir>/feishu/taskcard.json` wins; every other value falls back to `true`.
+There is no environment peer. An admitted Feishu user may use the existing
+`/taskcard on` or `/taskcard off` command, whose validated setter persists and
+applies the change live; a direct owner-file edit requires MCP relaunch. SHOW
+is read-only and reads the live getter again on every call.
+
+### Setting task card normal rows
+
+`taskcard.normal_rows` is the live number of normal automatic rows. At service
+construction, only a Python integer from `1` through `10` in
+`<workdir>/feishu/taskcard.json` is accepted; booleans and every out-of-range or
+other value fall back to `1`. There is no environment peer. The existing
+`/taskcard N` command validates `1..10`, persists the value, and applies it
+live; a direct owner-file edit requires MCP relaunch. SHOW reads the live
+getter again and never writes the file.
 
 ## RECIPIENTS: receive_id / receive_id_type
 
@@ -345,6 +436,7 @@ independent strict LTP-v2 family with the closed root
 `{action, input, reasoning, summarize?}` (`action`, `input`, and `reasoning`
 required) and a closed action-owned input branch. `feishu` actions are exactly
 `send`, `check`, `read`, `reply`, `react`, `search`, `delete`, `edit`,
-`contacts`, `add_contact`, `remove_contact`, `accounts`, and `manual`. The `manual` action
-is the discovery path for this packaged doc. Do not use the retired flat/legacy
-shape, `_reasoning`, aliases, or a generic dispatcher.
+`contacts`, `add_contact`, `remove_contact`, `accounts`, `settings`, and
+`manual`. `settings` is read-only SHOW; `manual` is the discovery path for
+this packaged doc. Do not use the retired flat/legacy shape, `_reasoning`,
+aliases, or a generic dispatcher.

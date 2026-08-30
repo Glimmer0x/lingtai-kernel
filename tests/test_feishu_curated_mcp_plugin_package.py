@@ -3,9 +3,9 @@
 Mirrors ``tests/test_curated_mcp_plugin_package.py`` (the Telegram reference)
 for the Feishu MCP. ``lingtai.mcp_servers._plugin.CuratedMcpPlugin`` binds one
 package's registry name, bundled ``SKILL.md``, and stdio MCP declaration
-together and owns the one promise a package must not be able to break — the
-reserved ``manual`` action, appended from the packaged skill rather than
-declared by the package.
+together and owns the reserved ``settings``/``manual`` composition promises.
+Feishu opts into bounded SHOW; the plugin inserts it immediately before the
+manual sourced from the packaged skill.
 
 These tests pin the packaging promise and the *unchanged* public Feishu
 surface around it. They make no network call and stand up no account: the
@@ -73,19 +73,24 @@ def test_catalog_loading_is_unchanged_and_still_the_runtime_source():
 
 
 # ---------------------------------------------------------------------------
-# `manual` is mandatory, reserved, and sourced from the packaged skill
+# `settings` and `manual` are reserved and composed by the plugin
 # ---------------------------------------------------------------------------
 
-def test_package_does_not_declare_manual_and_the_plugin_appends_it_last():
+def test_package_declares_neither_reserved_action_and_plugin_orders_them_last():
+    assert _plugin.RESERVED_SETTINGS_NAME not in FEISHU_DECLARED_ACTIONS
     assert _plugin.MANUAL_ACTION not in FEISHU_DECLARED_ACTIONS
-    assert FEISHU_ACTIONS == (*FEISHU_DECLARED_ACTIONS, "manual")
-    assert FEISHU_ACTIONS[-1] == "manual"
+    assert FEISHU_ACTIONS == (*FEISHU_DECLARED_ACTIONS, "settings", "manual")
+    assert FEISHU_ACTIONS[-2:] == ("settings", "manual")
 
 
 @pytest.mark.parametrize(
     "compose",
     [
         pytest.param(lambda: FEISHU_PLUGIN.actions(["send", "manual"]), id="actions"),
+        pytest.param(
+            lambda: FEISHU_PLUGIN.actions(["send", "settings"]),
+            id="settings-actions",
+        ),
         pytest.param(
             lambda: FEISHU_PLUGIN.action_input_schemas({"send": {}, "manual": {}}),
             id="schemas",
@@ -101,16 +106,21 @@ def test_package_does_not_declare_manual_and_the_plugin_appends_it_last():
         ),
     ],
 )
-def test_a_package_cannot_declare_re_schema_or_rebind_the_reserved_manual(compose):
-    with pytest.raises(CuratedMcpPluginError, match="reserved 'manual'"):
+def test_a_package_cannot_declare_re_schema_or_rebind_a_reserved_action(compose):
+    with pytest.raises(CuratedMcpPluginError, match="reserved '(manual|settings)'"):
         compose()
 
 
-def test_composed_family_always_carries_a_manual_child_with_a_strict_empty_input():
+def test_composed_family_carries_strict_settings_before_manual():
     family = _family.build_feishu_family(None)
     assert family.has_manual()
     assert family.child_names == FEISHU_ACTIONS
     assert _family._feishu_input_schemas()["manual"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    assert _family._feishu_input_schemas()["settings"] == {
         "type": "object",
         "properties": {},
         "additionalProperties": False,
@@ -172,7 +182,11 @@ def test_public_schema_keeps_the_strict_action_family_shape():
     assert len(schema["allOf"]) == len(FEISHU_ACTIONS)
     assert "feishu-mcp-manual" in schema["properties"]["action"]["description"]
     branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
-    assert branch_titles == [f"{action} input" for action in FEISHU_ACTIONS]
+    assert branch_titles == [
+        *(f"{action} input" for action in FEISHU_DECLARED_ACTIONS),
+        "settings inventory input",
+        "manual input",
+    ]
 
 
 def test_declared_actions_still_dispatch_flat_into_the_manager():

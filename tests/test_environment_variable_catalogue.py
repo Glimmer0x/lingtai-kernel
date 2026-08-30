@@ -234,6 +234,21 @@ def test_daemon_setting_handoff_and_global_memory_rows_are_truthfully_scoped() -
     assert "return ToolExecutor(" in turn_source
 
 
+def test_feishu_config_row_names_startup_show_and_redaction_owners() -> None:
+    rows = {row[0].strip("`"): row for row in _registry_rows()}
+    row = rows["LINGTAI_FEISHU_CONFIG"]
+
+    assert "MCP startup" in row[4] and "restart MCP" in row[4]
+    assert "does not otherwise enforce field types or uniqueness" in row[5]
+    assert "feishu/server.py" in row[6]
+    assert "feishu/settings.py" in row[6]
+    assert "feishu/SKILL.md" in row[6]
+    assert "configuration paths" in row[7]
+    assert "app secrets" in row[7]
+    assert "sender allowlists" in row[7]
+    assert "SHOW redacts all three" in row[7]
+
+
 def test_system_declaration_only_literals_do_not_satisfy_source_coverage() -> None:
     source = '''
 SYSTEM_ENVIRONMENT_SETTING_SPECS = ("LINGTAI_DECLARATION_ONLY_SPEC_FAKE",)
