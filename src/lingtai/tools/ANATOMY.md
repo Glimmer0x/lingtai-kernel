@@ -173,7 +173,7 @@ capability names and lazy adapters.
   only for kernel hooks): seven action-separated children (`inquiry`, `flow`,
   `config`, `voice`, `dismiss`, read-only `settings`, and `manual`) behind one
   model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
-- `bash/` — public `shell` composition owner for run/poll/cancel/manual
+- `bash/` — public `shell` composition owner for run/poll/cancel/settings/manual
   (`src/lingtai/tools/bash/ANATOMY.md`); the public model-facing schema is
   the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
   package's only schema/description pair, while `ShellManager` remains the

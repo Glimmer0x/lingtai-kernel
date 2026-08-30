@@ -266,7 +266,7 @@ class TestBashAsync:
         # ``reminder`` is run-only: it exists solely in the ``run`` child's
         # input on the migrated envelope, and never on poll/cancel.
         branches = {
-            b["title"]: b for b in get_schema()["properties"]["input"]["oneOf"]
+            b["title"]: b for b in get_schema()["properties"]["input"]["anyOf"]
         }
         run_branch = branches["run input"]
         assert run_branch["properties"]["reminder"]["default"] == 1800.0

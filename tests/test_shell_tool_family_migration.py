@@ -2,7 +2,7 @@
 
 Proves the public/model-facing ``shell`` tool is the ToolFamily-composed
 ``action``/``input``/``reasoning``/``summarize`` envelope over the canonical
-children ``run | poll | cancel | manual``, while ``ShellManager`` — the sync
+children ``run | poll | cancel | settings | manual``, while ``ShellManager`` — the sync
 execution path, the working-directory sandbox, the durable async lifecycle,
 cancellation, and terminal receipts — stays the exact, untouched engine the
 pre-migration suites (``test_bash_async.py``, ``test_layers_bash.py``,
@@ -30,6 +30,7 @@ from tests._notification_store_helpers import notification_store_for
 from lingtai.tools.bash import ShellManager, ShellPolicy, setup
 from lingtai.tools.bash._tool_family import (
     CANCEL_INPUT_SCHEMA,
+    DECLARATION,
     MANUAL_INPUT_SCHEMA,
     POLL_INPUT_SCHEMA,
     RUN_INPUT_SCHEMA,
@@ -37,7 +38,15 @@ from lingtai.tools.bash._tool_family import (
     get_schema,
 )
 
-_ACTIONS = ["run", "poll", "cancel", "manual"]
+_ACTIONS = ["run", "poll", "cancel", "settings", "manual"]
+_BRANCH_TITLES = [
+    "run input",
+    "poll input",
+    "cancel input",
+    "settings inventory input",
+    "manual input",
+]
+_SETTINGS_INPUT_SCHEMA = DECLARATION.public_input_schemas()["settings"]
 
 
 def _make_manager(tmp_path: Path) -> ShellManager:
@@ -131,9 +140,9 @@ def test_root_is_strict_action_input_reasoning_summarize():
     assert schema["properties"]["action"]["enum"] == _ACTIONS
 
 
-def test_canonical_children_are_the_four_shell_actions():
-    branches = get_schema()["properties"]["input"]["oneOf"]
-    assert [b["title"] for b in branches] == [f"{a} input" for a in _ACTIONS]
+def test_canonical_children_are_the_five_shell_actions():
+    branches = get_schema()["properties"]["input"]["anyOf"]
+    assert [b["title"] for b in branches] == _BRANCH_TITLES
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +171,13 @@ def test_run_only_fields_live_only_in_run_and_job_id_only_in_poll_cancel():
 
 
 def test_every_child_input_schema_is_closed_and_free_of_host_fields():
-    for schema in (RUN_INPUT_SCHEMA, POLL_INPUT_SCHEMA, CANCEL_INPUT_SCHEMA, MANUAL_INPUT_SCHEMA):
+    for schema in (
+        RUN_INPUT_SCHEMA,
+        POLL_INPUT_SCHEMA,
+        CANCEL_INPUT_SCHEMA,
+        _SETTINGS_INPUT_SCHEMA,
+        MANUAL_INPUT_SCHEMA,
+    ):
         assert schema["additionalProperties"] is False
         for host_field in ("action", "reasoning", "_reasoning", "summarize", "summary"):
             assert host_field not in schema["properties"]
@@ -177,6 +192,7 @@ def test_root_allof_correlates_each_action_const_to_its_own_input_schema():
         "run": RUN_INPUT_SCHEMA,
         "poll": POLL_INPUT_SCHEMA,
         "cancel": CANCEL_INPUT_SCHEMA,
+        "settings": _SETTINGS_INPUT_SCHEMA,
         "manual": MANUAL_INPUT_SCHEMA,
     }
     for condition in conditions:
@@ -189,14 +205,16 @@ def test_root_allof_correlates_each_action_const_to_its_own_input_schema():
 # Dispatch-time rejection (before any handler I/O)
 # ---------------------------------------------------------------------------
 
-def test_unknown_action_fails_with_shells_own_four_action_message(tmp_path):
+def test_unknown_action_fails_with_shells_own_five_action_message(tmp_path):
     dispatcher, _ = _make_dispatcher(tmp_path)
 
     result = dispatcher.handle({"action": "exec", "input": {}, "reasoning": "r"})
 
     assert result["status"] == "failed"
     assert result["error_code"] == "ACTION_REQUIRED"
-    assert result["message"] == "action must be one of run, poll, cancel, or manual"
+    assert result["message"] == (
+        "action must be one of run, poll, cancel, settings, or manual"
+    )
 
 
 @pytest.mark.parametrize(
@@ -562,7 +580,7 @@ def test_family_manual_worked_examples_use_the_registered_envelope():
     for flat in ('shell(async=', 'async=true,', 'job_id="job-', 'reminder=1800'):
         assert flat not in manual, f"manual still teaches the flat shape: {flat}"
 
-    # Every worked call opens with an explicit action= and is one of the four.
+    # Every worked call opens with an explicit action= and is one of the five.
     calls = re.findall(r'shell\(action="(\w+)"', manual)
     assert calls, "expected worked shell() examples in the manual"
     assert set(calls) <= set(_ACTIONS)
@@ -658,14 +676,14 @@ def test_shell_family_schema_survives_chat_and_responses_wires():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+    for wire, combinator in ((chat, "anyOf"), (responses, "anyOf")):
         assert wire["type"] == "object"
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["action"]["enum"] == _ACTIONS
         branches = wire["properties"]["input"][combinator]
-        assert [b["title"] for b in branches] == [f"{a} input" for a in _ACTIONS]
+        assert [b["title"] for b in branches] == _BRANCH_TITLES
         for branch in branches:
             assert branch["additionalProperties"] is False
             for host_field in ("reasoning", "_reasoning", "summarize"):

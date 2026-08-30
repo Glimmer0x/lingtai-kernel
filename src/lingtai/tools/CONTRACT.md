@@ -810,13 +810,15 @@ consequences, not local details: its `spawn` mission brief is root `reasoning`
 karma-gated while `spawn` and `manual` are not — a family must not hide a
 stronger child action behind a weaker family posture.
 
-`shell` (`run | poll | cancel | manual`) is the eighth: its final model-facing
+`shell` (`run | poll | cancel | settings | manual`) is the eighth: its final model-facing
 root is likewise exactly `action`, `input`, `reasoning`, and `summarize`, its
 run-only fields live only in `run`'s `input` and `job_id` only in
 `poll`/`cancel`'s, and its unchanged `ShellManager` engine — sync execution,
 the working-directory sandbox, the durable async lifecycle, cancellation, and
 terminal receipts — keeps its historical flat shape as a purely internal
-interface (see `src/lingtai/tools/bash/CONTRACT.md`).
+interface. Its declaration opts into the generic reserved, read-only SHOW child
+immediately before `manual`; Shell owns no settings file at either LTP level
+(see `src/lingtai/tools/bash/CONTRACT.md`).
 
 `skills` (`info | manual`) is the ninth: it keeps its public tool name and both
 public action values, adopts the same closed root, declares the canonical
@@ -1026,7 +1028,7 @@ from a module-level schema-only family and building an agent-bound one per
 `handle(agent, args)` call because an intrinsic module has no per-Agent
 manager instance to hold one, `shell` is its eighth, using it the same
 way while retaining a thin outer `handle()` that narrows the generic
-unknown-action message to its own four actions, `skills` is its ninth,
+unknown-action message to its own five actions, `skills` is its ninth,
 using it the same way but returning its canonical envelope failures
 verbatim, having no such diagnostics, `notification` is its tenth, binding an
 agent-hosted family through its static declared Host ports; generic composition

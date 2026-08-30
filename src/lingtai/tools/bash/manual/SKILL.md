@@ -17,12 +17,14 @@ description: >
   Goose, OpenHands, and Crush are shell-only harnesses with no LingTai backend
   id. This manual owns only the shell-side supervision discipline (async +
   poll, reminders, scheduling, debugging, cleanup).
-version: 1.11.0
-last_changed_at: 2026-08-25T00:00:00Z
+version: 1.12.0
+last_changed_at: 2026-08-29T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/__init__.py
+- src/lingtai/tools/bash/_tool_family.py
 - src/lingtai/tools/bash/CONTRACT.md
 - src/lingtai/tools/bash/ANATOMY.md
+- tests/test_shell_settings.py
 - src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/shell_prompt_events.py
@@ -110,6 +112,90 @@ applies no matter which CLI you run: the async + poll supervision rules in
    `reference/notification-reminders/SKILL.md`.
 5. **A scheduled job already exists and is misbehaving?** Read
    `reference/debugging-cleanup/SKILL.md` before editing blindly.
+
+## Settings inventory
+
+`shell(action="settings", input={}, reasoning="inspect applied Shell settings")`
+is read-only progressive disclosure. It returns only `key`, `current`,
+`default`, `configurable`, and the exact section pointer in `comment`.
+The input is strict empty: there is no set, reset, or other mutation form, and
+Shell owns no settings file. Read the matching section below before changing a
+value through its existing owner procedure, then call `settings` again to
+inspect the newly applied truth. If any current value cannot be read, the whole
+action returns `SETTINGS_UNAVAILABLE` without partial rows.
+
+### Shell kind
+
+`shell_kind` is the active command-language adapter: `posix`, `powershell`,
+`cmd`, `gitbash`, or `wsl`. It is public and configurable by an authorized
+Shell owner. Precedence is a valid capability `shell_kind` value, then a valid
+case-insensitive `LINGTAI_SHELL`, then platform discovery; invalid values fall
+through. Because platform discovery has no single universal fallback, the
+projected `default` is `null`. Change the capability/launcher configuration or
+call `setup(..., shell_kind="<kind>")`, then rebuild Shell (or relaunch the
+owning Agent) and verify with another SHOW. Dialect selection never bypasses
+command policy or the working-directory boundary.
+
+### Sync timeout default
+
+`sync_timeout_default_seconds` is the built-in `30`-second default used when a
+synchronous `run` supplies `input.timeout=null` or omits it through the internal
+compatibility path. It is public, built-in-only, has no config or environment
+key, and is therefore not family-configurable. To vary one call, pass a finite
+non-negative `input.timeout` no greater than the live ceiling; that per-run
+value applies immediately but does not change this default, so a later SHOW
+still reports `30`.
+
+### Sync timeout ceiling
+
+`sync_timeout_max_seconds` is the public hard ceiling for synchronous
+`input.timeout`. Its canonical owner environment key is
+`LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`: a positive finite value wins over the
+built-in `120`; missing, blank, non-numeric, non-positive, or non-finite values
+use `120`, and values below `30` are floored to `30`. The value is read for
+each settings SHOW and each sync run. Change it only through the authorized
+process/launcher environment (relaunch if that environment is snapshotted at
+process start); the next operation in a process that sees the new value applies
+it. Work needing longer must use `input.async=true`.
+
+### Result size limit
+
+`result_max_chars` is the public per-stream character limit applied to captured
+stdout and stderr. The built-in default is `50000`; an authorized embedding
+owner may supply a positive integer through the existing
+`ShellManager(..., max_output=N)` construction procedure, which applies when
+that manager is built. The normal `setup` capability configuration exposes no
+`max_output` key and there is no environment key. Rebuild the embedding's
+manager/dispatcher and call SHOW again to verify the applied limit. This limit
+changes result disclosure only; it grants no command or filesystem authority.
+
+### Async default
+
+`async_default` is the public built-in `false` used when `run` does not select
+a mode. It has no config or environment key and is not family-configurable. Use
+`input.async=true` or `false` to select the mode for one run; that choice applies
+immediately and does not change the default reported by a second SHOW.
+
+### Async reminder default
+
+`async_reminder_default_seconds` is the public built-in `1800`-second
+last-resort wake delay for an async run with no explicit reminder. It has no
+config or environment key and is not family-configurable. For one async run,
+pass a finite non-negative `input.reminder` no greater than the platform timer
+bound; the value applies to that job only and does not change the default
+reported by SHOW.
+
+### Command policy
+
+`command_policy` is the security-sensitive allowlist, denylist, or allow-all
+policy bound to this Shell owner. Both `current` and `default` are always
+`<redacted>`; policy paths and rules never enter the settings response.
+Precedence is capability `yolo=true`, then `policy_file`, then the
+platform-packaged policy. These are the canonical capability/setup keys; there
+is no environment key. An authorized owner changes `yolo` or the reviewed
+policy file through existing capability configuration or
+`setup(..., policy_file=..., yolo=...)`, then rebuilds Shell. SHOW never grants
+mutation authority and a second SHOW remains redacted by design.
 
 ## Reading command results — never trust top-level `status` alone
 

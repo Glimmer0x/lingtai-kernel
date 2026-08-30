@@ -1,13 +1,14 @@
 ---
 name: bash-contract
 tool: shell
-contract_version: 6
+contract_version: 7
 related_files:
   - src/lingtai/tools/bash/__init__.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
+  - src/lingtai/tools/tool_family/settings.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -31,6 +32,7 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/manual/SKILL.md
   - tests/test_shell_tool_plugin_declaration.py
+  - tests/test_shell_settings.py
   - tests/test_execution_workspace.py
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/shell_prompt_events.py
@@ -73,7 +75,9 @@ invariants.
 ## Scope
 
 - Canonical tool name: `shell` (the retained implementation package is `lingtai.tools.bash`).
-- One public tool exposes three actions: `run` (default), `poll`, `cancel`.
+- One public family exposes `run`, `poll`, `cancel`, read-only `settings`, and
+  `manual`; the execution engine still handles only the three operational
+  actions.
 - Policy is file-based (`bash_policy.json` is the POSIX default; Windows selects the reviewed `powershell_policy.json`). `yolo=True` at setup
   installs an allow-everything policy (unsandboxed command set) and is the
   documented default for trusted agents. Two policy modes exist: **allowlist**
@@ -88,12 +92,14 @@ does not stream output incrementally (async jobs are polled, not streamed).
 
 `_tool_family.py` owns one static `ToolPluginDeclaration` for the canonical
 `"shell"` name: operational actions `("run", "poll", "cancel")`, reserved
-`manual="shell"`, the three existing strict action input schemas, and only
+`manual="shell"`, `settings=True`, the three existing strict operational input
+schemas, and only
 `("workdir", "notifications", "configuration")` as its host requirements.
 `setup()` supplies copied policy/dialect overrides through the configuration
 port and calls the kernel registrar; it does not call generic `add_tool`.
 `_bind(host)` constructs the retained `ShellManager` with the workdir and
-notification ports only, derives the public family/manual from the declaration,
+notification ports only, derives the public settings provider, family, and
+manual from the declaration,
 and defers async rehydration to its registrar-controlled activation step.
 The notification adapter preserves the existing idempotent system watchdog and
 Bash completion channel semantics. This is an internal least-privilege recut:
@@ -108,23 +114,40 @@ Guarded by: [S002](BEHAVIORS.md#behavior-s002)
 `src/lingtai/tools/CONTRACT.md`). Its public/model-facing root is exactly
 `action`, `input`, `reasoning`, and `summarize`; `action`, `input`, and
 `reasoning` are required and the root is closed
-(`additionalProperties: false`). The four canonical children are
-`run | poll | cancel | manual`; each child name is simultaneously the public
+(`additionalProperties: false`). The five canonical children are
+`run | poll | cancel | settings | manual`; each child name is simultaneously the public
 `action` value and the dispatch key, with no mapping layer. `action` has no
 default — it must be stated. The composed schema is built by the generic
 `tool_family` infrastructure in `src/lingtai/tools/bash/_tool_family.py`
 (`get_schema`), which correlates each `action` const to that child's own
 `input` schema at the root via `allOf`/`if`/`then` and additionally discloses
-every branch under `input.oneOf`.
+every branch under `input.anyOf` (the two strict-empty settings/manual branches
+intentionally overlap).
 
 Run-only fields (`command`, `timeout`, `working_dir`, `async`, `reminder`) exist
 only in `run`'s `input`; `job_id` exists only in `poll`'s and `cancel`'s.
-`manual` takes a strict empty `input`. Every child `input` is closed, and a key
+`settings` and `manual` each take strict empty `input={}`. Every child `input`
+is closed, and a key
 belonging to another action's branch is rejected at dispatch — before any
 handler I/O — with `{status: "failed", error_code: "INVALID_ARGUMENT",
 message: "unsupported shell input field"}`. An unknown `action` is rejected the
 same way with `error_code: "ACTION_REQUIRED"` and the message
-`action must be one of run, poll, cancel, or manual`.
+`action must be one of run, poll, cancel, settings, or manual`.
+
+`settings` is SHOW-only progressive disclosure. Normal success is exactly
+`{"settings": [...]}`; each row has exactly and in order `key`, `current`,
+`default`, `configurable`, and `comment`, where `comment` points to the exact
+`shell-manual` section owning meaning and the real external owner procedure.
+The Shell provider returns only the seven existing facts `shell_kind |
+sync_timeout_default_seconds | sync_timeout_max_seconds | result_max_chars |
+async_default | async_reminder_default_seconds | command_policy` in that order.
+Command-policy `current` and `default` project as `<redacted>`; the provider
+constructs only opaque safe markers and never renders policy paths or rules. An unavailable
+current, provider defect, malformed row, or unserializable value fails the whole
+action with the generic fixed `SETTINGS_UNAVAILABLE` response and no rows; the
+generic 65,536-byte complete-response bound applies. There is no
+set/reset/mutation action. The [Shell manual](manual/SKILL.md#settings-inventory)
+owns all per-setting detail.
 
 Following the strict-schema convention, optional run fields are declared
 REQUIRED but nullable: `null` means *absent* and is dropped before delegation,
@@ -160,9 +183,9 @@ exactly one `get_schema`/`get_description` pair — the migrated family surface 
 `_tool_family.py`, re-exported from `__init__.py` under those canonical names —
 so no second, pre-migration public schema exists to drift against.
 
-The engine serves no documentation: `ShellManager.handle` dispatches only
-`poll`, `cancel`, and `run`. `manual` is owned solely by the family's reserved
-child and never reaches the engine.
+The engine serves no settings or documentation: `ShellManager.handle` dispatches
+only `poll`, `cancel`, and `run`. `settings` and `manual` are owned solely by
+reserved family children and never reach the engine.
 
 Each child returns `ShellManager`'s own raw, canonical result verbatim. There
 is no Host envelope wrapped around a child result, and no child result nested
@@ -174,11 +197,12 @@ inside another action's result.
 | `run` (async) | `command`, `async: true` | `working_dir`, `timeout`, `reminder` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
 | `poll` | `job_id` | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
 | `cancel` | `job_id` | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
+| `settings` | — (strict empty `{}`) | — | `{settings: [{key, current, default, configurable, comment}, ...]}` with command-policy values redacted | Fixed generic whole-action failure; never partial rows |
 | `manual` | — (strict empty `{}`) | — | `{status, content: [{type: "text", text: <full shell-manual body>}], structuredContent: {manual_path}}` — the shared ManualTool contract, returned without double wrapping | `status: "degraded"` plus `error` when the installed manual is missing |
 
-`manual` performs no shell operation: it never reaches the execution engine,
-spawns no process, and touches no job state. It serves the installed manual body
-and its host-local `manual_path` unchanged
+`settings` and `manual` perform no shell operation: neither reaches the
+execution engine, spawns a process, or touches job state. The manual child serves
+the installed manual body and its host-local `manual_path` unchanged
 (`.library/intrinsic/capabilities/shell/SKILL.md`, the destination
 `Agent._install_intrinsic_manuals` maps the retained `bash/manual/` bundle to).
 Its input schema is sourced from the shared `build_manual_child` builder, not

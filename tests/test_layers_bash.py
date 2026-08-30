@@ -264,7 +264,7 @@ class TestBashManager:
         # ``working_dir`` is a run-only field, so it lives in the ``run``
         # child's own input schema on the migrated envelope.
         run_branch = next(
-            b for b in get_schema("en")["properties"]["input"]["oneOf"]
+            b for b in get_schema("en")["properties"]["input"]["anyOf"]
             if b["title"] == "run input"
         )
         desc = run_branch["properties"]["working_dir"]["description"]

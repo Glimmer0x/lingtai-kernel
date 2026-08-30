@@ -53,7 +53,9 @@ def test_shell_declaration_is_static_and_derives_its_shipped_surface():
 
     assert DECLARATION.name == "shell"
     assert DECLARATION.actions == ("run", "poll", "cancel")
-    assert DECLARATION.public_actions == ("run", "poll", "cancel", "manual")
+    assert DECLARATION.public_actions == (
+        "run", "poll", "cancel", "settings", "manual"
+    )
     assert DECLARATION.requires == ("workdir", "notifications", "configuration")
     assert DECLARATION.manual == "shell"
     assert "shell" in OFFICIAL_TOOL_PLUGIN_NAMES
@@ -147,6 +149,22 @@ def test_official_shell_mount_uses_only_narrow_ports_and_keeps_real_dispatch(she
     assert sync["exit_code"] == 0
     assert sync["stdout"] == "official-shell"
     assert sync["command_status"] == "success"
+
+    settings = handler({
+        "action": "settings",
+        "input": {},
+        "reasoning": "inspect applied Shell settings",
+    })
+    assert [row["key"] for row in settings["settings"]] == [
+        "shell_kind",
+        "sync_timeout_default_seconds",
+        "sync_timeout_max_seconds",
+        "result_max_chars",
+        "async_default",
+        "async_reminder_default_seconds",
+        "command_policy",
+    ]
+    assert shell_agent._build_system_prompt()
 
     manual = handler({"action": "manual", "input": {}, "reasoning": "read Shell manual"})
     assert manual["status"] == "ok"
