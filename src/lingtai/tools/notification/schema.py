@@ -1,11 +1,11 @@
 """Schema data — canonical per-action input schemas and prose for ``notification``.
 
 The notification tool exposes ``check``, the three atomic dismiss verbs
-(``dismiss_channel``, ``dismiss_event``, ``dismiss_ref``), and the strictly
-read-only progressive-disclosure action ``manual``. ``summarize`` is *not* a
-notification verb — it remains a ``system`` action; the root ``summarize``
-boolean is the cross-cutting LTP v2 result-post-processing control, not an
-action.
+(``dismiss_channel``, ``dismiss_event``, ``dismiss_ref``), read-only settings
+discovery, and the strictly read-only progressive-disclosure action ``manual``.
+``summarize`` is *not* a notification verb — it remains a ``system`` action;
+the root ``summarize`` boolean is the cross-cutting LTP v2 result-post-processing
+control, not an action.
 
 This module holds only data: each action's own canonical strict
 ``input_schema`` (:data:`INPUT_SCHEMAS`) and the canonical English prose.
@@ -45,7 +45,7 @@ LARGE_RESULT_FORCE_NOTE = (
 )
 
 # The canonical action order. This is the single source for the schema's
-# ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
+# ``action`` enum order, the ``input`` disclosure/``allOf`` branch order, and the
 # child registration order in ``__init__.py`` — one list, not three.
 # Read/clear actions keep the pre-existing prefix stable; hook-registry
 # management (add/drop/edit/list) is administrative and follows.
@@ -61,11 +61,10 @@ NOTIFICATION_DECLARED_ACTIONS = (
     "delay",
 )
 
-# The official declaration appends the kernel-reserved manual action.  Keep the
-# full public order available to documentation/import-time consumers, while
-# making the operational declaration impossible to mistake for a family that
-# owns its own reserved action.
-ACTION_ORDER = (*NOTIFICATION_DECLARED_ACTIONS, "manual")
+# The official declaration injects the kernel-reserved settings action before
+# manual. Keep the full public order available to documentation/import-time
+# consumers while leaving both reserved children to generic composition.
+ACTION_ORDER = (*NOTIFICATION_DECLARED_ACTIONS, "settings", "manual")
 
 _CHANNEL_DESCRIPTION = (
     "Notification channel to act on (e.g. soul, system, mcp.telegram). "
@@ -255,10 +254,10 @@ _DISMISS_REF_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 # Per-action strict schemas for the actions this package itself declares.
-# ``manual`` is deliberately absent: the kernel declaration appends the one
-# canonical shared schema from ``tool_family.manual`` and the dispatching
-# family registers the matching child directly.  Keeping it absent here makes a
-# package-owned action impossible to drift into the kernel-reserved slot.
+# ``settings`` and ``manual`` are deliberately absent: the kernel declaration
+# injects their canonical shared schemas and the dispatching family composes the
+# matching children. Keeping them absent here prevents package-owned actions
+# from drifting into either reserved slot.
 DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "add": _ADD_INPUT_SCHEMA,
     "drop": _DROP_INPUT_SCHEMA,
@@ -277,6 +276,7 @@ DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 # rather than treating this map as a second source of truth.
 INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     **DECLARED_INPUT_SCHEMAS,
+    "settings": dict(_CHECK_INPUT_SCHEMA),
     "manual": MANUAL_INPUT_SCHEMA,
 }
 
@@ -322,6 +322,11 @@ ACTION_ENUM_DESCRIPTION = (
     "matching delay. Target producer state is never changed; expiry re-exposes " +
     "it and raises one high-priority delay-alarm mirror." +
 
+    "settings: show the two Notification-owned effective settings as exact " +
+    "key/current/default/configurable/comment rows (input={}). Read the " +
+    "comment-targeted manual sections for meaning and change procedures; " +
+    "this action never changes configuration." +
+
     "manual: call notification(action='manual', input={}) to return the " +
     "installed notification-manual skill body. This action is strictly " +
     "read-only and does not read or change notification state."
@@ -329,7 +334,7 @@ ACTION_ENUM_DESCRIPTION = (
 
 
 def get_description(lang: str = "en") -> str:
-    return "Notification surface — read and clear the agent's notification channels, and manage external-hook registrations. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nEvery call takes action + input + reasoning; input is the strict argument object for the selected action. Use notification(action='check', input={}, reasoning='...') to read all channels, notification(action='dismiss_channel', input={'channel': '<name>', 'force': null, 'reason': null}, reasoning='...') to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='add', input={'name': ..., 'channel': ..., 'source': ..., 'description': ..., 'how_to_modify': ..., 'how_to_cancel': ...}) to register an external hook, notification(action='drop', input={'name': ...}) to unregister one, notification(action='edit', input={'name': ..., ...}) to update a hook's fields, and notification(action='list', input={}) to view registered hooks. Use notification(action='delay', input={'channel': '<name>', 'seconds': 0 or a live-configured positive cap}, reasoning='...') to temporarily suppress only consumer delivery for one allowed channel (0 cancels); delay-alarm cannot be targeted and expiry raises a high-priority delay-alarm mirror. Use notification(action='manual', input={}, reasoning='...') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
+    return "Notification surface — read and clear the agent's notification channels, and manage external-hook registrations. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nEvery call takes action + input + reasoning; input is the strict argument object for the selected action. Use notification(action='check', input={}, reasoning='...') to read all channels, notification(action='dismiss_channel', input={'channel': '<name>', 'force': null, 'reason': null}, reasoning='...') to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='add', input={'name': ..., 'channel': ..., 'source': ..., 'description': ..., 'how_to_modify': ..., 'how_to_cancel': ...}) to register an external hook, notification(action='drop', input={'name': ...}) to unregister one, notification(action='edit', input={'name': ..., ...}) to update a hook's fields, and notification(action='list', input={}) to view registered hooks. Use notification(action='delay', input={'channel': '<name>', 'seconds': 0 or a live-configured positive cap}, reasoning='...') to temporarily suppress only consumer delivery for one allowed channel (0 cancels); delay-alarm cannot be targeted and expiry raises a high-priority delay-alarm mirror. Use notification(action='settings', input={}, reasoning='...') to show the exact five-field Notification settings rows without changing configuration. Use notification(action='manual', input={}, reasoning='...') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
 
 
 # NOTE: ``get_schema`` is deliberately NOT defined here. The model-facing

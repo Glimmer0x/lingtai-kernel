@@ -818,14 +818,17 @@ shared-domain rule above: `info` and `manual` are two actions of one skill-
 catalogue authority, not two related tools grouped for convenience.
 
 `notification` (`check | dismiss_channel | dismiss_event | dismiss_ref | add |
-drop | edit | list | delay | manual`) is the tenth: its final model-facing root
+drop | edit | list | delay | settings | manual`) is the tenth: its final model-facing root
 is likewise exactly `action`, `input`, `reasoning`, and `summarize`, and each
 action's arguments live only in that action's own strict `input` (so `channel`
 belongs to `dismiss_channel`, `event_id` only to `dismiss_event`, and `ref_id`
 only to `dismiss_ref`). It is the sixth accepted declared official family: its
 static declaration binds an agent-hosted ToolFamily through only `workdir` and
 `notification_state`, while Notification Core remains the sole authority for
-stateful policy and Store mutation (see `src/lingtai/tools/notification/CONTRACT.md`).
+stateful policy and Store mutation. Its declaration-bound read-only provider
+uses that port for the two Notification-owned effective rows; no generic
+configuration or mutation surface is added (see
+`src/lingtai/tools/notification/CONTRACT.md`).
 
 `system` (`refresh | sleep | lull | interrupt | suspend | cpr | clear |
 nirvana | presets | name_set | name_nickname | settings | manual`) is the
@@ -1009,9 +1012,10 @@ way while retaining a thin outer `handle()` that narrows the generic
 unknown-action message to its own four actions, `skills` is its ninth,
 using it the same way but returning its canonical envelope failures
 verbatim, having no such diagnostics, `notification` is its tenth, binding an
-agent-hosted family through its static declared Host ports; its outer adapter
-flattens the reserved `manual` child's canonical result to the pinned public
-shape and preserves Notification's own unknown-action result, while `context`
+agent-hosted family through its static declared Host ports; generic composition
+injects its reserved `settings` child immediately before `manual`, and its outer
+adapter flattens the reserved `manual` child's canonical result to the pinned
+public shape and preserves Notification's own unknown-action result, while `context`
 is its eleventh, using `soul`'s module-level composition shape while threading the
 `_tc_id` it actually consumes to its `molt` child out-of-band rather
 than widening the shared envelope. `avatar` reuses

@@ -77,10 +77,14 @@ def test_delay_schema_and_allowlist_expose_alarm_but_forbid_target(tmp_path: Pat
     assert is_channel_allowed(DELAY_ALARM_CHANNEL)
     assert notification_delay_max_seconds(agent) == 600
     schema = get_schema()
-    assert schema["properties"]["action"]["enum"][-2:] == ["delay", "manual"]
+    assert schema["properties"]["action"]["enum"][-3:] == [
+        "delay",
+        "settings",
+        "manual",
+    ]
     delay_branch = next(
         branch
-        for branch in schema["properties"]["input"]["oneOf"]
+        for branch in schema["properties"]["input"]["anyOf"]
         if branch["title"] == "delay input"
     )
     seconds_schema = delay_branch["properties"]["seconds"]

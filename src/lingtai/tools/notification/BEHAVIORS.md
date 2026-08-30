@@ -9,8 +9,10 @@ related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/notification/schema.py
+  - src/lingtai/tools/notification/settings.py
   - src/lingtai/kernel/notifications.py
   - tests/test_daemon_attention_delay.py
+  - tests/test_notification_settings.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -21,6 +23,7 @@ maintenance: |
   aggregate `daemon` target (attention masked, truth readable, independent
   channels still wake, expiry restores attention); update it whenever that
   clause or `coherent_attention_read`'s daemon mask changes.
+  N005 guards the read-only five-field Notification settings projection.
 ---
 # Notification Tool Behavior Tests
 
@@ -124,3 +127,30 @@ Pass when add/edit/drop behave as above and the manifest stays valid. Fail on si
 
 ### Pass / Fail
 Pass when all evidence is observed and no forbidden side effect occurs. Fail if the daemon channel disappears from `check`/`.notification/daemon/` while delayed, if a daemon arrival wakes or injects during the window, if the registered hook channel is suppressed too, or if expiry leaves the mask in place or publishes no `delay-alarm`; record the evidence trail in the task report.
+
+## Behavior N005 — Notification settings are read-only five-field disclosure
+
+- **id**: N005
+- **title**: settings shows two exact effective rows and routes changes to owner procedures
+- **guards**: `notification-tool` § Port (`settings`)
+  ([CONTRACT.md](CONTRACT.md#port))
+- **runner**: any LingTai agent with `shell` access to this repository
+- **prerequisites**: a clean checkout of `<repo>`; no ambient Notification test environment overrides
+- **estimate**: ≈ 2 minutes
+
+### Steps
+1. Run `python -m pytest -q tests/test_notification_settings.py` from `<repo>`.
+2. Call `notification(action="settings", input={}, reasoning="inventory")`.
+3. Confirm each `comment` resolves to the named heading in the installed Notification manual.
+4. Call ordinary `notification(action="check", input={}, reasoning="non-regression")`.
+
+### Expected evidence
+- [ ] The row keys are exactly `notification.max_chars` and `notification.delay_max_seconds`, in that order.
+- [ ] Every row has exactly `key`, `current`, `default`, `configurable`, and `comment`; defaults are `10000` and `600`, and both rows are configurable through authorized procedures outside SHOW.
+- [ ] The cap reflects live environment → System-v2 file hook → default precedence, while the delay ceiling reflects live environment → default.
+- [ ] `settings` accepts only `input={}`, performs no write, and an unavailable current value fails the whole action with the fixed bounded failure.
+- [ ] Both comments name real manual headings containing the omitted semantics and change procedures.
+- [ ] Ordinary `check` retains its existing placeholder behavior.
+
+### Pass / Fail
+Pass when the focused suite and all expected evidence hold. Fail on an extra row or field, stale file-layer current, a mutation form, partial unavailable output, a dangling comment target, or changed `check` behavior; record the evidence trail in the task report.

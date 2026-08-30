@@ -1,11 +1,12 @@
 ---
 name: notification-tool
-contract_version: 7
+contract_version: 8
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/notification/schema.py
+  - src/lingtai/tools/notification/settings.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
@@ -16,7 +17,9 @@ related_files:
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/agent.py
+  - ENVIRONMENT_VARIABLES.md
   - tests/test_notification_tool.py
+  - tests/test_notification_settings.py
   - tests/test_notification_delay_alarm.py
   - tests/test_daemon_attention_delay.py
   - tests/test_system_dismiss.py
@@ -50,8 +53,9 @@ The always-on official `notification` tool is the sole agent-callable
 notification surface. It exposes nine operational actions: four hook-registry actions
 (`add`/`drop`/`edit`/`list`), the four pre-existing actions for reading or
 atomically clearing notification mirrors (`check` and the three atomic dismiss
-actions), and consumer-only `delay`, plus one strictly read-only `manual` action
-for progressive disclosure. It owns no producer state. The hook-registry actions mutate the
+actions), and consumer-only `delay`, plus strictly read-only `settings` and
+`manual` actions for progressive disclosure. It owns no producer state. The
+hook-registry actions mutate the
 Notification Store's family-8 hook-manifest registry
 (`load_hook_manifests`/`update_hook_manifests`/`stat_hook_registry`,
 `.notification/hooks.json`);
@@ -63,7 +67,9 @@ allowed only for the agent whose workdir registered it — never process-global.
 
 ## Behavior
 
-Guarded by: [K005](../../kernel/BEHAVIORS.md#behavior-k005), [K006](../../kernel/BEHAVIORS.md#behavior-k006)
+Guarded by: [K005](../../kernel/BEHAVIORS.md#behavior-k005),
+[K006](../../kernel/BEHAVIORS.md#behavior-k006),
+[N005](BEHAVIORS.md#behavior-n005)
 
 LingTai agents MUST use `manual` only to retrieve installed guidance, `check` to
 request current notification state, and the narrowest producer-specific or
@@ -75,6 +81,8 @@ Coding agents MUST preserve all nine operational actions, Store semantics,
 notification Core guards, producer state, and the absence of `system`
 notification/dismiss aliases. They MUST keep `manual` read-only, fixed to the
 installed per-agent path, and independent of check/dismiss delivery state.
+They MUST keep `settings` SHOW-only and route each row to its exact manual
+section instead of returning configuration or mutation instructions inline.
 Procedures and safety explanations live in the linked notification manual and
 nested references rather than in this contract.
 
@@ -86,9 +94,10 @@ object whose properties are exactly `action`, `input`, `reasoning`, and
 `summarize`, with `additionalProperties: false` and `action`, `input`, and
 `reasoning` required. The action domain, in order, is: `check`,
 `dismiss_channel`, `dismiss_event`, `dismiss_ref`, `add`, `drop`, `edit`,
-`list`, `delay`, `manual`. Read/clear actions keep the pre-existing prefix stable;
+`list`, `delay`, `settings`, `manual`. Read/clear actions keep the pre-existing prefix stable;
 hook-registry management (`add`/`drop`/`edit`/`list`) is administrative and
-follows; consumer-only `delay` follows them; `manual` closes the enum.
+follows; consumer-only `delay` follows them; `settings` is injected immediately
+before `manual`, which closes the enum.
 Each action value
 is simultaneously the child's canonical name and its dispatch key; there is no
 mapping layer.
@@ -112,6 +121,7 @@ and Responses wires. Per-action inputs are:
 - `delay` — `channel` and integer `seconds` (both required); `seconds=0` cancels,
   and a nonzero value is bounded by the live
   `LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` cap (default 600).
+- `settings` — strictly empty; SHOW has no set/reset or mutation branch.
 - `manual` — strictly empty.
 
 Declared optional fields use the provider-compatible nullable representation.
@@ -207,6 +217,23 @@ Observable action contracts are:
   heartbeat/sync recovery share a stable request id so stale callbacks/restarts
   cannot append duplicate alarms. Malformed/unreadable delay state fails open to
   target visibility, never silence.
+- `settings` returns exactly two rows, in order, under the sole top-level key
+  `settings`. Their keys are `notification.max_chars` and
+  `notification.delay_max_seconds`; `current` comes through the live
+  `NotificationStatePort.read_settings()` adapter from the same effective
+  resolvers the payload builders and delay action consume. The cap therefore
+  includes live environment → Agent/System-v2 file hook → default precedence;
+  the delay ceiling includes live environment → default precedence. Defaults
+  are `10000` and `600`; both rows are non-sensitive and `configurable: true`.
+  Their exact comments are
+  `notification-manual#block-size-cap-persistent-and-attention-lanes` and
+  `notification-manual#consumer-delay-and-expiry-alarm`. Every row projects
+  exactly `key`, `current`, `default`, `configurable`, and `comment`. Source,
+  precedence, canonical names, accepted values, apply timing, authorization,
+  and change/verification procedures live only in those manual sections.
+  Provider, unavailable-current, malformed-row, or serialization failure fails
+  the whole action with the generic fixed bounded result; partial rows are
+  forbidden. Guards [N005](BEHAVIORS.md#behavior-n005).
 - Unknown or absent actions return `{status: "error", message}` naming the
   unknown notification action.
 - An invalid envelope — a non-object `input`, a non-boolean `summarize`, an
@@ -247,6 +274,14 @@ the shared `tools/_manual.py::load_installed_manual` loader. It reads exactly
 producer. Its canonical child result is flattened to notification's pinned
 `notification_manual` shape strictly after dispatch.
 
+The reserved `settings` child is injected by generic ToolFamily composition
+from boolean `DECLARATION.settings=True`. The bound zero-argument provider
+closes over only the zero-argument `read_settings` callback extracted from
+`NotificationStatePort`; `settings.py::notification_settings` turns its two
+effective scalars into `SettingRow` values. The schema-only family uses a no-I/O
+empty provider. Neither path receives a mutating port, writer, Agent, Store, or
+configuration object.
+
 The existing IDLE/ASLEEP notification-sync pair is intentionally
 byte-shape-identical to a voluntary `check`. It is spliced onto the wire rather
 than dispatched, so it is not a second inbound adapter.
@@ -269,13 +304,17 @@ than dispatched, so it is not a second inbound adapter.
   `kernel/tool_result_summary.py::_LTP_V2_MIGRATED_FAMILIES`; otherwise the
   model would be shown a control the kernel silently ignores. The notification
   tool owns no producer publication action.
-- `check` and `manual` are read-only. The three dismiss actions mutate
+- `check`, `settings`, and `manual` are read-only. The three dismiss actions mutate
   notification mirror state; `add`/`drop`/`edit` mutate the hook registry and
   the registered-channel allowlist; `delay` atomically mutates only private
   consumer delay state and (on expiry) the separate `delay-alarm` mirror.
   The family MUST NOT present a posture
   weaker than its strongest action: a read-only annotation for the whole
   family would hide those mutations and is forbidden.
+- `settings` accepts only `input={}` and MUST NOT change process environment,
+  files, notification state, delay state, hook manifests, or producer state.
+  `configurable` means an authorized external owner procedure exists; it is not
+  mutation authority for SHOW.
 - Hook channels are per-agent: `is_channel_allowed`/`validate_allowed_channel`
   consult the mirror keyed by the agent's workdir, and every kernel call site
   passes that workdir. Without a workdir (no agent context) hook channels are
@@ -291,7 +330,11 @@ than dispatched, so it is not a second inbound adapter.
   glossaries require review when this enum changes; the LTP v2 envelope
   restructures how arguments are carried, and the hook-registry change adds
   four new action values (`add`/`drop`/`edit`/`list`) to the enum.
-- `contract_version` is `7`: notification is an official declared host plugin with a package-owned manual and a narrow Core-state port; its public surface is unchanged. Version `6`: a `delay` whose target is the aggregate `daemon`
+- `contract_version` is `8`: Notification opts into the merged read-only
+  five-field settings seam for its two existing controls, with live Agent-hook
+  current truth and `settings` immediately before `manual`. Version `7` made
+  notification an official declared host plugin with a package-owned manual
+  and a narrow Core-state port. Version `6`: a `delay` whose target is the aggregate `daemon`
   channel now masks that channel's attention token instead of omitting it from
   the coherent consumer read, so daemon truth, delivered version, and dismissal
   keep working while it is delayed. Non-daemon targets are unchanged.
@@ -305,7 +348,7 @@ than dispatched, so it is not a second inbound adapter.
 ## Contract tests
 
 `tests/test_tool_plugin_declaration.py` proves the live official mount, package manual, and Core-backed dismissal; `tests/test_notification_tool.py` proves the
-ordered ten-action schema, the closed LTP v2 root, each action's strict input
+ordered eleven-action schema, the closed LTP v2 root, each action's strict input
 branch and its `allOf` action/input correlation, Chat/Responses wire parity,
 the `manual` branch matching the shared ManualTool child, canonical
 description, absent aggregate actions, manual success/degraded envelopes, delay schema ordering, and
@@ -317,8 +360,11 @@ allowlist entry, Core guards, and absence of system compatibility aliases. `test
 proves consumer filtering for coherent/voluntary reads, early cancellation,
 replacement, durable expiry/recovery idempotence, alarm priority and conservative
 statistics, and `delay-alarm` refusal. `tests/test_system_dismiss.py` protects shared
-operational dismissal behavior. `tests/test_tools_package_data.py` verifies tool
-and documentation package data. Architecture, Anatomy drift, glossary, and skill
+operational dismissal behavior. `tests/test_notification_settings.py` proves
+the exact five-field rows and keys, live environment/System-v2 precedence,
+defaults, strict input, comment targets, whole-action failure, no mutation,
+family opt-in, and unchanged check. `tests/test_tools_package_data.py` verifies
+tool and documentation package data. Architecture, Anatomy drift, glossary, and skill
 validators cover the linked document and manual graphs.
 
 ## Maintenance

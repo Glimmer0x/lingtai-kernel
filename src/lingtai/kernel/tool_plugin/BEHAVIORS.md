@@ -39,6 +39,7 @@ related_files:
   - tests/test_file_tool_plugin_package.py
   - tests/test_file_tool_family.py
   - tests/test_plugin_tool.py
+  - tests/test_notification_settings.py
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py

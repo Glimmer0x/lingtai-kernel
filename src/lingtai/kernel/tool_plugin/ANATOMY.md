@@ -70,6 +70,7 @@ related_files:
   - tests/test_email_official_tool_plugin.py
   - tests/test_file_tool_plugin_package.py
   - tests/test_plugin_tool.py
+  - tests/test_notification_settings.py
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py
@@ -233,12 +234,14 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   or mount authority, so registration stays the boot-only service path and
   `setup(agent)` is composition wiring through the standard port table.
 - `src/lingtai/tools/notification/__init__.py` is the eighth accepted vertical
-  slice. Its static `DECLARATION` preserves the public action inventory and LTP
-  envelope but binds only `workdir` plus `notification_state`. The callback-only
-  adapter delegates every dismissal, stale-delivery comparison, producer guard,
-  delay, timer, hook-manifest, and logging decision to Notification Core; the
-  family receives no Agent, Store, fingerprint, or local parallel state machine.
-  Its package-owned `manual/SKILL.md` is the one canonical installed
+  slice. Its static `DECLARATION` preserves the LTP envelope, adds the reserved
+  read-only `settings` action immediately before `manual`, and binds only
+  `workdir` plus `notification_state`. The callback-only adapter delegates every
+  dismissal, stale-delivery comparison, producer guard, delay, timer,
+  hook-manifest, logging decision, and fresh two-scalar effective-settings read
+  to the canonical owners; the family receives no Agent, Store, fingerprint,
+  configuration object, writer, or local parallel state machine. Its
+  package-owned `manual/SKILL.md` is the one canonical installed
   `capabilities/notification/SKILL.md` source.
 - `src/lingtai/tools/bash/_tool_family.py` is the ninth accepted vertical slice,
   the Shell declaring family over the retained implementation package. Its static
@@ -413,7 +416,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   Email's `boot` hook and Notification's `setup(agent)` wiring. Email creates
   its manager before registering with its sole family-specific `email_runtime`
   grant; Notification registers its static declaration with only `workdir` and
-  `notification_state`.
+  `notification_state`. That port's settings read keeps the live Agent/System-v2
+  hook available without exposing the Agent or System's file grammar.
   Notification remains always-on even when a capability manifest names it null
   or lists it in `disable`.
 - `_build_family(host)` passes only `host.workdir` to
@@ -497,8 +501,9 @@ component does not own.
   claim; surviving dynamic families re-register their declaration idempotently.
   Email and Notification are mandatory injected official families. Email's
   refresh boot replaces its manager; Notification's reclaims one live static
-  binding with only `workdir`/`notification_state`. Neither is suppressed by a
-  null capability declaration or `disable` entry.
+  binding with only `workdir`/`notification_state`; every settings call resolves
+  fresh through that port and retains no snapshot. Neither family is suppressed
+  by a null capability declaration or `disable` entry.
 - `ToolPluginHost._ports` — the granted subset, fixed at grant time.
 - No other state. The component keeps no cache, no registry file, and no
   process handle.

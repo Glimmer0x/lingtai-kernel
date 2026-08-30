@@ -1,6 +1,6 @@
 ---
 name: declared-host-tool-plugin
-contract_version: 2
+contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -63,6 +63,7 @@ related_files:
   - tests/test_daemon.py
   - tests/test_email_official_tool_plugin.py
   - tests/test_file_tool_plugin_package.py
+  - tests/test_notification_settings.py
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py
@@ -227,7 +228,7 @@ capability.
 | `AvatarParentPort` | `parent_name`, `venv_path`, `has_rule_privilege()` | Avatar-only parent context: the identity placed in a newborn prompt, optional runtime location inherited into its init, and the existing any-admin-value gate for rules. It grants no mutable admin/configuration surface or Agent reference. |
 | `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
 | `DaemonRuntimePort` | named model/tool/preset/notification/log operations | Daemon-only parent-runtime boundary: inherited service and regular tool snapshots, preset sandbox/load, live notification route, time, Task Card, logging, and resolved manager options. It never grants the Agent or a mount operation. |
-| `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, bounded `log` | Notification-only Core delegation. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |
+| `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, `read_settings() -> tuple[int, int]`, bounded `log` | Notification-only Core delegation. `read_settings` returns the fresh effective payload cap and delay ceiling through canonical resolvers; it grants no configuration object or writer. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |
 | `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
 | `PluginCatalogPort` | `read_state() -> PluginCatalogState` | Return a detached read-only projection of Agent Plugins registration/discovery facts: boot snapshot, configured plugin paths, inherited skill paths, and skills availability. It cannot validate, register, prune, launch, write, or mount. |
 | `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. It is distinct from `NotificationStatePort`, which grants Notification Core's mirror/hook administration. |
@@ -324,9 +325,13 @@ tool result mutated by a caller therefore cannot reach the Agent's snapshot or
 capability configuration, and the adapter exposes no registration, prune,
 launch, config-write, or mount operation.
 `AgentNotificationStateAdapter` holds only Notification Core callbacks: a
-`dismiss_channel(..., invoked_by="notification")` partial, delay, hook, and
-bounded logging operations. It does not pass the Notification declaration an
-Agent, Store, producer state, fingerprint, generic handler, or `ToolMountPort`.
+`dismiss_channel(..., invoked_by="notification")` partial, delay, hook, fresh
+effective-settings read, and bounded logging operations. The payload cap uses
+the live Agent hook so System-v2 file precedence is preserved; the delay ceiling
+uses the same live environment resolver without a logging callback, keeping SHOW
+side-effect free. It does not pass the Notification declaration an Agent, Store,
+producer state, fingerprint, configuration object, writer, generic handler, or
+`ToolMountPort`.
 `AgentNotificationAdapter` translates only the canonical system-event method
 and a store reader into Shell's two durable publication operations, preserving
 the pre-plugin compare-and-update semantics, while `StaticConfigurationAdapter`
@@ -535,10 +540,10 @@ preserve Notification Core delay/timer and Store behavior:
   established `file-manual` runtime destination with no second `file` install,
   and one live registrar mount.
 - Notification's static `DECLARATION`, exact `workdir`/`notification_state`
-  grant, no-Agent/no-Store boundary, package-owned canonical manual, unchanged
-  `check` placeholder, one claimed/mounted schema and handler under both
-  capability opt-out forms on construction and refresh, and real
-  Core-backed `dismiss_channel` behavior.
+  grant, no-Agent/no-Store/no-writer boundary, package-owned canonical manual,
+  exact two-row fresh settings projection, unchanged `check` placeholder, one
+  claimed/mounted schema and handler under both capability opt-out forms on
+  construction and refresh, and real Core-backed `dismiss_channel` behavior.
 - Task Card's static `DECLARATION`, exact
   `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications` grant,
   one retained `TaskCardManager` that survives refresh and is rebound, one
