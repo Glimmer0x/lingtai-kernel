@@ -142,13 +142,24 @@ class WhatsAppManager:
       - allowed_wa_ids: optional allowlist of wa_ids / @c.us ids for inbound push
       - allowed_users: legacy alias for allowed_wa_ids
       - autostart: start the Node bridge on construction (default: true)
+
+    Public ``settings`` is plugin-owned rather than a manager action. Its
+    provider reads these startup facts without changing them.
     """
 
-    def __init__(self, config: dict[str, Any] | None = None, working_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any] | None = None,
+        working_dir: str | Path | None = None,
+        *,
+        config_path: str | Path | None = None,
+    ) -> None:
         self.config = dict(config or {})
+        self.config_path = Path(config_path) if config_path is not None else None
         self.working_dir = Path(working_dir or os.environ.get("LINGTAI_AGENT_DIR", os.getcwd()))
         self.store_dir = Path(self.config.get("store_dir") or self.working_dir / DEFAULT_STORE)
         self.session_dir = Path(self.config.get("session_dir") or self.working_dir / ".wwebjs_auth")
+        self.autostart = bool(self.config.get("autostart", True))
         # Both sides of the allow-list go through one normalizer so bare
         # digits in config match the ``@c.us`` JIDs the bridge reports. The
         # issue's name is canonical; retain ``allowed_users`` as a compatibility
@@ -193,7 +204,7 @@ class WhatsAppManager:
         # unrelated action first: start the listener eagerly. A missing Node /
         # bridge install is a degraded state, not a construction failure — the
         # error resurfaces on the first action that needs the bridge.
-        if self.config.get("autostart", True):
+        if self.autostart:
             try:
                 self.bridge.start()
             except Exception as e:
