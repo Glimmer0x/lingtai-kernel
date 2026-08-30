@@ -102,6 +102,11 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         self._own_inbox_slice_entries = 200
         self._mail_poll_slow_seconds = 1.0
 
+    @property
+    def pseudo_agent_subscriptions(self) -> tuple[str, ...]:
+        """Return the effective constructor-time subscription snapshot."""
+        return tuple(str(path) for path in self._pseudo_agent_dirs)
+
     # ------------------------------------------------------------------
     # address
     # ------------------------------------------------------------------

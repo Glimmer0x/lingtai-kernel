@@ -3,20 +3,22 @@ name: email-manual
 description: >
   Operational guide for the `email` tool — LingTai email protocol within your
   `.lingtai/` network. Covers send/check/read/dismiss/reply/reply_all/search/
-  archive/delete/contacts, reply discipline, bare-path addressing (`human`,
+  archive/delete/contacts/settings, reply discipline, bare-path addressing (`human`,
   `mimo-1`) and `peer`/`abs` modes, self-send notes that survive molt, delayed
   self-send time capsules, the full-body persistent notification contract, and
   the 50,000-char send cap. INTERNAL only — real internet email is `mcp-manual`;
   recurring schedules are `shell-manual`. Calls use the LTP v2
   action/input/reasoning envelope.
-version: 1.1.0
+version: 1.2.1
 tags: [capabilities, email, communication]
-last_changed_at: "2026-07-27T00:00:00Z"
+last_changed_at: "2026-08-29T00:00:00Z"
 related_files:
 - src/lingtai/tools/email/__init__.py
 - src/lingtai/tools/email/_family_schema.py
 - src/lingtai/tools/email/manager.py
 - src/lingtai/tools/email/primitives.py
+- src/lingtai/tools/email/settings.py
+- src/lingtai/adapters/posix/mail.py
 - src/lingtai/tools/email/ANATOMY.md
 - src/lingtai/tools/email/CONTRACT.md
 maintenance: |
@@ -56,14 +58,112 @@ schema:
 `summarize=true` is reasonable when you only need the gist. Leave it false
 when you need exact IDs, addresses, or verbatim body text, because you will
 act on those literally. Every other action (`send`, `dismiss`, `reply`,
-`reply_all`, `archive`, `delete`, the four contact verbs) is
+`reply_all`, `archive`, `delete`, the four contact verbs, `settings`) is
 **short-result**: its receipt is small and meant to be read exactly, so leave
 `summarize` false. Call `manual` itself with `summarize=false` so procedure
 and constraints are not summarized away.
 
-**Settings:** `email` supports no settings file at either level — there is no
-`settings/email.json` and no `settings/email.<action>.json`. Its behavior is
-governed by this manual and the tool's own defaults.
+**Settings:** `email(action="settings", input={}, reasoning="inventory Email policy")`
+is SHOW-only and returns exactly five fields per row: `key`, `current`,
+`default`, `configurable`, and an exact section pointer in `comment`. It has no
+set/reset or other mutation input. Read the [settings reference](#settings-reference)
+below for source, precedence, accepted values, timing, sensitivity, and the
+actual owner procedure. A second SHOW verifies the effective snapshot after an
+authorized external change and full relaunch.
+
+## Settings reference
+
+Email supports no owner settings file or environment peer: there is no
+`settings/email.json`, no `settings/email.<action>.json`, and no
+`LINGTAI_EMAIL_*`. Four installed policy limits are public and
+non-configurable. The pseudo-agent subscription list is the one configurable
+row, owned by the existing launcher manifest path. Mailbox/session paths,
+addresses, identities, contacts, messages, attachments, and read/archive state
+are private runtime or domain data, not settings, and never appear.
+
+`LINGTAI_AGENT_ALIVE_THRESHOLD_SEC` remains kernel liveness policy and
+`LINGTAI_NOTIFICATION_MAX_CHARS` remains Notification presentation policy;
+Email does not claim either environment variable. Per-call `send`/`check`
+options are action input rather than persisted settings. The legacy
+200-character digest-renderer prose is discarded by the live full-body
+notification publisher, so it is not an effective Email setting.
+
+### Send body character limit
+
+- Key: `send.body_char_limit`; current and meaningful default: integer `50000`.
+- Meaning: maximum accepted internal-email body length, in Unicode characters;
+  an oversize `send` is refused before delivery.
+- Accepted configuration values: none. The installed integer constant in
+  `email/settings.py` is consumed directly by send and unread-notification code.
+- Source and precedence: installed code only. Canonical environment variable
+  and config key: none. It is public, not sensitive.
+- Application timing and authorized change procedure: `configurable` is false.
+  Only a reviewed product-code/package change followed by a full agent relaunch
+  can change it; SHOW never writes. Re-run SHOW after relaunch.
+
+### Duplicate send loop guard
+
+- Key: `send.duplicate_free_passes`; current and meaningful default: integer
+  `2`.
+- Meaning: number of consecutive identical sends allowed per recipient before
+  Email blocks the next duplicate as a loop.
+- Accepted configuration values: none. The installed constant in
+  `email/settings.py` initializes each `EmailManager`.
+- Source and precedence: installed code only. Canonical environment variable
+  and config key: none. It is public, not sensitive.
+- Application timing and authorized change procedure: `configurable` is false.
+  Only a reviewed code/package change plus full relaunch changes it; verify with
+  a second SHOW.
+
+### Check result token limit
+
+- Key: `check.result_token_limit`; current and meaningful default: integer
+  `10000`.
+- Meaning: token budget for one `check` result; Email removes summaries until
+  the serialized response fits.
+- Accepted configuration values: none. The installed constant in
+  `email/settings.py` is consumed directly by `EmailManager._check`.
+- Source and precedence: installed code only. Canonical environment variable
+  and config key: none. It is public, not sensitive.
+- Application timing and authorized change procedure: `configurable` is false.
+  Only a reviewed code/package change plus full relaunch changes it; verify with
+  a second SHOW.
+
+### Unread notification entry limit
+
+- Key: `unread.max_entries`; current and meaningful default: integer `10`.
+- Meaning: maximum number of newest unread message entries projected into one
+  Email notification mirror; the total unread count remains exact.
+- Accepted configuration values: none. The installed constant in
+  `email/settings.py` supplies the unread-renderer defaults.
+- Source and precedence: installed code only. Canonical environment variable
+  and config key: none. It is public, not sensitive.
+- Application timing and authorized change procedure: `configurable` is false.
+  Only a reviewed code/package change plus full relaunch changes it; verify with
+  a second SHOW.
+
+### Pseudo-agent subscriptions
+
+- Key: `manifest.pseudo_agent_subscriptions`; current and default are always
+  `<redacted>`. Both are path lists and are fully redacted by construction.
+- Meaning: pseudo-agent directories whose outboxes the POSIX mail adapter polls
+  in addition to its own inbox. SHOW reads the adapter's effective list after
+  those paths were resolved once against the agent workdir at construction.
+- Accepted values: a JSON list of path strings. An empty list disables these
+  subscriptions. The launcher's meaningful default when the field is absent is
+  `["../human"]`. The init schema checks that the outer value is a list; an
+  element that cannot be interpreted as a path fails mail-adapter construction
+  instead of being silently ignored.
+- Source and precedence: only `init.json` key
+  `manifest.pseudo_agent_subscriptions`; there is no environment or owner-file
+  peer. The raw configured/resolved lists are sensitive local routing data and
+  must not be copied from logs or inferred from SHOW.
+- Application timing and authorized change procedure: `configurable` is true.
+  After explicit owner/human authorization, edit that exact `init.json` field
+  with the existing File or Shell capability, then perform a full agent
+  relaunch. Ordinary refresh does not reconstruct the mail adapter and cannot
+  apply this field. Call SHOW again after relaunch; it confirms availability
+  and redaction, never the raw paths.
 
 ## 1. What is internal email
 
@@ -162,6 +262,8 @@ When you mention the sender in a reply body or in a summary you give the human, 
 | `add_contact`     | Add or upsert by `address`                                         | `address`, `name`, optional `note`                 |
 | `remove_contact`  | Remove by `address`                                                | `address`                                          |
 | `edit_contact`    | Update fields                                                      | `address`, plus the fields to change               |
+| `settings`        | SHOW Email policy/source truth; no mutation input exists           | —                                                  |
+| `manual`          | Return this installed Email manual                                 | —                                                  |
 
 ### `read` vs `dismiss` — when to use which
 

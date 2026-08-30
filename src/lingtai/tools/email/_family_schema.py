@@ -1,7 +1,8 @@
 """Schema data — canonical per-action ``input`` schemas for the ``email`` family.
 
-This module holds only data: one strict, closed ``input_schema`` per public
-``email`` action (:data:`INPUT_SCHEMAS`), the canonical action order
+This module holds only data: one strict, closed ``input_schema`` per
+operational/manual ``email`` action (:data:`INPUT_SCHEMAS`), the canonical
+pre-settings action order
 (:data:`ACTION_ORDER`), and the canonical English action prose
 (:data:`ACTION_ENUM_DESCRIPTION`).  ``__init__.py`` composes these into the
 public model-facing schema via the generic ``ToolFamily`` infra
@@ -18,9 +19,11 @@ exactly what each file is for.
 
 Field descriptions are reused verbatim from ``schema.py``'s flat properties
 wherever the field is the same field, so the migration changes the envelope
-and not the prose the model reads.  ``ACTION_ORDER`` is the single source for
-the ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
-child registration order in ``__init__.py`` — one list, not three.
+and not the prose the model reads. ``ACTION_ORDER`` owns the operational/manual
+order and child registration order in ``__init__.py``. The generic declaration
+opt-in inserts ``settings`` immediately before ``manual`` and consequently
+composes the public ``input.anyOf``/``allOf`` order without adding a
+hand-authored schema here.
 
 Optional fields are declared in the provider-compatible nullable
 representation (``"type": [..., "null"]`` plus membership in ``required``) per
@@ -38,9 +41,9 @@ from typing import Any
 from .primitives import mode_field
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 
-# The canonical public action order. Identical to the pre-migration flat
-# ``schema.py`` ``action`` enum, in the same order, including the reserved
-# family-owned ``manual`` last.
+# The canonical operational/manual action order. Identical to the pre-settings
+# flat ``schema.py`` ``action`` enum, including family-owned ``manual`` last;
+# the generic declaration seam inserts ``settings`` immediately before it.
 ACTION_ORDER: tuple[str, ...] = (
     "send", "check", "read", "dismiss", "reply", "reply_all",
     "search", "archive", "delete",
@@ -382,7 +385,7 @@ _EDIT_CONTACT_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-#: One strict ``input_schema`` per public action. The reserved ``manual``
+#: One strict ``input_schema`` per operational/manual action. The reserved ``manual``
 #: child references the exported canonical ``MANUAL_INPUT_SCHEMA`` literal
 #: rather than restating it (``tool_family/CONTRACT.md``: families MUST NOT
 #: restate it locally), so the schema-only family composed here and the real
@@ -423,7 +426,8 @@ ACTION_ENUM_DESCRIPTION = (
     "notification. reply: reply to email (requires email_id, message). "
     "reply_all: reply to all recipients. search: regex search mailbox. "
     "archive/delete: move/remove from inbox or archive. "
-    "contacts/add_contact/remove_contact/edit_contact manage contacts. manual "
+    "contacts/add_contact/remove_contact/edit_contact manage contacts. "
+    "settings shows read-only Email policy/source truth. manual "
     "returns the installed email-manual skill without reading or changing "
     "mailbox state."
 )

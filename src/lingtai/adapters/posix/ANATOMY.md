@@ -92,7 +92,10 @@ co-located owning ANATOMY.md files.
   (`src/lingtai/adapters/posix/event_journal.py:47-48`).
 - `PosixFilesystemMailAdapter` implements `MailTransportPort` by delivering
   messages as files into a recipient's inbox and polling its own inbox plus
-  subscribed pseudo-agent outboxes (`src/lingtai/adapters/posix/mail.py:34-69`).
+  subscribed pseudo-agent outboxes. Its adapter-only
+  `pseudo_agent_subscriptions` property returns the effective paths resolved
+  once at construction for Email's fully redacted SHOW provider; it does not
+  widen the Core mail transport Port (`src/lingtai/adapters/posix/mail.py`).
 - `send()` handshakes, injects mailbox metadata, validates every attachment
   path up front, stages the full message (attachments + `message.json`) in a
   hidden `.<id>.staging` dir under the inbox, and publishes it with a single

@@ -7,9 +7,10 @@ The tool is an LTP v2 family (``../CONTRACT.md``): the model-facing root is
 the closed ``action`` + ``input`` + ``reasoning`` + ``summarize`` envelope,
 and each action's arguments live in its own strict ``input`` object composed
 by the generic ``ToolFamily`` infra (``lingtai.tools.tool_family``) from the
-per-action schemas in :mod:`._family_schema`. The public tool name stays
-``email`` and every ``action`` value is unchanged; only the call envelope
-moved. ``EmailManager.handle``'s historical flat argument shape is retained
+per-action schemas in :mod:`._family_schema`. The public tool name and thirteen
+operational action values stay unchanged; the generic opt-in inserts only
+``settings`` before ``manual``. ``EmailManager.handle``'s historical flat
+argument shape is retained
 unchanged as a purely *internal* interface — the same seam ``shell`` kept for
 its ``ShellManager`` (``tools/CONTRACT.md`` "Relationship to current
 runtime") — and :func:`handle` translates the envelope into it.
@@ -17,6 +18,7 @@ runtime") — and :func:`handle` translates the envelope into it.
 Sub-modules:
     primitives.py     — Mailbox I/O, ID generation, read tracking, delivery, display.
     _family_schema.py — Canonical per-action ``input`` schemas + action order.
+    settings.py       — Read-only Email settings rows and policy constants.
     schema.py         — Legacy flat schema/description (internal manager shape).
     manager.py        — EmailManager class (the core filesystem manager).
 
@@ -82,6 +84,9 @@ class EmailRuntimePort(Protocol):
     def handle_email(self, request: EmailRuntimeRequest) -> EmailResult:
         """Execute one Email action without exposing an Agent or generic lookup."""
 
+    def read_pseudo_agent_subscriptions(self) -> tuple[str, ...]:
+        """Read the effective mail-adapter construction snapshot."""
+
 
 # --- Re-exports from sub-modules for backward compatibility ---
 
@@ -126,6 +131,7 @@ from ._family_schema import ACTION_ENUM_DESCRIPTION, ACTION_ORDER, INPUT_SCHEMAS
 
 # Manager
 from .manager import EmailManager  # noqa: F401
+from .settings import email_settings_rows
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +165,8 @@ def _schema_only_family() -> ToolFamily:
     import time. The real handlers need an ``agent``, which only arrives per
     call, so :func:`handle` builds a per-call family with bound handlers and
     this module-level one never dispatches. Constructing it at import time is
-    still load-bearing: it proves the fixed fourteen-child registry has no
-    duplicate and no reserved-name collision on ``manual``
+    still load-bearing: it proves the fixed fifteen-child public registry has
+    no duplicate or reserved-name collision
     (``ToolFamilyError`` raises here, at import, rather than shipping
     silently).
     """
@@ -173,8 +179,9 @@ def _schema_only_family() -> ToolFamily:
         DECLARATION.name,
         [
             ChildTool(action, schemas[action], _unused, title=f"{action} input")
-            for action in DECLARATION.public_actions
+            for action in (*DECLARATION.actions, "manual")
         ],
+        settings_provider=email_settings_rows,
     )
 
 
@@ -307,6 +314,9 @@ def _build_bound_family(host: "ToolPluginHost") -> ToolFamily:
             ],
             build_manual_child(host.workdir, DECLARATION.manual),
         ],
+        settings_provider=lambda: email_settings_rows(
+            runtime.read_pseudo_agent_subscriptions
+        ),
     )
 
 
@@ -354,6 +364,7 @@ DECLARATION = ToolPluginDeclaration(
     # only by the package-owned manual child.
     requires=("workdir", "email_runtime"),
     glossary_package=__package__,
+    settings=True,
 )
 
 
@@ -404,7 +415,20 @@ def _build_family(agent) -> ToolFamily:
         for action in DECLARATION.actions
     ]
     children.append(build_manual_child(agent, DECLARATION.manual))
-    return ToolFamily(DECLARATION.name, children)
+
+    def _read_pseudo_agent_subscriptions() -> tuple[str, ...]:
+        service = getattr(agent, "_mail_service", None)
+        if service is None:
+            raise RuntimeError("Email mail service is unavailable")
+        return service.pseudo_agent_subscriptions
+
+    return ToolFamily(
+        DECLARATION.name,
+        children,
+        settings_provider=lambda: email_settings_rows(
+            _read_pseudo_agent_subscriptions
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +516,11 @@ def boot(agent) -> None:
         extra_ports_for=lambda declaration: (
             {
                 "email_runtime": AgentEmailRuntimeAdapter(
-                    lambda: getattr(agent, "_email_manager", None)
+                    lambda: getattr(agent, "_email_manager", None),
+                    lambda: getattr(
+                        getattr(agent, "_mail_service", None),
+                        "pseudo_agent_subscriptions",
+                    ),
                 )
             }
             if declaration is DECLARATION

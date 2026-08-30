@@ -2034,7 +2034,7 @@ def test_system_manual_contains_declared_ltp_and_budget_settings_contract():
         "llm.codex_tui_dir",
         "LINGTAI_TUI_DIR",
         "manifest.pseudo_agent_subscriptions",
-        "future Email-owner",
+        "Email-owner inventory",
         "fully redact both current and default path lists",
         "Psyche owns the live Pad prompt inputs",
         "resolve_env_checked",

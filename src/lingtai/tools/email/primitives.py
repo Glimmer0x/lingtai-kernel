@@ -19,11 +19,7 @@ from lingtai.kernel.i18n import t
 # ``__init__``) so existing ``lingtai.tools.email._new_mailbox_id`` importers still work.
 from lingtai.kernel.services.mail import _new_mailbox_id  # noqa: F401
 
-
-# Internal email bodies are injected in full into the persistent notification
-# lane.  Keep the sending boundary large but finite so notification rendering
-# never has to truncate ordinary unread mail.
-EMAIL_BODY_CHAR_LIMIT = 50_000
+from .settings import EMAIL_BODY_CHAR_LIMIT, EMAIL_UNREAD_MAX_ENTRIES
 
 
 def mode_field(lang: str = "en") -> dict:
@@ -336,7 +332,12 @@ def _email_time(e: dict) -> str:
 # Unread digest rendering
 # ---------------------------------------------------------------------------
 
-def _unread_notification_context(agent, *, max_entries: int = 10, preview_chars: int = 500) -> tuple[list[dict], list[str]]:
+def _unread_notification_context(
+    agent,
+    *,
+    max_entries: int = EMAIL_UNREAD_MAX_ENTRIES,
+    preview_chars: int = 500,
+) -> tuple[list[dict], list[str]]:
     """Return full unread email bodies for notification persistence.
 
     Internal email is capped at send time (``EMAIL_BODY_CHAR_LIMIT``), so the
@@ -403,7 +404,12 @@ def _unread_notification_context(agent, *, max_entries: int = 10, preview_chars:
     return emails, email_ids
 
 
-def _render_unread_digest(agent, *, max_entries: int = 10, preview_chars: int = 200) -> tuple[str, int, str | None]:
+def _render_unread_digest(
+    agent,
+    *,
+    max_entries: int = EMAIL_UNREAD_MAX_ENTRIES,
+    preview_chars: int = 200,
+) -> tuple[str, int, str | None]:
     """Compute and render the current unread mail digest.
 
     Returns ``(body, count, newest_received_at)``:

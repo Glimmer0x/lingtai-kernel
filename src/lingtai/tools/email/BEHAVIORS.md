@@ -9,7 +9,9 @@ related_files:
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manager.py
+  - src/lingtai/tools/email/settings.py
   - tests/test_email_official_tool_plugin.py
+  - tests/test_email_settings.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when an
@@ -21,7 +23,8 @@ maintenance: |
 Self-contained agent behavior tasks guarding the observable behavior clauses of
 `src/lingtai/tools/email/CONTRACT.md` (closed LTP v2 envelope, validation
 before mailbox I/O, reserved `unread` rejection, exact receipts, typed
-manager-facing runtime, live manager replacement, and absence of dynamic Email capability state). Pinned
+manager-facing runtime, live manager replacement, five-field/redacted settings,
+and absence of dynamic Email capability state). Pinned
 pytest commands must run from the repo root with the project's Python.
 
 ## Behavior EM001 — envelope failures are rejected before any mailbox I/O, and send returns the exact sent receipt
@@ -88,3 +91,27 @@ Pass when the suite passes and the before-I/O rejection and exact receipt hold. 
 
 ### Pass / Fail
 Pass when all four steps hold and the official Email surface is mandatory by intrinsic/official registration rather than dynamic capability state. Fail on a generic/foreign operation reaching the manager, an Email capability/manifest row, a duplicate schema, a missing manager, or a non-package manual.
+
+## Behavior EM003 — settings inventory is exact, read-only, and private
+
+- **id**: EM003
+- **title**: settings inventory is exact, read-only, and private
+- **guards**: `email-contract` § Settings
+- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
+- **estimate**: ≈ 10 minutes
+
+### Steps
+1. From `<repo>`, run `PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_email_settings.py`.
+2. Call `email(action="settings", input={}, reasoning="inventory Email policy")`; confirm four active public constants plus the redacted `manifest.pseudo_agent_subscriptions` row appear in exact order with exactly five fields.
+3. Follow every `comment` to its exact heading in `email-manual`; pass non-empty `input` and confirm refusal without mutation, then exercise the unavailable-source case and confirm one fixed whole-action failure with no rows.
+4. Confirm current/default subscription paths are both redacted, no mailbox/session/identity/content data appears, and an ordinary `contacts` call remains unchanged.
+
+### Expected evidence
+- [ ] Step 1 passes, including the operational-source and ordinary-action non-regressions.
+- [ ] Every row has exactly `key`, `current`, `default`, `configurable`, and `comment`; the four fixed rows are non-configurable and the subscription row is configurable.
+- [ ] Every comment names an existing owner-manual heading; the sensitive row redacts current/default through an unprojected private flag.
+- [ ] Missing applied truth fails the complete response with `SETTINGS_UNAVAILABLE`, and non-empty input cannot invoke a set/reset/mutation path or create persistence.
+
+### Pass / Fail
+Pass when exact five-field inventory, manual pointers, full redaction, whole-action failure, and no-I/O behavior all hold. Fail on any extra field, mutation API, partial unavailable row, path/domain-data leak, missing manual target, or operational regression.

@@ -6,15 +6,22 @@ import json
 import pytest
 
 from lingtai.agent import Agent
+from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 from tests._service_helpers import make_gemini_mock_service
 
 
 @pytest.fixture
 def email_agent(tmp_path):
+    workdir = tmp_path / "agent"
+    mail_service = PosixFilesystemMailAdapter(
+        workdir,
+        pseudo_agent_subscriptions=["../private-email-settings-marker"],
+    )
     agent = Agent(
         service=make_gemini_mock_service(),
         agent_name="email-official-plugin",
-        working_dir=tmp_path / "agent",
+        working_dir=workdir,
+        mail_service=mail_service,
         capabilities={},
     )
     try:
@@ -88,6 +95,8 @@ def test_email_runtime_port_is_domain_specific_and_rejects_foreign_action():
     with pytest.raises(ValueError, match="unsupported Email runtime action"):
         adapter.handle_email(EmailRuntimeRequest("mcp", {}))
     assert manager.calls == [{"action": "check", "folder": "inbox"}]
+    with pytest.raises(RuntimeError, match="snapshot is unavailable"):
+        adapter.read_pseudo_agent_subscriptions()
 
 
 def test_email_bound_family_normalizes_before_typed_runtime_and_preserves_results(
@@ -190,6 +199,19 @@ def test_official_email_mount_keeps_real_agent_runtime_and_package_manual(email_
     assert handler({"action": "check", "input": {}, "reasoning": "inspect"}) == {
         "status": "ok", "total": 0, "showing": 0, "emails": []
     }
+
+    settings = handler(
+        {"action": "settings", "input": {}, "reasoning": "inventory policy"}
+    )
+    pseudo_row = settings["settings"][-1]
+    assert pseudo_row == {
+        "key": "manifest.pseudo_agent_subscriptions",
+        "current": "<redacted>",
+        "default": "<redacted>",
+        "configurable": True,
+        "comment": "email-manual#pseudo-agent-subscriptions",
+    }
+    assert "private-email-settings-marker" not in repr(settings)
 
     manual = handler({"action": "manual", "input": {}, "reasoning": "procedure"})
     assert manual["status"] == "ok"
