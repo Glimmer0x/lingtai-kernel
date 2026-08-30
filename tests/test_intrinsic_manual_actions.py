@@ -302,7 +302,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert len(vision_schema["properties"]["input"]["oneOf"]) == 4
     task_card_schema = task_card_tool.get_schema()
     assert task_card_schema["required"] == ["action", "input", "reasoning"]
-    assert len(task_card_schema["properties"]["input"]["oneOf"]) == 6
+    assert len(task_card_schema["properties"]["input"]["anyOf"]) == 7
     # ``shell`` is migrated to the same LTP v2 envelope, with four children.
     shell_schema = shell_tool.get_schema()
     assert shell_schema["required"] == ["action", "input", "reasoning"]
@@ -352,7 +352,10 @@ def test_shipped_task_card_manuals_only_document_intrinsic_file_contract() -> No
         assert "taskcard/status" in body, name
         assert "taskcard/taskcard.md" in body, name
         assert "nonempty" in lowered, name
-        for action in ("start", "inspect", "retry", "stop", "remove", "manual"):
+        actions = ("start", "inspect", "retry", "stop", "remove", "manual")
+        if name == "intrinsic":
+            actions = (*actions[:-1], "settings", "manual")
+        for action in actions:
             assert action in lowered, (name, action)
         for forbidden in forbidden_active_contracts:
             assert forbidden not in lowered, (name, forbidden)

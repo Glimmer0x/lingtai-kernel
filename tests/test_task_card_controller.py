@@ -775,6 +775,155 @@ def test_config_paths_are_exact_and_agent_local(agent, manager):
     assert manager._legacy_config_path == agent._working_dir / "telegram" / "taskcard.json"
 
 
+_SETTING_DEFAULTS = {
+    "interval_s": 5.0,
+    "timeout_s": 10.0,
+    "max_refreshes": 2000,
+    "reminder_turns": 10,
+    "max_body_chars": 2000,
+}
+_SETTING_COMMENTS = {
+    key: f"task_card-manual#{key.replace('_', '-')}" for key in _SETTING_DEFAULTS
+}
+
+
+def _show_settings(manager: TaskCardManager, input_: dict | None = None) -> dict:
+    return manager.handle(
+        {
+            "action": "settings",
+            "input": {} if input_ is None else input_,
+            "reasoning": "inspect Task Card owner policy",
+        }
+    )
+
+
+def test_settings_inventory_is_exact_ordered_and_read_only_by_default(agent, manager):
+    assert DECLARATION.settings is True
+    assert DECLARATION.public_actions == (
+        "start",
+        "inspect",
+        "retry",
+        "stop",
+        "remove",
+        "settings",
+        "manual",
+    )
+    schema = get_schema()
+    settings_index = DECLARATION.public_actions.index("settings")
+    assert schema["properties"]["input"]["anyOf"][settings_index] == {
+        "title": "settings inventory input",
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+
+    assert _show_settings(manager) == {
+        "settings": [
+            {
+                "key": key,
+                "current": value,
+                "default": value,
+                "configurable": True,
+                "comment": _SETTING_COMMENTS[key],
+            }
+            for key, value in _SETTING_DEFAULTS.items()
+        ]
+    }
+    assert not manager._config_path.exists(), "SHOW must not trigger migration"
+
+    manual = (
+        Path(__file__).parents[1]
+        / "src/lingtai/tools/task_card/manual/SKILL.md"
+    ).read_text(encoding="utf-8")
+    for pointer in _SETTING_COMMENTS.values():
+        manual_name, anchor = pointer.split("#", 1)
+        assert manual_name == "task_card-manual"
+        assert f"### {anchor}\n" in manual
+
+
+def test_settings_current_is_fresh_effective_owner_truth_without_unknown_field_leak(
+    agent, manager
+):
+    secret = "private-task-card-owner-field"
+    path = _write_config(
+        agent,
+        {
+            "interval_s": 7,
+            "timeout_s": 2,
+            "max_refreshes": 11,
+            "reminder_turns": 4,
+            "max_body_chars": 150,
+            "credential_path": secret,
+        },
+    )
+    original = path.read_bytes()
+    first = _show_settings(manager)
+    assert [row["current"] for row in first["settings"]] == [7.0, 2.0, 11, 4, 150]
+    assert path.read_bytes() == original
+    assert secret not in json.dumps(first)
+    assert all(list(row) == [
+        "key", "current", "default", "configurable", "comment"
+    ] for row in first["settings"])
+
+    path.write_text(
+        json.dumps(
+            {
+                "interval_s": 9,
+                "timeout_s": 0.01,
+                "max_refreshes": 12,
+                "reminder_turns": 0,
+                "max_body_chars": 99,
+            }
+        ),
+        encoding="utf-8",
+    )
+    second_bytes = path.read_bytes()
+    second = _show_settings(manager)
+    assert [row["current"] for row in second["settings"]] == [
+        9.0,
+        10.0,
+        12,
+        10,
+        2000,
+    ]
+    assert path.read_bytes() == second_bytes
+
+
+def test_settings_previews_legacy_ceiling_and_rejects_mutation_input_without_writing(
+    agent, manager
+):
+    legacy = _write_legacy_telegram_config(
+        agent, {"taskcard": True, "normal_rows": 1, "max_refreshes": 37}
+    )
+    legacy_bytes = legacy.read_bytes()
+
+    rows = {row["key"]: row["current"] for row in _show_settings(manager)["settings"]}
+    assert rows == {**_SETTING_DEFAULTS, "max_refreshes": 37}
+    assert not manager._config_path.exists()
+    assert legacy.read_bytes() == legacy_bytes
+
+    assert _show_settings(manager, {"set": "max_refreshes"}) == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": "unsupported task_card input field",
+    }
+    assert not manager._config_path.exists()
+    assert legacy.read_bytes() == legacy_bytes
+
+
+def test_settings_provider_failure_is_one_fixed_no_row_result(manager, monkeypatch):
+    def unavailable():
+        raise OSError("private owner read detail")
+
+    monkeypatch.setattr(manager, "settings_rows", unavailable)
+    assert _show_settings(manager) == {
+        "status": "failed",
+        "error_code": "SETTINGS_UNAVAILABLE",
+        "message": "settings inventory is unavailable",
+    }
+
+
 def test_load_config_defaults_to_5_10_2000_when_no_config_file_exists(agent, manager):
     config = manager._load_config()
     assert config.interval_s == 5.0

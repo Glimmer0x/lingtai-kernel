@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
+  - tests/test_tool_settings_contract.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
@@ -38,12 +39,12 @@ The intrinsic `task_card` capability owns one agent-local declarative artifact
 plus its persisted agent-wide configuration, both under `<workdir>/taskcard/`,
 and nothing else. It is producer-first and channel-neutral: it runs a
 renderer, writes `taskcard/taskcard.md`, and writes `taskcard/status` as exact
-`active` or `inactive`, reading `taskcard/taskcard.json` to resolve each new
-watch's cadence/ceiling defaults. An active watch persists a resume descriptor
-at `taskcard/watch.json` so a `refresh`/molt/agent-stop can rehydrate the same
-watch on the next boot; `stop` pauses a watch and preserves the last
-body; `remove` is the terminal lifecycle action that also retires any active
-watch and deletes the body, so a caller never needs to reach around this
+`active` or `inactive`, reading five numeric `taskcard/taskcard.json` policies
+at their existing application seams. An active watch persists a resume
+descriptor at `taskcard/watch.json` so a `refresh`/molt/agent-stop can
+rehydrate the same watch on the next boot; `stop` pauses a watch and preserves
+the last body; `remove` is the terminal lifecycle action that also retires any
+active watch and deletes the body, so a caller never needs to reach around this
 capability with a filesystem delete. It does not own Telegram, Feishu, portals,
 chat IDs, retry policy against a transport, or any resident message state.
 It is the twelfth declared official host-plugin slice: `DECLARATION` is static
@@ -63,11 +64,13 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
 
-- `__init__.py` — the full capability owner: static `DECLARATION`,
+- `__init__.py` — the full capability owner: static `DECLARATION` plus its
+  read-only five-row settings provider,
   declaration-derived schema/description/manual family, one-watch lifecycle,
   renderer execution, atomic file writes, typed error/recovered/limit
   notifications (`TaskCardNotificationsAdapter` and its event forms), persisted
-  config loading/validation (`TaskCardManager._load_config`), the one-way
+  config loading/validation (`TaskCardManager._load_config` and
+  `TaskCardManager.settings_rows`), the one-way
   legacy-config migration (`TaskCardManager._migrate_legacy_config`), and the
   `setup(agent)` composition call into the official registrar.
 - `manual/SKILL.md` — the progressive-disclosure manual for renderer authors
@@ -84,6 +87,9 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
   notification port in its typed event view before dispatch; the host-side
   `AgentTaskCardNotificationsAdapter` in `lingtai.adapters.tool_plugin_host`
   pins source/channel/priority/idempotency/extras behind those operations.
+- The declaration/provider opt-in injects `settings` exactly once immediately
+  before `manual`; the retained manager resolves fresh owner facts without
+  creating or changing the owner document.
 - `lifecycle._stop` calls `shutdown_for_agent_stop()` so a stopping agent
   writes `inactive`, joins the watch thread best-effort, and re-persists the
   watch descriptor with its carried refresh budget for the next boot.
@@ -112,9 +118,11 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 - `<workdir>/taskcard/status` — exact `active` or `inactive`
 - `<workdir>/taskcard/taskcard.md` — the full rendered body
 - `<workdir>/taskcard/taskcard.json` — persisted agent-wide config
-  (`interval_s`/`timeout_s`/`max_refreshes`); read fresh on every `start`,
-  written only by the one-way legacy migration (never by any model-facing
-  action)
+  (`interval_s`/`timeout_s`/`max_refreshes`/`reminder_turns`/
+  `max_body_chars`); read at each field's existing runtime application seam,
+  written by the capability only during the one-way legacy migration (never by
+  a model-facing action). Settings SHOW reads or previews those same effective
+  values without invoking the writer.
 - `<workdir>/taskcard/watch.json` — persisted active-watch descriptor
   (`watch_id`/`renderer_path`/`interval_s`/`timeout_s`/`max_refreshes`/
   `refreshes_used`/`started_at`); written on `start` and re-written on
@@ -145,3 +153,7 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
   it is gated on `taskcard/taskcard.json` not yet existing (never on its
   content), so this capability never carries an ongoing runtime dependence on
   Telegram or any other consumer for its own policy.
+- Settings inventory projects only those five public numeric policies.
+  Renderer/workdir paths, body/status/watch contents, notification state, and
+  unknown owner-document fields remain operational or sensitive state outside
+  the projection.

@@ -1,6 +1,6 @@
 ---
 name: intrinsic-task-card
-contract_version: 4
+contract_version: 5
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/task_card/ANATOMY.md
@@ -20,6 +20,7 @@ related_files:
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
   - tests/test_task_card_proactivity.py
+  - tests/test_tool_settings_contract.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
@@ -77,25 +78,29 @@ declarative artifact and one active watch per agent.
    without creating, mutating, or importing watch state.
 8. Missing, invalid, or inactive producer state is outside this contract.
    Consumers decide what those states mean.
-9. `taskcard/taskcard.json` holds optional `interval_s`, `timeout_s`, and
-   `max_refreshes` fields. Built-in defaults are `interval_s: 5`, `timeout_s:
-   10` (one renderer execution, not the watch's total lifetime), and
-   `max_refreshes: 2000`; a configured value overrides the built-in default for
-   its own field only. `start` resolves each of the three fields independently:
+9. `taskcard/taskcard.json` holds optional `interval_s`, `timeout_s`,
+   `max_refreshes`, `reminder_turns`, and `max_body_chars` fields. Built-in
+   defaults are respectively `5`, `10` (one renderer execution, not the
+   watch's total lifetime), `2000`, `10`, and `2000`. A valid configured value
+   overrides the built-in default for its own field only. `start` resolves each
+   of the first three fields independently:
    an omitted field uses the configured (or built-in) default; an explicit
    `timeout_s`/`max_refreshes` is a safety ceiling request and is silently
    `min`-clamped to the configured ceiling (it may lower, never exceed, that
    ceiling); an explicit `interval_s` has no ceiling at all — only the
    pre-existing absolute floor of 1 second applies, so a slower/safer explicit
    cadence is always honored even when it configures above the default.
+   `reminder_turns` is read on each completed text turn and `max_body_chars` on
+   each body publication.
 10. Config validation is strict and per-field: `interval_s`/`timeout_s` must be
     a non-boolean finite number at or above their floor (1 and 0.1 respectively)
-    and `max_refreshes` must be a non-boolean positive `int`; an invalid or
+    and `max_refreshes`/`reminder_turns` must be non-boolean positive integers;
+    `max_body_chars` must be a non-boolean integer at least 100. An invalid or
     missing field falls back to its own built-in default without discarding
     valid sibling fields, and a config file that fails to parse as a JSON
-    object falls back to all built-in defaults. No malformed input can produce
-    a larger effective ceiling or a faster effective floor than the built-in
-    defaults allow.
+    object contributes no owner value. No malformed input can produce a larger
+    effective ceiling or a faster effective floor than the built-in defaults
+    allow.
 11. The first time `start` resolves configuration and finds no
     `taskcard/taskcard.json`, it performs a one-way migration: if
     `telegram/taskcard.json` (the retired Telegram-owned reverse-channel
@@ -156,6 +161,24 @@ declarative artifact and one active watch per agent.
     body and lets the updater thread retry, matching live-watch error
     semantics.
 
+15. The read-only settings boundary is guarded by
+    [TK003](BEHAVIORS.md#behavior-tk003). The declaration opts in with
+    `settings=True`, and the retained manager supplies exactly five rows in
+    declared owner order: `interval_s`, `timeout_s`, `max_refreshes`,
+    `reminder_turns`, and `max_body_chars`. Every successful row has exactly
+    `key`, `current`, `default`, `configurable`, and `comment`, and each comment
+    names the corresponding stable section in `task_card-manual`. Current
+    values are resolved fresh through the same per-field validation as the
+    runtime; before the intrinsic document exists, `max_refreshes` may preview
+    the genuine one-time legacy migration value without writing it. All five
+    numeric policies are configurable through the existing owner document,
+    outside SHOW. `settings` accepts only exact `input={}`, is inserted
+    immediately before `manual`, and has no set/reset/mutation form. If current
+    truth is unavailable or any row is malformed, unserializable, or too large,
+    the complete bounded action fails with no partial rows. Paths, body/status/
+    watch contents, notification state, source metadata, and unknown owner
+    fields are never projected.
+
 ## Notification boundary [TK002](BEHAVIORS.md#behavior-tk002)
 
 The producer owns notification policy and constructs one of three immutable
@@ -181,7 +204,8 @@ remain the two separate operations `submit_reminder(turns)` and
 ## Port
 
 Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
-`stop`, `remove`, and `manual`. It is the static official
+`stop`, `remove`, `settings`, and `manual`, with `settings` inserted immediately
+before `manual` by the generic declaration seam. It is the static official
 `ToolPluginDeclaration` for the reserved `task_card` name. Its binder receives
 only `workdir`, `shutdown`, `task_card_lifecycle`, and
 `task_card_notifications`: filesystem/manual paths, cooperative watch stop,
@@ -216,8 +240,9 @@ itself; the kernel registrar binds, activates (resume), and mounts it.
   `start` and agent shutdown (carried refresh budget); unlink on
   `stop`/`remove`/refresh exhaustion (tolerating an already-missing file).
 - Filesystem config reader: plain read of `taskcard/taskcard.json` (no fsync;
-  read-only in the steady state) plus the one-way legacy-migration writer
-  described in Behavior rule 11.
+  read-only in the steady state), the read-only settings projection, and the
+  one-way legacy-migration writer described in Behavior rule 11. SHOW never
+  invokes that writer.
 - Consumer examples only: `TelegramManager` and `FeishuManager` read the
   artifact and project it; that consuming behavior is not part of this
   producer contract.
@@ -253,6 +278,17 @@ itself; the kernel registrar binds, activates (resume), and mounts it.
     boundary; source/channel/foreign-field injection is rejected at both, and
     the emitted wire forms retain the established error/recovered/limit
     source, idempotency, priority, and bounded-extra parity.
+12. `settings` appears exactly once immediately before `manual`; it is absent
+    from the declared operational action tuple and is injected only because the
+    declaration and manager-backed provider both opt in.
+13. Settings SHOW performs no write or migration and reuses the runtime's
+    owner-document validation. Real changes remain external File/Shell edits
+    described by the owner manual and require a second SHOW for verification.
+14. Settings rows omit renderer/workdir paths, body/status/watch contents,
+    notification state, source metadata, and unknown document fields.
+15. Exact empty input, whole-inventory failure, private redaction, JSON safety,
+    and the complete 65,536-byte response bound follow the generic ToolFamily
+    settings contract; Task Card adds no writer or control plane.
 
 ## Tests
 
@@ -278,7 +314,12 @@ itself; the kernel registrar binds, activates (resume), and mounts it.
   later successful tick; corrupt/empty/stale descriptors being cleared;
   partial and exhausted budgets being carried; and stop/remove/exhaust
   clearing the descriptor so a deliberately stopped watch is never
-  resurrected.
+  resurrected. It also covers the exact ordered Task Card settings inventory,
+  fresh effective file/default and legacy-preview truth, strict input, manual
+  anchors, whole-action failure, projection exclusions, and no mutation.
+- `tests/test_tool_settings_contract.py` proves exact cumulative production
+  opt-in, private redaction, JSON-safe whole-inventory failure, and the
+  65,536-byte complete-response bound.
 - `tests/test_telegram_toolfamily_ltpv2.py` covers the strict public family
   schema plus intrinsic refresh-limit behavior.
 - `tests/test_telegram_task_card_programmable.py` covers Telegram's read-only
