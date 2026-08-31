@@ -1387,10 +1387,19 @@ def test_profile_daemon_launch_reaches_structured_admission_before_supervisor(
     monkeypatch.setattr(agent, "_log", lambda event, **fields: audit.append((event, fields)))
 
     root = RootProviderAdmission("root-daemon-2a", RUNTIME_POLICY.policy_version)
+    sensitive_input = agent._working_dir / "sensitive-input.txt"
+    sensitive_input.write_text("sensitive task input\n", encoding="utf-8")
     token = bind_provider_admission(root)
     try:
         result = agent.get_capability("daemon").handle(
-            {"action": "emanate", "tasks": [{"task": "test", "tools": []}]}
+            {
+                "action": "emanate",
+                "tasks": [{
+                    "task": "test",
+                    "tools": [],
+                    "task_files": [{"path": "sensitive-input.txt"}],
+                }],
+            }
         )
     finally:
         clear_provider_admission(token)
@@ -1405,12 +1414,12 @@ def test_profile_daemon_launch_reaches_structured_admission_before_supervisor(
         agent._working_dir, full_history=True
     ).records == ()
     assert daemon_dispatch.recovery_markers(agent._working_dir) == []
-    run_dirs = [
-        path for path in (agent._working_dir / "daemons").iterdir()
-        if path.is_dir() and path.name.startswith("em-")
-    ]
-    assert len(run_dirs) == 1
-    assert DaemonRunDir.read_state_from_disk(run_dirs[0]).get("dispatch_sequence") is None
+    daemon_root = agent._working_dir / "daemons"
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
+    assert not (daemon_root / "_task_files").exists()
     decisions = [row for row in audit if row[0] == "derived_launch_admission_decision"]
     assert decisions == [
         (
@@ -1474,6 +1483,130 @@ def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, mo
     ) in audit
 
 
+@pytest.mark.parametrize("backend", ["lingtai", "codex"])
+def test_profile_daemon_batch_admits_each_child_before_task_file_materialization(
+    tmp_path, monkeypatch, backend
+):
+    """Every child is admitted before the batch publishes immutable inputs."""
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from tests._daemon_helpers import install_fake_detached_owner
+
+    class _GrantingPort:
+        def __init__(self):
+            self.calls = []
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "derived_launch_allowed_by_batch_test",
+                audit_id=f"audit-daemon-batch-{backend}",
+            )
+
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    if backend == "lingtai":
+        _enable_detached_fake_llm(agent, monkeypatch)
+    port = _GrantingPort()
+    agent._derived_launch_admission_port = port
+    records = install_fake_detached_owner(monkeypatch)
+    input_path = agent._working_dir / "batch-input.txt"
+    input_path.write_text("batch task input\n", encoding="utf-8")
+
+    root = RootProviderAdmission(
+        f"root-daemon-batch-{backend}", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        request = {
+            "action": "emanate",
+            "tasks": [
+                {
+                    "task": "first",
+                    "tools": [],
+                    "task_files": [{"path": "batch-input.txt"}],
+                },
+                {"task": "second", "tools": []},
+            ],
+        }
+        if backend != "lingtai":
+            request["backend"] = backend
+        result = agent.get_capability("daemon").handle(request)
+    finally:
+        clear_provider_admission(token)
+
+    assert result["status"] == "dispatched"
+    assert port.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
+    assert len(records) == 2
+    assert (agent._working_dir / "daemons" / "_task_files").is_dir()
+
+
+@pytest.mark.parametrize("backend", ["lingtai", "codex"])
+def test_profile_daemon_later_batch_denial_leaves_no_task_file_store_or_run(
+    tmp_path, monkeypatch, backend
+):
+    """Pre-authorizing all children keeps later denial free of durable residue."""
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from tests._daemon_helpers import install_fake_detached_owner
+
+    class _GrantThenDenyPort:
+        def __init__(self):
+            self.calls = []
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            if len(self.calls) == 1:
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.GRANTED,
+                    "first_child_allowed_by_batch_test",
+                    audit_id=f"audit-first-{backend}",
+                )
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.DENIED,
+                "second_child_denied_by_batch_test",
+                audit_id=f"audit-second-{backend}",
+            )
+
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    if backend == "lingtai":
+        _enable_detached_fake_llm(agent, monkeypatch)
+    port = _GrantThenDenyPort()
+    agent._derived_launch_admission_port = port
+    install_fake_detached_owner(monkeypatch)
+    input_path = agent._working_dir / "batch-sensitive-input.txt"
+    input_path.write_text("sensitive batch task input\n", encoding="utf-8")
+
+    root = RootProviderAdmission(
+        f"root-daemon-later-denial-{backend}", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        request = {
+            "action": "emanate",
+            "tasks": [
+                {
+                    "task": "first",
+                    "tools": [],
+                    "task_files": [{"path": "batch-sensitive-input.txt"}],
+                },
+                {"task": "second", "tools": []},
+            ],
+        }
+        if backend != "lingtai":
+            request["backend"] = backend
+        result = agent.get_capability("daemon").handle(request)
+    finally:
+        clear_provider_admission(token)
+
+    assert result["reason_code"] == "second_child_denied_by_batch_test"
+    assert port.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
+    daemon_root = agent._working_dir / "daemons"
+    assert not (daemon_root / "_task_files").exists()
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
+
+
 def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
     tmp_path, monkeypatch
 ):
@@ -1506,13 +1639,19 @@ def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
     monkeypatch.setattr(agent, "_log", lambda event, **fields: audit.append((event, fields)))
 
     root = RootProviderAdmission("root-external-cli-2a", RUNTIME_POLICY.policy_version)
+    sensitive_input = agent._working_dir / "sensitive-input.txt"
+    sensitive_input.write_text("sensitive task input\n", encoding="utf-8")
     token = bind_provider_admission(root)
     try:
         result = agent.get_capability("daemon").handle(
             {
                 "action": "emanate",
                 "backend": "codex",
-                "tasks": [{"task": "test", "tools": []}],
+                "tasks": [{
+                    "task": "test",
+                    "tools": [],
+                    "task_files": [{"path": "sensitive-input.txt"}],
+                }],
             }
         )
     finally:
@@ -1521,9 +1660,17 @@ def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
     assert result == {
         "status": "error",
         "message": "derived launch was not admitted: derived_launch_denied_by_test",
+        "reason_code": "derived_launch_denied_by_test",
+        "audit_id": "audit-external-cli-2a",
     }
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
     assert supervisor_calls == []
+    daemon_root = agent._working_dir / "daemons"
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
+    assert not (daemon_root / "_task_files").exists()
     decisions = [row for row in audit if row[0] == "derived_launch_admission_decision"]
     assert decisions == [
         (
