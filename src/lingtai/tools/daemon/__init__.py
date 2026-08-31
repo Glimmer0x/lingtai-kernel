@@ -5455,6 +5455,15 @@ class DaemonManager:
 
             system_prompt = "[daemon prompt pending MCP startup]"
 
+            # Admission is deliberately before constructing ``DaemonRunDir``:
+            # that constructor creates a per-run directory and durable prompt /
+            # state files. A rejected derived launch must leave no run artifact.
+            from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
+            try:
+                self._authorize_derived_launch("daemon")
+            except DerivedLaunchAdmissionError as error:
+                return self._admission_error_result(error)
+
             # Construct run_dir — creates folder on disk, writes daemon.json,
             # .prompt, .heartbeat, daemon_start event. If FS construction fails,
             # propagate as a tool-level error and skip scheduling for this spec.
@@ -5536,7 +5545,6 @@ class DaemonManager:
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
             try:
-                self._authorize_derived_launch("daemon")
                 self._commit_dispatch(run_dir)
                 self._spawn_detached_lingtai_run(
                     run_dir,
@@ -5742,6 +5750,14 @@ class DaemonManager:
                     "\n\nParent-provided daemon context (oneshot):\n"
                     + task_context
                 )
+            # The external path has the same durable run-dir boundary as the
+            # native LingTai path. Do not materialize its prompt, state, or
+            # backend MCP configuration until the derived launch is admitted.
+            from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
+            try:
+                self._authorize_derived_launch("daemon")
+            except DerivedLaunchAdmissionError as error:
+                return self._admission_error_result(error)
             try:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._workdir.path,
@@ -5865,7 +5881,6 @@ class DaemonManager:
             # boundary.  The parent writes a complete, redacted manifest and
             # retains only the durable run-dir facade.
             try:
-                self._authorize_derived_launch("daemon")
                 self._commit_dispatch(run_dir)
                 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
                 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
@@ -9518,6 +9533,16 @@ class DaemonManager:
     def _log(self, event_type: str, **fields) -> None:
         """Log through Daemon's narrow parent-runtime port."""
         self._runtime.log(event_type, **fields)
+
+    @staticmethod
+    def _admission_error_result(error: "DerivedLaunchAdmissionError") -> dict[str, str]:
+        """Expose structured refusal evidence without creating a run artifact."""
+        return {
+            "status": "error",
+            "message": str(error),
+            "reason_code": error.decision.reason_code,
+            "audit_id": error.decision.audit_id,
+        }
 
     def _authorize_derived_launch(self, capability_name: str) -> None:
         """Reach the host decision seam before a daemon launch side effect."""

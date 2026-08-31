@@ -1405,12 +1405,11 @@ def test_profile_daemon_launch_reaches_structured_admission_before_supervisor(
         agent._working_dir, full_history=True
     ).records == ()
     assert daemon_dispatch.recovery_markers(agent._working_dir) == []
-    run_dirs = [
-        path for path in (agent._working_dir / "daemons").iterdir()
-        if path.is_dir() and path.name.startswith("em-")
-    ]
-    assert len(run_dirs) == 1
-    assert DaemonRunDir.read_state_from_disk(run_dirs[0]).get("dispatch_sequence") is None
+    daemon_root = agent._working_dir / "daemons"
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
     decisions = [row for row in audit if row[0] == "derived_launch_admission_decision"]
     assert decisions == [
         (
@@ -1521,9 +1520,16 @@ def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
     assert result == {
         "status": "error",
         "message": "derived launch was not admitted: derived_launch_denied_by_test",
+        "reason_code": "derived_launch_denied_by_test",
+        "audit_id": "audit-external-cli-2a",
     }
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
     assert supervisor_calls == []
+    daemon_root = agent._working_dir / "daemons"
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
     decisions = [row for row in audit if row[0] == "derived_launch_admission_decision"]
     assert decisions == [
         (
