@@ -396,12 +396,14 @@ def test_derived_endpoint_asks_driver_to_audit_and_deny_a_second_child():
                 "capability": "daemon",
             },
         )
-        assert _recv_frame(sock) == {
+        request = _recv_frame(sock)
+        assert {key: request[key] for key in request if key != "call_id"} == {
             "version": 1,
             "op": "authorize_derived_launch",
             "launch_id": "child-1",
             "capability": "daemon",
         }
+        assert isinstance(request["call_id"], str) and request["call_id"]
         _send_frame(
             sock,
             {
