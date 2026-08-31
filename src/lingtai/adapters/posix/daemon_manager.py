@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 import hashlib
+import array
 from pathlib import Path
 from typing import Any
 
@@ -196,6 +197,7 @@ def enqueue_manager_run(
     request: DaemonSupervisorRequest,
     capsule: dict | None,
     pool_size: int,
+    authority_lease: object | None = None,
 ) -> None:
     """Durably enqueue one run and lazily start the resident manager."""
     if os.name != "posix":
@@ -218,7 +220,12 @@ def enqueue_manager_run(
     job_path = queue_dir / f"{request.run_id}.json"
     _write_private_json(job_path, payload)
     try:
-        _send_capsule(root, request.run_id, capsule or {})
+        _send_capsule(
+            root,
+            request.run_id,
+            capsule or {},
+            authority_lease=authority_lease,
+        )
     except Exception:
         try:
             job_path.unlink()
@@ -262,6 +269,10 @@ class _DaemonManagerProcess:
         self.pool_size = pool_size
         self.active: dict[str, threading.Thread] = {}
         self.capsules: dict[str, dict] = {}
+        # Driver endpoint descriptors never enter the queue job or journal.
+        # They stay in this resident manager's memory until its existing pool
+        # assigns the exact run to a worker.
+        self.authority_fds: dict[str, int] = {}
         self.lock = threading.Lock()
         self.last_activity = time.monotonic()
         self.started_at = time.time()
@@ -301,14 +312,29 @@ class _DaemonManagerProcess:
                 return
             with conn:
                 try:
-                    data = self._read_capsule_message(conn)
+                    data, authority_fd = self._read_capsule_message(conn)
                     run_id = data.get("run_id")
                     capsule = data.get("capsule")
                     if isinstance(run_id, str) and isinstance(capsule, dict):
+                        job_path = self.queue_dir / f"{run_id}.json"
                         with self.lock:
-                            self.capsules[run_id] = capsule
+                            already_started = (
+                                run_id in self.active or not job_path.exists()
+                            )
+                            previous_fd = None
+                            if not already_started:
+                                previous_fd = self.authority_fds.pop(run_id, None)
+                                self.capsules[run_id] = capsule
+                                if authority_fd is not None:
+                                    self.authority_fds[run_id] = authority_fd
+                        if previous_fd is not None:
+                            _close_fd(previous_fd)
+                        if already_started and authority_fd is not None:
+                            _close_fd(authority_fd)
                         conn.sendall(b"OK")
                     else:
+                        if authority_fd is not None:
+                            _close_fd(authority_fd)
                         conn.sendall(b"ERR")
                 except Exception:
                     try:
@@ -316,19 +342,44 @@ class _DaemonManagerProcess:
                     except OSError:
                         pass
 
-    def _read_capsule_message(self, conn: socket.socket) -> dict[str, Any]:
+    def _read_capsule_message(self, conn: socket.socket) -> tuple[dict[str, Any], int | None]:
         chunks: list[bytes] = []
         total = 0
-        while True:
-            chunk = conn.recv(65536)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > _MAX_CAPSULE_BYTES:
-                raise ValueError("daemon manager capsule exceeds size limit")
-            chunks.append(chunk)
-        value = json.loads(b"".join(chunks).decode("utf-8"))
-        return value if isinstance(value, dict) else {}
+        authority_fds = array.array("i")
+        try:
+            first = True
+            while True:
+                if first:
+                    chunk, ancdata, flags, _address = conn.recvmsg(
+                        65536, socket.CMSG_SPACE(authority_fds.itemsize)
+                    )
+                    first = False
+                    if flags & socket.MSG_CTRUNC:
+                        raise ValueError("daemon manager authority descriptor was truncated")
+                    for level, kind, payload in ancdata:
+                        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                            authority_fds.frombytes(
+                                payload[: len(payload) - (len(payload) % authority_fds.itemsize)]
+                            )
+                else:
+                    chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_CAPSULE_BYTES:
+                    raise ValueError("daemon manager capsule exceeds size limit")
+                chunks.append(chunk)
+            value = json.loads(b"".join(chunks).decode("utf-8"))
+            if len(authority_fds) > 1:
+                raise ValueError("daemon manager capsule carried multiple authority descriptors")
+            if authority_fds:
+                os.set_inheritable(authority_fds[0], False)
+            return (value if isinstance(value, dict) else {},
+                    authority_fds[0] if authority_fds else None)
+        except Exception:
+            for fd in authority_fds:
+                _close_fd(fd)
+            raise
 
     def recover_interrupted_active_runs(self) -> None:
         """Mark manager-owned active runs from a prior crash failed."""
@@ -459,6 +510,9 @@ class _DaemonManagerProcess:
                 continue  # the worker won the handoff; its watcher consumes this
             with self.lock:
                 self.capsules.pop(request.run_id, None)
+                authority_fd = self.authority_fds.pop(request.run_id, None)
+            if authority_fd is not None:
+                _close_fd(authority_fd)
             run_dir.update_state(owner="manager", manager_pid=os.getpid())
             run_dir.mark_cancelled()
             _publish_terminal(run_dir, manifest)
@@ -494,7 +548,10 @@ class _DaemonManagerProcess:
                 continue
             with self.lock:
                 capsule = self.capsules.pop(request.run_id, None)
+                authority_fd = self.authority_fds.pop(request.run_id, None)
             if capsule is None:
+                if authority_fd is not None:
+                    _close_fd(authority_fd)
                 if self._missing_capsule_is_terminal(job):
                     self._fail_unavailable_capsule_job(job_path, request)
                 continue
@@ -503,11 +560,18 @@ class _DaemonManagerProcess:
             except OSError:
                 with self.lock:
                     self.capsules[request.run_id] = capsule
+                    if authority_fd is not None:
+                        self.authority_fds[request.run_id] = authority_fd
                 continue
             self._journal(request.run_id, "active", request, capsule)
+            target = self._run_job
+            args: tuple[Any, ...] = (request, capsule)
+            if authority_fd is not None:
+                target = self._run_driver_authorized_job
+                args = (request, capsule, authority_fd)
             thread = threading.Thread(
-                target=self._run_job,
-                args=(request, capsule),
+                target=target,
+                args=args,
                 name=f"daemon-manager-{request.run_id}",
                 daemon=True,
             )
@@ -632,6 +696,99 @@ class _DaemonManagerProcess:
                 pass
             self._journal(request.run_id, "terminal", request, capsule)
 
+    def _run_driver_authorized_job(
+        self,
+        request: DaemonSupervisorRequest,
+        capsule: dict,
+        authority_fd: int,
+    ) -> None:
+        """Use one pool worker to own a Driver-authorized detached run.
+
+        The resident manager remains the sole global concurrency authority.
+        Its worker hands the endpoint to the existing POSIX supervisor and
+        stays active until that supervisor reaches terminal truth; this keeps
+        Driver-owned runs from bypassing ``pool_size`` across batches.
+        """
+        lease = None
+        endpoint = None
+        try:
+            from lingtai.adapters.acp.driver_authority import DriverChildEndpointLease
+            from lingtai.tools.daemon.supervisor_runtime import select_daemon_supervisor_adapter
+
+            manifest = _read_manifest_for_request(request)
+            run_dir = _attach_run_dir(manifest)
+            if request.run_id != manifest.get("run_id"):
+                _close_fd(authority_fd)
+                authority_fd = -1
+                run_dir.update_state(owner="manager", manager_pid=os.getpid())
+                run_dir.mark_failed(ValueError("manager request/manifest run_id mismatch"))
+                return
+            endpoint = socket.socket(fileno=authority_fd)
+            authority_fd = -1
+            os.set_inheritable(endpoint.fileno(), False)
+            lease = DriverChildEndpointLease(endpoint)
+            run_dir.update_state(owner="manager", manager_pid=os.getpid())
+            select_daemon_supervisor_adapter().spawn_detached(
+                request,
+                capsule=capsule,
+                authority_lease=lease,
+            )
+            self._await_driver_supervisor_startup(run_dir)
+            self._await_driver_supervisor_terminal(run_dir, manifest)
+        except Exception as exc:
+            try:
+                manifest = _read_manifest_for_request(request)
+                run_dir = _attach_run_dir(manifest)
+                run_dir.mark_failed(exc)
+                _publish_terminal(run_dir, manifest)
+            except Exception:
+                pass
+        finally:
+            if authority_fd >= 0:
+                _close_fd(authority_fd)
+            if lease is not None:
+                lease.close()
+            elif endpoint is not None:
+                endpoint.close()
+            try:
+                manifest = _read_manifest_for_request(request)
+                run_dir = _attach_run_dir(manifest)
+                _publish_terminal(run_dir, manifest)
+            except Exception:
+                pass
+            self._journal(request.run_id, "terminal", request, capsule)
+
+    def _await_driver_supervisor_startup(self, run_dir) -> None:
+        """Require evidence that the detached supervisor reached this run."""
+        deadline = time.monotonic() + _CAPSULE_SEND_TIMEOUT_S
+        while time.monotonic() < deadline:
+            state = run_dir.read_state_from_disk(run_dir.path)
+            if state.get("supervisor_pid") or state.get("state") in {
+                "done", "failed", "cancelled", "timeout"
+            }:
+                return
+            time.sleep(_POLL_INTERVAL_S)
+        raise RuntimeError(
+            f"driver-authorized daemon supervisor for {run_dir.run_id!r} "
+            "did not start"
+        )
+
+    def _await_driver_supervisor_terminal(self, run_dir, manifest: dict) -> None:
+        """Keep the manager slot occupied until the detached run finishes."""
+        timeout_s = manifest.get("timeout_s", 0)
+        if not isinstance(timeout_s, (int, float)) or isinstance(timeout_s, bool):
+            raise ValueError("driver-authorized manager manifest timeout is invalid")
+        deadline = time.monotonic() + float(timeout_s) + _CAPSULE_SEND_TIMEOUT_S
+        while time.monotonic() < deadline:
+            state = run_dir.read_state_from_disk(run_dir.path)
+            if state.get("state") in {"done", "failed", "cancelled", "timeout"}:
+                return
+            time.sleep(_POLL_INTERVAL_S)
+        _terminate_exact_children(run_dir)
+        run_dir.mark_failed(RuntimeError(
+            "driver-authorized central manager run did not reach terminal state"
+        ))
+
     def _journal(
         self,
         run_id: str,
@@ -683,7 +840,13 @@ def _mark_run_manager_owned(request: DaemonSupervisorRequest, root: Path) -> Non
     run_dir.update_state(**updates)
 
 
-def _send_capsule(root: Path, run_id: str, capsule: dict) -> None:
+def _send_capsule(
+    root: Path,
+    run_id: str,
+    capsule: dict,
+    *,
+    authority_lease: object | None = None,
+) -> None:
     socket_path = _capsule_socket_path(root)
     payload = json.dumps(
         {"run_id": run_id, "capsule": capsule},
@@ -694,22 +857,47 @@ def _send_capsule(root: Path, run_id: str, capsule: dict) -> None:
         raise ValueError("daemon manager capsule exceeds size limit")
     deadline = time.monotonic() + _CAPSULE_SEND_TIMEOUT_S
     last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.5)
-                sock.connect(str(socket_path))
-                sock.sendall(payload)
-                sock.shutdown(socket.SHUT_WR)
-                if sock.recv(2) == b"OK":
-                    return
-                raise RuntimeError("daemon manager rejected runtime capsule")
-        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError) as exc:
-            last_error = exc
-            time.sleep(_POLL_INTERVAL_S)
+    authority_fd: int | None = None
+    try:
+        if authority_lease is not None:
+            from lingtai.adapters.acp.driver_authority import consume_posix_child_endpoint_lease
+
+            authority_fd = consume_posix_child_endpoint_lease(authority_lease)
+        while time.monotonic() < deadline:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(0.5)
+                    sock.connect(str(socket_path))
+                    if authority_fd is None:
+                        sock.sendall(payload)
+                    else:
+                        sent = sock.sendmsg(
+                            [payload],
+                            [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                              array.array("i", [authority_fd]))],
+                        )
+                        if sent < len(payload):
+                            sock.sendall(payload[sent:])
+                    sock.shutdown(socket.SHUT_WR)
+                    if sock.recv(2) == b"OK":
+                        return
+                    raise RuntimeError("daemon manager rejected runtime capsule")
+            except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError) as exc:
+                last_error = exc
+                time.sleep(_POLL_INTERVAL_S)
+    finally:
+        if authority_fd is not None:
+            _close_fd(authority_fd)
     raise RuntimeError(
         f"central daemon manager did not accept runtime capsule for {run_id!r}"
     ) from last_error
+
+
+def _close_fd(fd: int) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
 
 
 def _process_identity(pid: int) -> str | None:

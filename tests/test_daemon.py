@@ -1485,6 +1485,92 @@ def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, mo
     ) in audit
 
 
+@pytest.mark.skipif(os.name != "posix", reason="central daemon manager is POSIX-only")
+def test_profile_daemon_grant_uses_default_central_manager_without_bypass(
+    tmp_path, monkeypatch
+):
+    """A Driver lease reaches the existing manager queue on the default path."""
+    from lingtai.adapters.acp.driver_authority import (
+        DriverChildEndpointLease,
+        consume_posix_child_endpoint_lease,
+    )
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from lingtai.adapters.posix import daemon_manager as manager_adapter
+
+    class _GrantingPort:
+        def __init__(self):
+            self.calls = []
+            endpoint, self.peer = socket.socketpair()
+            self.lease = DriverChildEndpointLease(endpoint)
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "derived_launch_allowed_by_default_manager_test",
+                audit_id="audit-daemon-default-manager",
+                child_endpoint_lease=self.lease,
+            )
+
+    agent = _make_agent(tmp_path, {"daemon": {}})
+    _enable_detached_fake_llm(agent, monkeypatch)
+    manager = agent.get_capability("daemon")
+    assert manager._manager_pool_size == 100
+    port = _GrantingPort()
+    agent._derived_launch_admission_port = port
+    received = []
+
+    def record_enqueue(*, authority_lease=None, **_kwargs):
+        received.append(authority_lease)
+        fd = consume_posix_child_endpoint_lease(authority_lease)
+        os.close(fd)
+
+    monkeypatch.setattr(manager_adapter, "enqueue_manager_run", record_enqueue)
+    root = RootProviderAdmission(
+        "root-daemon-default-manager", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        result = manager.handle(
+            {"action": "emanate", "tasks": [{"task": "test", "tools": []}]}
+        )
+    finally:
+        clear_provider_admission(token)
+        port.peer.close()
+
+    assert result["status"] == "dispatched"
+    assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
+    assert received == [port.lease]
+
+
+def test_profile_cli_rejects_before_requesting_driver_grants(tmp_path):
+    """Unsupported external backends must not create Driver-only audits."""
+    agent = _make_agent(tmp_path, {"daemon": {}})
+    agent._requires_derived_launch_admission_port = True
+    calls = []
+
+    class _GrantingPort:
+        def authorize_derived_launch(self, parent, capability):
+            calls.append((parent, capability))
+            raise AssertionError("CLI preflight must run before Driver admission")
+
+    agent._derived_launch_admission_port = _GrantingPort()
+    result = agent.get_capability("daemon").handle(
+        {
+            "action": "emanate",
+            "backend": "codex",
+            "tasks": [{"task": "external task", "tools": []}],
+        }
+    )
+
+    assert result == {
+        "status": "error",
+        "message": "external daemon backend is unsupported by Driver admission",
+    }
+    assert calls == []
+    assert not (agent._working_dir / "daemons").exists()
+
+
 @pytest.mark.parametrize("backend", ["lingtai", "codex"])
 def test_profile_daemon_batch_admits_each_child_before_task_file_materialization(
     tmp_path, monkeypatch, backend

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -425,6 +426,95 @@ def test_central_manager_queues_until_worker_frees(tmp_path, monkeypatch):
     assert starts == ["em-first", "em-second"]
     assert _wait_state(first, "done")["state"] == "done"
     assert _wait_state(second, "done")["state"] == "done"
+
+
+def test_central_manager_counts_driver_jobs_against_the_same_pool(tmp_path, monkeypatch):
+    """A Driver route occupies the resident manager's normal worker slot."""
+    driver_run, driver_request = _make_run(tmp_path, "em-driver")
+    ordinary_run, ordinary_request = _make_run(tmp_path, "em-ordinary")
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    _write_job(queue_dir, driver_request)
+    _write_job(queue_dir, ordinary_request)
+    driver_fd, writer_fd = os.pipe()
+    starts: list[str] = []
+
+    def fake_driver(self, request, capsule, authority_fd):
+        starts.append(request.run_id)
+        os.close(authority_fd)
+        time.sleep(0.15)
+        driver_run.mark_done("driver manager completed")
+        self._journal(request.run_id, "terminal", request, capsule)
+
+    def fake_ordinary(_run_dir, _manifest, _capsule):
+        starts.append(ordinary_request.run_id)
+        ordinary_run.mark_done("ordinary manager completed")
+
+    monkeypatch.setattr(_DaemonManagerProcess, "_run_driver_authorized_job", fake_driver)
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager._run_one_emanation", fake_ordinary
+    )
+    manager = _manager_with_capsules(
+        queue_dir,
+        journal_dir,
+        pool_size=1,
+        capsules={driver_request.run_id: {}, ordinary_request.run_id: {}},
+    )
+    manager.authority_fds[driver_request.run_id] = driver_fd
+    try:
+        manager.run()
+    finally:
+        os.close(writer_fd)
+
+    assert starts == ["em-driver", "em-ordinary"]
+    assert _wait_state(driver_run, "done")["state"] == "done"
+    assert _wait_state(ordinary_run, "done")["state"] == "done"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS is POSIX-only")
+def test_central_manager_transfers_driver_endpoint_only_in_memory(tmp_path):
+    """The queue keeps a Driver endpoint out of JSON and hands it to manager RAM."""
+    from lingtai.adapters.acp.driver_authority import (
+        DriverAuthorityTransportError,
+        DriverChildEndpointLease,
+        consume_posix_child_endpoint_lease,
+    )
+
+    root = tmp_path / "manager"
+    root.mkdir()
+    manager = _DaemonManagerProcess(root / "queue", root / "journal", pool_size=1)
+    manager.queue_dir.mkdir()
+    (manager.queue_dir / "em-driver-fd.json").write_text("{}", encoding="utf-8")
+    socket_path = root / "capsule.sock"
+    manager.start_capsule_server(socket_path)
+    endpoint, peer = socket.socketpair()
+    lease = DriverChildEndpointLease(endpoint)
+    try:
+        daemon_manager._send_capsule(
+            root,
+            "em-driver-fd",
+            {"task": "driver task"},
+            authority_lease=lease,
+        )
+        deadline = time.monotonic() + 2.0
+        while "em-driver-fd" not in manager.authority_fds and time.monotonic() < deadline:
+            time.sleep(0.01)
+        authority_fd = manager.authority_fds.pop("em-driver-fd")
+        received = socket.socket(fileno=authority_fd)
+        peer.sendall(b"ok")
+        assert received.recv(2) == b"ok"
+        received.close()
+        assert manager.capsules["em-driver-fd"] == {"task": "driver task"}
+        with pytest.raises(DriverAuthorityTransportError, match="already consumed"):
+            consume_posix_child_endpoint_lease(lease)
+    finally:
+        peer.close()
+        if manager._capsule_socket is not None:
+            manager._capsule_socket.close()
+        try:
+            socket_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def test_central_manager_dispatches_high_concurrency_without_waiting_for_queued_pid(tmp_path, monkeypatch):

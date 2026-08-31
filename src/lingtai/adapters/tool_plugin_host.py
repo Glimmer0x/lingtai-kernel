@@ -673,6 +673,7 @@ class AgentDaemonRuntimeAdapter:
         "_read_max_aed_attempts",
         "_read_tool_call_guard",
         "_authorize_derived_launch",
+        "_read_derived_launch_admission_required",
         "_manager_options",
         "_setup_preset_capability",
         "_read_preset",
@@ -695,6 +696,7 @@ class AgentDaemonRuntimeAdapter:
         read_max_aed_attempts: Callable[[], int],
         read_tool_call_guard: Callable[[], Any],
         authorize_derived_launch: Callable[[Any], Any],
+        read_derived_launch_admission_required: Callable[[], bool],
         manager_options: Mapping[str, Any],
         setup_preset_capability: Callable[[str, Mapping[str, Any]], tuple[dict[str, Any], dict[str, Callable[[dict], dict]]]],
         read_preset: Callable[[], Mapping[str, Any]],
@@ -712,6 +714,9 @@ class AgentDaemonRuntimeAdapter:
         self._read_max_aed_attempts = read_max_aed_attempts
         self._read_tool_call_guard = read_tool_call_guard
         self._authorize_derived_launch = authorize_derived_launch
+        self._read_derived_launch_admission_required = (
+            read_derived_launch_admission_required
+        )
         self._manager_options = dict(manager_options)
         self._setup_preset_capability = setup_preset_capability
         self._read_preset = read_preset
@@ -752,6 +757,10 @@ class AgentDaemonRuntimeAdapter:
 
     def authorize_derived_launch(self, capability: Any) -> Any:
         return self._authorize_derived_launch(capability)
+
+    @property
+    def requires_derived_launch_admission(self) -> bool:
+        return self._read_derived_launch_admission_required()
 
     @property
     def manager_options(self) -> Mapping[str, Any]:
@@ -912,6 +921,9 @@ def daemon_runtime_for_agent(
         read_max_aed_attempts=_read_max_aed_attempts,
         read_tool_call_guard=lambda: getattr(agent, "_tool_call_guard", None),
         authorize_derived_launch=_authorize_derived_launch,
+        read_derived_launch_admission_required=lambda: bool(
+            getattr(agent, "_requires_derived_launch_admission_port", False)
+        ),
         manager_options=manager_options,
         setup_preset_capability=_setup_preset_capability,
         read_preset=_read_preset,

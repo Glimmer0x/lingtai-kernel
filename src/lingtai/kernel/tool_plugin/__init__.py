@@ -392,6 +392,10 @@ class DaemonRuntimePort(Protocol):
     def manager_options(self) -> Mapping[str, Any]:
         """Resolved construction options for this daemon manager binding."""
 
+    @property
+    def requires_derived_launch_admission(self) -> bool:
+        """Whether this host must obtain Driver admission for child launches."""
+
     def authorize_derived_launch(self, capability: Any) -> Any:
         """Decide one daemon-derived process launch before side effects."""
 

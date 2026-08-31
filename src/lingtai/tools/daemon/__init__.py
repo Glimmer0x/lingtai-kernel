@@ -3557,18 +3557,12 @@ class DaemonManager:
         if runtime_llm:
             capsule.setdefault("llm", {}).update(runtime_llm)
         if use_central_manager:
-            if launch_decision.child_endpoint_lease is not None:
-                from lingtai.adapters.acp.driver_authority import close_child_endpoint_lease
-
-                close_child_endpoint_lease(launch_decision.child_endpoint_lease)
-                raise RuntimeError(
-                    "driver-authorized daemon launch cannot use central manager"
-                )
             self._enqueue_central_daemon_manager_run(
                 request,
                 capsule=capsule,
                 pool_size=self._manager_pool_size,
                 run_dir=run_dir,
+                authority_lease=launch_decision.child_endpoint_lease,
             )
         else:
             supervisor = select_daemon_supervisor_adapter()
@@ -3633,6 +3627,7 @@ class DaemonManager:
         capsule: dict,
         pool_size: int,
         run_dir: DaemonRunDir,
+        authority_lease: object | None = None,
     ) -> None:
         """Submit one already-materialized run to the resident POSIX manager.
 
@@ -3647,6 +3642,7 @@ class DaemonManager:
             request=request,
             capsule=capsule,
             pool_size=pool_size,
+            authority_lease=authority_lease,
         )
 
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
@@ -5688,6 +5684,17 @@ class DaemonManager:
             or backend_spec.runner_attr is None
         ):
             return {"status": "error", "message": f"Unknown CLI backend: {backend}"}
+
+        # A Driver grant is an endpoint for an exact LingTai-owned execution
+        # child.  External CLIs cannot receive that endpoint safely, so reject
+        # this backend *before* asking Driver for any per-task grant/audit.
+        if getattr(self._runtime, "requires_derived_launch_admission", False):
+            return {
+                "status": "error",
+                "message": (
+                    "external daemon backend is unsupported by Driver admission"
+                ),
+            }
 
         # Pre-flight: validate per-task backend_options BEFORE creating any
         # run_dir or scheduling work, so a single bad spec refuses the whole
