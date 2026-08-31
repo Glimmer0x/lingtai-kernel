@@ -1517,12 +1517,12 @@ def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, mo
     port = _GrantingPort()
     agent._derived_launch_admission_port = port
     audit = []
-    supervisor_calls = []
-    monkeypatch.setattr(
-        PosixDaemonSupervisorAdapter,
-        "spawn_detached",
-        lambda *_args, **_kwargs: supervisor_calls.append("spawn"),
-    )
+    supervisor_requests = []
+
+    def record_spawn(_adapter, request, **_kwargs):
+        supervisor_requests.append(request)
+
+    monkeypatch.setattr(PosixDaemonSupervisorAdapter, "spawn_detached", record_spawn)
     monkeypatch.setattr(
         agent.get_capability("daemon"), "_await_supervisor_startup", lambda _run: None
     )
@@ -1539,7 +1539,11 @@ def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, mo
 
     assert result["status"] == "dispatched"
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
-    assert supervisor_calls == ["spawn"]
+    assert len(supervisor_requests) == 1
+    manifest = json.loads(
+        Path(supervisor_requests[0].manifest_path).read_text(encoding="utf-8")
+    )
+    assert manifest["backend"] == "lingtai"
     assert (
         "derived_launch_admission_decision",
         {
