@@ -19,6 +19,7 @@ related_files:
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
   - src/lingtai/kernel/provider_admission.py
+  - docs/references/provider-admission.md
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -79,7 +80,7 @@ maintenance: |
 Stable entry: `lingtai.kernel.agent-runtime.v1`.
 
 ## Purpose
-Guarded by: [BA001](BEHAVIORS.md#behavior-ba001), [BA002](BEHAVIORS.md#behavior-ba002)
+Guarded by: [BA001](BEHAVIORS.md#behavior-ba001), [BA002](BEHAVIORS.md#behavior-ba002), [BA005](BEHAVIORS.md#behavior-ba005)
 
 
 Agent runtime is the composed lifecycle promise of one LingTai agent process:
@@ -350,7 +351,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    tool id/name; absent brokerage passes through, while broker exceptions or
    invalid decisions deny. It still promises no hard provider abort or
    running-tool preemption.
-13. `agent-runtime.provider-admission.v1` — A composition that injects a
+13. `agent-runtime.provider-admission.v1` — Guarded by
+   [BA005](BEHAVIORS.md#behavior-ba005). A composition that injects a
    `ProviderCallAdmissionPort` turns the service boundary into the single
    structural provider-call gate. Core binds a `RootProviderAdmission` only
    after the final correlated-turn origin check, and service/session proxies
@@ -389,7 +391,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    at the old filter. The launch
    inventory is a regression tripwire, not a one-time review: a new constructor
    must fail until classified. Its static matcher must cover direct-name and
-   attribute calls, imported aliases, and package re-exports. It is not a
+   attribute calls, imported aliases, package re-exports, and direct simple
+   assignment aliases. It is not a
    whole-program proof over dynamic dispatch (`getattr`, registry lookup, or
    factory indirection) or subclasses/wrappers that override a launch entry;
    those are explicit blind spots that require focused review and production

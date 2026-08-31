@@ -130,7 +130,8 @@ def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[str, 
     The helper is intentionally not a resolver: dynamic factories, registry
     lookup, and subclass/wrapper overrides are reviewed outside this narrow
     source inventory.  It does cover the direct forms promised by the
-    Contract, including aliases introduced through package re-exports.
+    Contract, including aliases introduced through imports, package re-exports,
+    and direct simple assignments.
     """
     tree = ast.parse(source)
     aliases = set(targets)
@@ -146,10 +147,16 @@ def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[str, 
     class _InventoryVisitor(ast.NodeVisitor):
         def __init__(self) -> None:
             self._scope: list[str] = []
+            self._alias_scopes: list[set[str]] = [set(aliases)]
+
+        def _aliases(self) -> set[str]:
+            return set().union(*self._alias_scopes)
 
         def _visit_scoped(self, node: ast.AST, name: str) -> None:
             self._scope.append(name)
+            self._alias_scopes.append(set())
             self.generic_visit(node)
+            self._alias_scopes.pop()
             self._scope.pop()
 
         def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -161,8 +168,24 @@ def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[str, 
         def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
             self._visit_scoped(node, node.name)
 
+        def visit_Assign(self, node: ast.Assign) -> None:
+            if isinstance(node.value, ast.Name) and node.value.id in self._aliases():
+                self._alias_scopes[-1].update(
+                    target.id for target in node.targets if isinstance(target, ast.Name)
+                )
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if (
+                isinstance(node.value, ast.Name)
+                and node.value.id in self._aliases()
+                and isinstance(node.target, ast.Name)
+            ):
+                self._alias_scopes[-1].add(node.target.id)
+            self.generic_visit(node)
+
         def visit_Call(self, node: ast.Call) -> None:
-            if isinstance(node.func, ast.Name) and node.func.id in aliases:
+            if isinstance(node.func, ast.Name) and node.func.id in self._aliases():
                 constructor = node.func.id
             elif (
                 isinstance(node.func, ast.Attribute)
@@ -180,14 +203,19 @@ def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[str, 
 
 
 def test_derived_launch_constructor_inventory_matches_promised_static_forms():
-    """Direct names, aliases/re-exports, and attribute calls remain covered."""
+    """Direct names, import/assignment aliases, and attributes remain covered."""
     source = """\
 from package import DaemonSupervisorRequest as Request
 import package as pkg
 
+ModuleRequest = DaemonSupervisorRequest
+
 def direct():
     DaemonSupervisorRequest()
     Request()
+    ModuleRequest()
+    local = DaemonSupervisorRequest
+    local()
 
 class Launcher:
     def by_attribute(self):
@@ -199,6 +227,8 @@ class Launcher:
     ) == {
         ("direct", "DaemonSupervisorRequest"),
         ("direct", "Request"),
+        ("direct", "ModuleRequest"),
+        ("direct", "local"),
         ("Launcher.by_attribute", "AvatarLaunchRequest"),
     }
 

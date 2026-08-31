@@ -14,6 +14,8 @@ related_files:
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
+  - src/lingtai/kernel/provider_admission.py
+  - docs/references/provider-admission.md
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -29,6 +31,7 @@ related_files:
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
   - tests/test_turn_permissions.py
+  - tests/test_provider_admission.py
   - src/lingtai/adapters/acp/BEHAVIORS.md
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
@@ -157,3 +160,31 @@ pending-cancel isolation assertion proves the turn ahead was untouched. Fail on
 a hanging/duplicate result, merged correlation, cancellation leaking to a later
 or earlier turn, failure represented as normal, or any hard provider-abort claim;
 record the evidence trail in the task report.
+
+## Behavior BA005 — every provider request is freshly admitted and a derived child cannot mint another child
+
+- **id**: BA005
+- **title**: every provider request is freshly admitted and a derived child cannot mint another child
+- **guards**: `agent-runtime.provider-admission.v1` in [CONTRACT.md](CONTRACT.md#contract-rules)
+- **supersedes**: `tests/test_provider_admission.py` (kept as bottom asserts)
+- **runner**: any LingTai coding agent with `shell` and `file` access to this repository
+- **prerequisites**: a clean checkout of `<repo>` and the project Python with pytest; no live provider credentials are required
+- **estimate**: ≈ 5 minutes
+
+### Steps
+
+1. From `<repo>`, run `python -m pytest -q tests/test_provider_admission.py`.
+2. Inspect the derived-admission tests: a `RootProviderAdmission` may create one typed daemon or avatar parent; attempting to create a child from that parent raises before provider I/O.
+3. Inspect the denied and indeterminate provider-call tests: they assert the recording provider has no calls; invoke two admitted calls and confirm the recording Port receives a fresh decision for each.
+4. Inspect the constructor-inventory sensitivity test. Confirm direct names, import aliases, package attributes, and module/function assignment aliases are recognized; review every inventory addition rather than treating the scan as a whole-program proof.
+
+### Expected evidence
+
+- [ ] The focused suite passes without a network provider call.
+- [ ] A nested daemon/avatar request cannot mint authority and no denied/indeterminate call reaches the recording provider.
+- [ ] Each actual provider request crosses the Port separately; a root grant is never reused as a derived-call grant.
+- [ ] The static inventory sees the documented direct forms, while dynamic factories, registry dispatch, and subclass/wrapper overrides remain explicit review blind spots.
+
+### Pass / Fail
+
+Pass when the focused suite proves fresh fail-closed admission and the one-hop limit, and the inventory sensitivity cases match the Contract. Fail if a child mints another child, an unavailable/denied call reaches provider I/O, a second call reuses an earlier decision, or an advertised static constructor form is invisible; record the evidence trail in the task report.
