@@ -264,7 +264,7 @@ def test_central_manager_refuses_mismatched_runtime_before_queue_write(tmp_path,
         lambda *_args, **_kwargs: pytest.fail("mismatched manager must not receive a capsule"),
     )
 
-    with pytest.raises(RuntimeError, match="runtime identity"):
+    with pytest.raises(RuntimeError, match="runtime identity.*daemon-manual"):
         daemon_manager.enqueue_manager_run(
             agent_working_dir=agent._working_dir,
             request=request,
@@ -297,7 +297,7 @@ def test_central_manager_refuses_mismatched_starting_identity(tmp_path, monkeypa
         lambda: _manager_runtime_identity("current-head"),
     )
 
-    with pytest.raises(RuntimeError, match="runtime identity"):
+    with pytest.raises(RuntimeError, match="runtime identity.*daemon-manual"):
         daemon_manager._ensure_manager(agent_working_dir, pool_size=1)
 
 
