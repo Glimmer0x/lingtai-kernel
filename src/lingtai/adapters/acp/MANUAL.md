@@ -149,7 +149,9 @@ authority adapter. The Driver supplies a connected Unix socket endpoint as a
 controlled inherited fd; the fd number is only a locator. The adapter marks it
 close-on-exec, uses a bounded v1 framed exchange, and maps a missing, wrong,
 closed, malformed, or timed-out endpoint to structured indeterminacy before
-spawn/provider I/O. An approved root launch receives a different one-use child
+spawn/provider I/O. A truncated ancillary response is also rejected; any file
+descriptor delivered before `MSG_CTRUNC` is closed before the failure returns.
+An approved root launch receives a different one-use child
 endpoint; Core carries its opaque lease, and only the precise POSIX spawn uses
 it in `pass_fds`. Do not set `LINGTAI_DRIVER_AUTHORITY_FD` manually: a marker
 only says a child requires authority and is never a grant. The Driver server

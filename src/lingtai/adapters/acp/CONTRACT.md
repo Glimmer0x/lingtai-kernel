@@ -246,7 +246,9 @@ argv, environment, or MCP command from the remote caller.
     socket endpoint, not a token, path, environment value, or audit id. A root
     endpoint is inherited only by the ACP host and becomes close-on-exec; an
     allowed one-hop launch receives a separate single-use child endpoint by
-    `SCM_RIGHTS`, consumed only by the exact POSIX `pass_fds` spawn. Core does
+    `SCM_RIGHTS`, consumed only by the exact POSIX `pass_fds` spawn. If the
+    kernel reports `MSG_CTRUNC`, the adapter closes every descriptor already
+    delivered with the ancillary data before failing closed. Core does
     not parse fd/frame/registry data. A derived endpoint is server-bound to
     `depth=1` and cannot mint another child. A persistent derived marker means
     authority is required, never granted: missing, closed, malformed, or

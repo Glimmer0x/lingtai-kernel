@@ -8,6 +8,7 @@ import socket
 import struct
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -67,6 +68,39 @@ def _server_thread(server: socket.socket, handler):
     thread = threading.Thread(target=run)
     thread.start()
     return thread, error
+
+
+def test_truncated_ancillary_data_closes_every_delivered_descriptor(monkeypatch):
+    """A kernel may install SCM_RIGHTS before reporting ``MSG_CTRUNC``."""
+    payload = b'{"version":1}'
+    frame = struct.pack("!I", len(payload)) + payload
+    delivered_fd = 731
+    fake_socket = SimpleNamespace(
+        recvmsg=lambda *_args: (
+            frame,
+            [
+                (
+                    socket.SOL_SOCKET,
+                    socket.SCM_RIGHTS,
+                    array.array("i", [delivered_fd]).tobytes(),
+                )
+            ],
+            socket.MSG_CTRUNC,
+            None,
+        )
+    )
+    adapter = object.__new__(DriverAuthorityAdapter)
+    adapter._socket = fake_socket
+    adapter._buffer = bytearray()
+    closed: list[int] = []
+    monkeypatch.setattr(os, "close", closed.append)
+
+    with pytest.raises(
+        DriverAuthorityTransportError, match="ancillary data was truncated"
+    ):
+        adapter._recv_frame()
+
+    assert closed == [delivered_fd]
 
 
 def test_root_driver_adapter_receives_one_child_endpoint_lease_and_consumes_once():

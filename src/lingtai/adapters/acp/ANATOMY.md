@@ -76,7 +76,8 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   equivalent ACL-backed adapter exists.
 - `driver_authority.py` — constrained POSIX Driver authority adapter. It owns
   bounded versioned Unix-socket framing, immediate close-on-exec handling of
-  the inherited endpoint, `SCM_RIGHTS` child-endpoint receipt, and opaque
+  the inherited endpoint, `SCM_RIGHTS` child-endpoint receipt (including closing
+  every locally delivered descriptor when ancillary data is truncated), and opaque
   single-use lease handling; Core receives typed Port decisions only. Socket
   loss, malformed frames, bad versions, and invalid descriptors become
   structured indeterminacy, never a default grant. This module is an ACP/Driver

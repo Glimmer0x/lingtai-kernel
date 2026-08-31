@@ -320,14 +320,17 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                     raise DriverAuthorityTransportError("authority response transport failed") from exc
                 if not data:
                     raise DriverAuthorityTransportError("authority peer closed")
-                if flags & socket.MSG_CTRUNC:
-                    raise DriverAuthorityTransportError("authority ancillary data was truncated")
                 for level, kind, raw in ancdata:
                     if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
                         items = array.array("i")
                         usable = len(raw) - (len(raw) % items.itemsize)
                         items.frombytes(raw[:usable])
                         received_fds.extend(items.tolist())
+                if flags & socket.MSG_CTRUNC:
+                    # Linux may install a descriptor even when its ancillary
+                    # payload is truncated. Collect it first so the outer
+                    # fail-closed cleanup cannot leak it into this process.
+                    raise DriverAuthorityTransportError("authority ancillary data was truncated")
                 self._buffer.extend(data)
             value = bytes(self._buffer[:count])
             del self._buffer[:count]
