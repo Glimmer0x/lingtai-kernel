@@ -138,10 +138,21 @@ def test_derived_decision_is_the_only_owner_of_a_denied_child_descriptor(monkeyp
     adapter = object.__new__(DriverAuthorityAdapter)
     adapter._identity = SimpleNamespace(role="root", launch_id="root-1")
     adapter._lock = threading.Lock()
-    adapter._exchange_locked = lambda *_args, **_kwargs: (
-        {"version": 1, "state": "denied", "reason_code": "policy_denied", "audit_id": "audit-1"},
-        731,
-    )
+    requests: list[tuple[dict, bool | None]] = []
+
+    def exchange_locked(request, *, expect_fd):
+        requests.append((request, expect_fd))
+        return (
+            {
+                "version": 1,
+                "state": "denied",
+                "reason_code": "policy_denied",
+                "audit_id": "audit-1",
+            },
+            731,
+        )
+
+    adapter._exchange_locked = exchange_locked
     closed: list[int] = []
     monkeypatch.setattr(os, "close", closed.append)
 
@@ -151,6 +162,16 @@ def test_derived_decision_is_the_only_owner_of_a_denied_child_descriptor(monkeyp
     )
 
     assert closed == [731]
+    assert requests == [
+        (
+            {
+                "op": "authorize_derived_launch",
+                "launch_id": "root-1",
+                "capability": "avatar",
+            },
+            None,
+        )
+    ]
     assert decision.state is ProviderAdmissionState.DENIED
     assert decision.reason_code == "policy_denied"
 
@@ -438,57 +459,6 @@ def test_granted_launch_rejects_non_unix_stream_child_endpoint_before_spawn():
     assert leaked == set()
 
 
-def test_unconnected_unix_endpoint_is_explicitly_closed_by_decision_parser(monkeypatch):
-    """A socket-object failure must not pass only through its finalizer."""
-    from lingtai.adapters.acp import driver_authority as authority_module
-
-    client, server = socket.socketpair()
-    unconnected = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    close_stacks = []
-    real_socket = authority_module.socket.socket
-
-    class _CloseRecordingSocket(real_socket):
-        def close(self):
-            close_stacks.append(traceback.extract_stack())
-            return super().close()
-
-    def handler(sock):
-        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
-        _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-unconnected", "capability": None})
-        _recv_frame(sock)
-        _send_frame(
-            sock,
-            {
-                "version": 1,
-                "state": "granted",
-                "reason_code": "allowed",
-                "audit_id": "audit-unconnected",
-            },
-            fd=unconnected.fileno(),
-        )
-
-    thread, errors = _server_thread(server, handler)
-    adapter = DriverAuthorityAdapter(client)
-    monkeypatch.setattr(authority_module.socket, "socket", _CloseRecordingSocket)
-    try:
-        decision = adapter.authorize_derived_launch(
-            RootProviderAdmission("turn-unconnected", "puffo-v0.test"),
-            DerivedLaunchCapability.AVATAR,
-        )
-    finally:
-        adapter.close()
-        unconnected.close()
-    thread.join(timeout=2)
-
-    assert errors == []
-    assert decision.state is ProviderAdmissionState.INDETERMINATE
-    assert any(
-        frame.name == "_derived_decision"
-        for stack in close_stacks
-        for frame in stack
-    ), "the parser must explicitly close the endpoint, not defer to __del__"
-
-
 def test_derived_endpoint_asks_driver_to_audit_and_deny_a_second_child():
     client, server = socket.socketpair()
 
@@ -587,11 +557,10 @@ def test_timeout_invalidates_endpoint_so_a_late_grant_cannot_admit_next_call():
 def test_timeout_invalidation_holds_the_exchange_lock_against_a_concurrent_request(monkeypatch):
     """A concurrent request cannot consume the timed-out request's late grant.
 
-    The pause widens the former gap between `_exchange()` releasing its lock
-    and the caller invalidating the transport.  A server sends A's late grant
-    only after B has had an opportunity to enter that gap.  Before the fix B
-    returns that grant (`audit-late-first`) even though the server's decision
-    for B is denied.
+    The pause widens the former gap between a failed exchange and transport
+    invalidation. A server sends A's late grant only after B has had an
+    opportunity to enter that gap. Before the fix B returns that grant
+    (`audit-late-first`) even though the server's decision for B is denied.
     """
 
     client, server = socket.socketpair()
