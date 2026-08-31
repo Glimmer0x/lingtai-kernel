@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import struct
@@ -162,7 +163,8 @@ async def send_message(
 ) -> dict[str, int]:
     """Submit one recipient-visible request and return a safe provider ack.
 
-    Success requires an explicit non-boolean integer ``ret == 0``.  This is
+    Success accepts a missing/null ``ret`` or an explicit non-boolean integer
+    ``ret == 0`` only when ``errcode`` is absent or an integer zero. This is
     provider acceptance only; it does not confirm recipient delivery.
     """
     url = _ensure_trailing_slash(base_url) + "ilink/bot/sendmessage"
@@ -185,8 +187,54 @@ def _ack_code(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+# Only fixed diagnostic field names can enter telemetry. Arbitrary provider
+# keys and opaque values are never copied, traversed, or serialized.
+_SAFE_ACK_DIAGNOSTIC_KEYS = ("ret", "errcode")
+
+
+def _safe_ack_diagnostic(value: object) -> object:
+    """Return bounded metadata for one fixed acknowledgement diagnostic."""
+    if value is None or _ack_code(value):
+        return value
+    if isinstance(value, str):
+        return f"<str:{len(value)}>"
+    return f"<{type(value).__name__}>"
+
+
+def _safe_ack_shape(body: dict[str, Any]) -> dict[str, Any]:
+    """Return a bounded, secret-safe description of an acknowledgement body."""
+    shape: dict[str, Any] = {
+        "field_count": len(body),
+        "has_ret": "ret" in body,
+        "has_errcode": "errcode" in body,
+    }
+    for key in _SAFE_ACK_DIAGNOSTIC_KEYS:
+        if key in body:
+            shape[key] = _safe_ack_diagnostic(body[key])
+    return shape
+
+
+def _log_ack_warning(message: str, body: dict[str, Any]) -> None:
+    """Log one bounded acknowledgement warning only when it will be emitted."""
+    if not log.isEnabledFor(logging.WARNING):
+        return
+    log.warning(
+        "%s response_shape=%s",
+        message,
+        json.dumps(_safe_ack_shape(body), ensure_ascii=False, separators=(",", ":")),
+    )
+
+
 def _parse_send_acknowledgement(resp: "httpx.Response") -> dict[str, int]:
-    """Require a strict JSON-object acknowledgement with explicit ``ret=0``."""
+    """Parse iLink sendmessage acknowledgement.
+
+    Mirrors the official OpenClaw/Tencent client: a missing or null ``ret``
+    field is treated as provider acceptance (the protocol declares it
+    optional). Any non-zero integer or non-integer ``ret`` is still a failure.
+    A nonzero or non-integer ``errcode`` is also a failure, even when ``ret``
+    is missing or null.  Only secret-safe structural telemetry is logged when
+    the acknowledgement deviates from the explicit ``{"ret": 0}`` shape.
+    """
     if not resp.text.strip():
         raise RuntimeError("iLink send_message returned an empty response")
     try:
@@ -197,21 +245,48 @@ def _parse_send_acknowledgement(resp: "httpx.Response") -> dict[str, int]:
         raise RuntimeError("iLink send_message returned non-object JSON")
 
     ret = body.get("ret")
-    if not _ack_code(ret) or ret != 0:
-        detail = ret if _ack_code(ret) else "<missing-or-invalid>"
-        raise RuntimeError(
-            f"iLink send_message returned invalid acknowledgement: ret={detail}"
-        )
 
-    ack = {"ret": 0}
+    # Validate errcode first and independent of ret so that a missing or null
+    # ret never bypasses an explicit nonzero/invalid errcode.
     if "errcode" in body:
         errcode = body.get("errcode")
         if not _ack_code(errcode) or errcode != 0:
             detail = errcode if _ack_code(errcode) else "<invalid>"
+            _log_ack_warning(
+                "iLink send_message returned non-zero/invalid errcode;", body
+            )
             raise RuntimeError(
                 "iLink send_message returned invalid acknowledgement: "
                 f"errcode={detail}"
             )
+
+    if ret is None:
+        _log_ack_warning(
+            "iLink send_message returned missing/null ret; treating as provider "
+            "acceptance per official protocol.",
+            body,
+        )
+        return {"ret": 0}
+
+    if not _ack_code(ret):
+        _log_ack_warning(
+            "iLink send_message returned invalid ret type;", body
+        )
+        raise RuntimeError(
+            "iLink send_message returned invalid acknowledgement: "
+            f"ret=<invalid {type(ret).__name__}>"
+        )
+
+    if ret != 0:
+        _log_ack_warning(
+            "iLink send_message returned non-zero ret;", body
+        )
+        raise RuntimeError(
+            f"iLink send_message returned invalid acknowledgement: ret={ret}"
+        )
+
+    ack: dict[str, int] = {"ret": 0}
+    if "errcode" in body:
         ack["errcode"] = 0
     return ack
 

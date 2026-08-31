@@ -57,11 +57,49 @@ def test_send_message_uses_tencent_246_identity_and_safe_acceptance(monkeypatch)
     assert ack == {"ret": 0, "errcode": 0}
 
 
-@pytest.mark.parametrize("body", [
-    {}, {"ret": None}, {"errcode": 0}, {"ret": "0"}, {"ret": True},
-    {"ret": 17}, {"ret": 0, "errcode": 9},
+@pytest.mark.parametrize("body, expected", [
+    ({"ret": 0}, {"ret": 0}),
+    ({"ret": 0, "errcode": 0}, {"ret": 0, "errcode": 0}),
+    ({"ret": 0, "errcode": 0, "errmsg": "ok"}, {"ret": 0, "errcode": 0}),
 ])
-def test_send_ack_requires_explicit_integer_zero_ret(body: dict) -> None:
+def test_send_ack_explicit_zero_ret_accepted(body: dict, expected: dict) -> None:
+    response = _send_response(json.dumps(body).encode("utf-8"))
+    assert api._parse_send_acknowledgement(response) == expected
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"ret": None}, {"errcode": 0}, {"ret": None, "errcode": 0},
+])
+def test_send_ack_missing_or_null_ret_accepted(body: dict) -> None:
+    """Missing/null ret is provider acceptance per the official client."""
+    response = _send_response(json.dumps(body).encode("utf-8"))
+    assert api._parse_send_acknowledgement(response) == {"ret": 0}
+
+
+@pytest.mark.parametrize("body", [
+    {"ret": "0"}, {"ret": True}, {"ret": 0.0}, {"ret": []},
+    {"ret": 17}, {"ret": -3},
+    {"ret": 17, "errcode": 0},
+    {"ret": 0.0, "errcode": 0},
+    {"ret": False, "errcode": 0},
+])
+def test_send_ack_invalid_ret_rejected(body: dict) -> None:
+    response = _send_response(json.dumps(body).encode("utf-8"))
+    with pytest.raises(RuntimeError, match="invalid acknowledgement"):
+        api._parse_send_acknowledgement(response)
+
+
+@pytest.mark.parametrize("body", [
+    {"errcode": 9},
+    {"ret": None, "errcode": 9},
+    {"ret": None, "errcode": "9"},
+    {"ret": None, "errcode": True},
+    {"ret": None, "errcode": None},
+    {"ret": None, "errcode": 0.0},
+    {"ret": 0, "errcode": 9},
+])
+def test_send_ack_nonzero_or_invalid_errcode_rejected(body: dict) -> None:
+    """A nonzero/invalid errcode fails even when ret is missing or null."""
     response = _send_response(json.dumps(body).encode("utf-8"))
     with pytest.raises(RuntimeError, match="invalid acknowledgement"):
         api._parse_send_acknowledgement(response)
@@ -71,6 +109,85 @@ def test_send_ack_requires_explicit_integer_zero_ret(body: dict) -> None:
 def test_send_ack_rejects_empty_malformed_or_nonobject(content: bytes) -> None:
     with pytest.raises(RuntimeError):
         api._parse_send_acknowledgement(_send_response(content))
+
+
+def test_send_ack_logs_structural_telemetry_not_raw_body(caplog) -> None:
+    """Warnings contain bounded shape telemetry, never the raw response body."""
+    import logging
+    body = {"ret": None, "errmsg": "something", "private": "secret-value-xyz"}
+    with caplog.at_level(logging.WARNING):
+        api._parse_send_acknowledgement(
+            _send_response(json.dumps(body).encode("utf-8"))
+        )
+    assert "missing/null ret" in caplog.text
+    assert "response_shape=" in caplog.text
+    assert "secret-value-xyz" not in caplog.text
+    assert "something" not in caplog.text
+    assert '"field_count":3' in caplog.text
+    assert '"has_ret":true' in caplog.text
+    assert '"has_errcode":false' in caplog.text
+    assert '"ret":null' in caplog.text
+
+
+def test_send_ack_shape_omits_keys_values_and_nested_topology(caplog) -> None:
+    """Arbitrary key strings and nested payloads cannot leak or amplify logs."""
+    import logging
+    secret_key = "https://provider.invalid/callback?token=secret-in-key"
+    body = {
+        "ret": None,
+        secret_key: [{"nested-secret-key": "nested-secret-value"}] * 1000,
+        "password_is_correct": True,
+    }
+    with caplog.at_level(logging.WARNING):
+        api._parse_send_acknowledgement(
+            _send_response(json.dumps(body).encode("utf-8"))
+        )
+    assert "response_shape=" in caplog.text
+    assert secret_key not in caplog.text
+    assert "nested-secret-key" not in caplog.text
+    assert "nested-secret-value" not in caplog.text
+    assert '"password_is_correct":true' not in caplog.text
+    assert '"field_count":3' in caplog.text
+    assert len(caplog.text) < 1000
+
+
+def test_safe_ack_shape_does_not_traverse_deep_unknown_fields() -> None:
+    nested: object = "leaf-secret"
+    for _ in range(2000):
+        nested = {"secret-key": nested}
+    assert api._safe_ack_shape({"ret": None, "opaque": nested}) == {
+        "field_count": 2,
+        "has_ret": True,
+        "has_errcode": False,
+        "ret": None,
+    }
+
+
+def test_send_ack_skips_shape_when_warning_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(api.log, "isEnabledFor", lambda level: False)
+    monkeypatch.setattr(
+        api,
+        "_safe_ack_shape",
+        lambda body: pytest.fail("shape must not be built when warning is disabled"),
+    )
+    response = _send_response(b'{"ret":null,"opaque":{"secret":"value"}}')
+    assert api._parse_send_acknowledgement(response) == {"ret": 0}
+
+
+@pytest.mark.parametrize(("body", "secret"), [
+    ({"ret": "ret-secret-value"}, "ret-secret-value"),
+    ({"ret": None, "errcode": "errcode-secret-value"}, "errcode-secret-value"),
+])
+def test_send_ack_invalid_diagnostic_values_redacted(caplog, body, secret) -> None:
+    """Even malformed ret/errcode values are reduced to structural telemetry."""
+    import logging
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(RuntimeError, match="invalid acknowledgement"):
+            api._parse_send_acknowledgement(
+                _send_response(json.dumps(body).encode("utf-8"))
+            )
+    assert secret not in caplog.text
+    assert "<str:" in caplog.text
 
 
 def test_public_send_result_is_acceptance_not_delivery(monkeypatch, tmp_path: Path) -> None:

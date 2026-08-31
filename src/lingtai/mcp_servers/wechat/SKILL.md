@@ -7,8 +7,8 @@ description: |
   contacts/accounts basics, read-only settings inventory and owner procedures,
   and external-delivery side-effect caveats. Pulled on demand via action='manual';
   you do not need to call it before every send.
-version: 1.4.0
-last_changed_at: "2026-08-29T00:00:00-07:00"
+version: 1.4.1
+last_changed_at: "2026-08-31T00:00:00-07:00"
 related_files:
 - src/lingtai/mcp_servers/wechat/manager.py
 - src/lingtai/mcp_servers/wechat/server.py
@@ -222,10 +222,12 @@ recipient IDs passed to messaging actions.
 
 - `send` and `reply` deliver to real users — external side effects. Confirm
   recipient and content before sending unsolicited messages.
-- A successful provider response requires an explicit integer `ret: 0`. The
-  result then says `delivery_status: provider_accepted` and
-  `delivery_confirmed: false`: iLink accepted the request, but recipient delivery
-  is not proven. Do not automatically replay an accepted request.
+- A provider response is accepted when `ret` is missing/null or an explicit
+  integer zero, provided `errcode` is absent or an integer zero. Explicit
+  nonzero/noninteger `ret` or `errcode` remains a failure. An accepted result
+  says `delivery_status: provider_accepted` and `delivery_confirmed: false`:
+  iLink accepted the request, but recipient delivery is not proven. Do not
+  automatically replay an accepted request.
 - For text-plus-media partial outcomes, legacy `partial_delivery: true` is only a
   replay-compatibility flag that a recipient-visible side effect may have occurred;
   `partial_provider_acceptance` and `delivery_confirmed: false` carry the precise
