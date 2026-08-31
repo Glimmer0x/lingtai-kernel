@@ -14,6 +14,8 @@ from typing import Any, Iterator
 
 from lingtai.kernel.turns import TurnAdmissionDecision, TurnOrigin
 from lingtai.kernel.provider_admission import (
+    DerivedLaunchCapability,
+    DerivedLaunchDecision,
     ProviderAdmissionParent,
     ProviderAdmissionState,
     ProviderCallClass,
@@ -79,6 +81,18 @@ class PuffoV0RuntimePolicy:
                 if allowed
                 else "derived_admission_port_unconnected"
             ),
+        )
+
+    def authorize_derived_launch(
+        self,
+        _parent: RootProviderAdmission,
+        _capability: DerivedLaunchCapability,
+    ) -> DerivedLaunchDecision:
+        """Refuse launch until the Driver-owned authority transport is wired."""
+
+        return DerivedLaunchDecision(
+            ProviderAdmissionState.INDETERMINATE,
+            "derived_launch_admission_port_unconnected",
         )
 
 

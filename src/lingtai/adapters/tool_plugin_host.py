@@ -477,17 +477,24 @@ class AgentAvatarParentAdapter:
     value is read through its one narrow closure when Avatar asks for it.
     """
 
-    __slots__ = ("_parent_name", "_venv_path", "_has_rule_privilege")
+    __slots__ = (
+        "_parent_name",
+        "_venv_path",
+        "_has_rule_privilege",
+        "_authorize_derived_launch",
+    )
 
     def __init__(
         self,
         parent_name: Callable[[], str],
         venv_path: Callable[[], str | None],
         has_rule_privilege: Callable[[], bool],
+        authorize_derived_launch: Callable[[Any], Any],
     ) -> None:
         self._parent_name = parent_name
         self._venv_path = venv_path
         self._has_rule_privilege = has_rule_privilege
+        self._authorize_derived_launch = authorize_derived_launch
 
     @property
     def parent_name(self) -> str:
@@ -499,6 +506,9 @@ class AgentAvatarParentAdapter:
 
     def has_rule_privilege(self) -> bool:
         return self._has_rule_privilege()
+
+    def authorize_derived_launch(self, capability: Any) -> Any:
+        return self._authorize_derived_launch(capability)
 
 
 
@@ -662,6 +672,7 @@ class AgentDaemonRuntimeAdapter:
         "_read_language",
         "_read_max_aed_attempts",
         "_read_tool_call_guard",
+        "_authorize_derived_launch",
         "_manager_options",
         "_setup_preset_capability",
         "_read_preset",
@@ -683,6 +694,7 @@ class AgentDaemonRuntimeAdapter:
         read_language: Callable[[], str],
         read_max_aed_attempts: Callable[[], int],
         read_tool_call_guard: Callable[[], Any],
+        authorize_derived_launch: Callable[[Any], Any],
         manager_options: Mapping[str, Any],
         setup_preset_capability: Callable[[str, Mapping[str, Any]], tuple[dict[str, Any], dict[str, Callable[[dict], dict]]]],
         read_preset: Callable[[], Mapping[str, Any]],
@@ -699,6 +711,7 @@ class AgentDaemonRuntimeAdapter:
         self._read_language = read_language
         self._read_max_aed_attempts = read_max_aed_attempts
         self._read_tool_call_guard = read_tool_call_guard
+        self._authorize_derived_launch = authorize_derived_launch
         self._manager_options = dict(manager_options)
         self._setup_preset_capability = setup_preset_capability
         self._read_preset = read_preset
@@ -736,6 +749,9 @@ class AgentDaemonRuntimeAdapter:
     @property
     def tool_call_guard(self) -> Any:
         return self._read_tool_call_guard()
+
+    def authorize_derived_launch(self, capability: Any) -> Any:
+        return self._authorize_derived_launch(capability)
 
     @property
     def manager_options(self) -> Mapping[str, Any]:
@@ -831,6 +847,17 @@ def daemon_runtime_for_agent(
         except Exception:
             return False
 
+    def _authorize_derived_launch(capability: Any) -> Any:
+        from lingtai.kernel.provider_admission import require_derived_launch_admission
+
+        return require_derived_launch_admission(
+            getattr(agent, "_derived_launch_admission_port", None),
+            capability,
+            required=bool(
+                getattr(agent, "_requires_derived_launch_admission_port", False)
+            ),
+        )
+
     def _log(event_type: str, **fields: Any) -> None:
         log = getattr(agent, "_log", None)
         if callable(log):
@@ -884,6 +911,7 @@ def daemon_runtime_for_agent(
         read_language=_read_language,
         read_max_aed_attempts=_read_max_aed_attempts,
         read_tool_call_guard=lambda: getattr(agent, "_tool_call_guard", None),
+        authorize_derived_launch=_authorize_derived_launch,
         manager_options=manager_options,
         setup_preset_capability=_setup_preset_capability,
         read_preset=_read_preset,
@@ -1561,6 +1589,17 @@ def agent_host_ports(
     composition value arrives through ``extra_ports`` from ``web.setup`` alone.
     The registrar grants just ``requires``, never this whole map.
     """
+    def _authorize_derived_launch(capability: Any) -> Any:
+        from lingtai.kernel.provider_admission import require_derived_launch_admission
+
+        return require_derived_launch_admission(
+            getattr(agent, "_derived_launch_admission_port", None),
+            capability,
+            required=bool(
+                getattr(agent, "_requires_derived_launch_admission_port", False)
+            ),
+        )
+
     ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}
     # Construct only the declaration's earned standard adapter. Lightweight Core
     # test agents need not implement MCP or Avatar APIs when Notification is being
@@ -1574,6 +1613,7 @@ def agent_host_ports(
             lambda: agent.agent_name or agent.working_dir.name,
             lambda: getattr(agent, "_venv_path", None),
             lambda: any((getattr(agent, "_admin", {}) or {}).values()),
+            _authorize_derived_launch,
         )
     elif plugin_name == "plugin":
         ports["plugin_catalog"] = AgentPluginCatalogAdapter(

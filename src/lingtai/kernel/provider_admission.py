@@ -22,6 +22,13 @@ class ProviderCallClass(str, Enum):
     AVATAR_CHILD = "avatar_child"
 
 
+class DerivedLaunchCapability(str, Enum):
+    """One production tool route that can create a derived execution."""
+
+    DAEMON = "daemon"
+    AVATAR = "avatar"
+
+
 class ProviderAdmissionState(str, Enum):
     """The driver-visible result of deciding one provider-call admission.
 
@@ -128,6 +135,23 @@ class ProviderCallDecision:
         return self.state is ProviderAdmissionState.GRANTED
 
 
+@dataclass(frozen=True, slots=True)
+class DerivedLaunchDecision:
+    """A Driver-owned decision before a daemon/avatar process can launch.
+
+    ``audit_id`` is correlation material only.  It is never a grant or a
+    substitute for the Core-private admission parent passed to the Port.
+    """
+
+    state: ProviderAdmissionState
+    reason_code: str
+    audit_id: str | None = None
+
+    @property
+    def allowed(self) -> bool:
+        return self.state is ProviderAdmissionState.GRANTED
+
+
 class ProviderCallAdmissionPort(Protocol):
     """Driver-facing Core port, invoked once per actual provider call.
 
@@ -145,6 +169,21 @@ class ProviderCallAdmissionPort(Protocol):
     ) -> ProviderCallDecision: ...
 
 
+class DerivedLaunchAdmissionPort(Protocol):
+    """Driver-facing decision port for one daemon/avatar launch request.
+
+    The root parent is a Core-private object rather than a path, registry ref,
+    correlation id, or user-provided depth.  A future Driver bridge resolves
+    all durable identity/lineage facts itself before returning a decision.
+    """
+
+    def authorize_derived_launch(
+        self,
+        parent: RootProviderAdmission,
+        capability: DerivedLaunchCapability,
+    ) -> DerivedLaunchDecision: ...
+
+
 class ProviderAdmissionError(PermissionError):
     """Raised before a provider request when admission is absent or denied."""
 
@@ -156,6 +195,14 @@ class ProviderAdmissionError(PermissionError):
         self.reason_code = reason_code
         self.state = state
         super().__init__(f"provider call was not admitted: {reason_code}")
+
+
+class DerivedLaunchAdmissionError(PermissionError):
+    """Raised before a derived process launch when authority is unavailable."""
+
+    def __init__(self, decision: DerivedLaunchDecision):
+        self.decision = decision
+        super().__init__(f"derived launch was not admitted: {decision.reason_code}")
 
 
 _current_parent: ContextVar[ProviderAdmissionParent | None] = ContextVar(
@@ -202,6 +249,68 @@ def current_provider_call_class() -> ProviderCallClass:
     if isinstance(parent, DerivedProviderAdmission):
         return parent.call_class
     return ProviderCallClass.ROOT
+
+
+def require_derived_launch_admission(
+    port: DerivedLaunchAdmissionPort | None,
+    capability: DerivedLaunchCapability,
+    *,
+    required: bool = False,
+) -> DerivedLaunchDecision:
+    """Decide one daemon/avatar launch before it can create process state.
+
+    Generic LingTai compositions retain their historical behavior when no
+    derived-launch port is configured.  A constrained profile supplies a port;
+    missing root authority, malformed/raising ports, and all non-grants then
+    fail closed with a structured domain error before launch side effects.
+    """
+
+    if not isinstance(capability, DerivedLaunchCapability):
+        raise TypeError("derived launch capability must be typed")
+    if port is None:
+        if required:
+            raise DerivedLaunchAdmissionError(
+                DerivedLaunchDecision(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "required_derived_launch_admission_port_missing",
+                )
+            )
+        return DerivedLaunchDecision(ProviderAdmissionState.GRANTED, "legacy_default")
+
+    parent = current_provider_admission()
+    if not isinstance(parent, RootProviderAdmission):
+        reason = (
+            "nested_derived_launch_denied"
+            if isinstance(parent, DerivedProviderAdmission)
+            else "missing_root_provider_admission"
+        )
+        raise DerivedLaunchAdmissionError(
+            DerivedLaunchDecision(ProviderAdmissionState.DENIED, reason)
+        )
+    try:
+        decision = port.authorize_derived_launch(parent, capability)
+    except Exception:
+        decision = DerivedLaunchDecision(
+            ProviderAdmissionState.INDETERMINATE,
+            "derived_launch_admission_port_error",
+        )
+    if (
+        not isinstance(decision, DerivedLaunchDecision)
+        or not isinstance(decision.state, ProviderAdmissionState)
+        or not isinstance(decision.reason_code, str)
+        or not decision.reason_code
+        or (
+            decision.audit_id is not None
+            and (not isinstance(decision.audit_id, str) or not decision.audit_id)
+        )
+    ):
+        decision = DerivedLaunchDecision(
+            ProviderAdmissionState.INDETERMINATE,
+            "malformed_derived_launch_admission_decision",
+        )
+    if not decision.allowed:
+        raise DerivedLaunchAdmissionError(decision)
+    return decision
 
 
 def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
@@ -325,6 +434,10 @@ __all__ = [
     "DerivedProviderAdmission",
     "ProviderAdmittedChatSession",
     "ProviderAdmittedLLMService",
+    "DerivedLaunchAdmissionError",
+    "DerivedLaunchAdmissionPort",
+    "DerivedLaunchCapability",
+    "DerivedLaunchDecision",
     "ProviderAdmissionError",
     "ProviderAdmissionParent",
     "ProviderAdmissionState",
@@ -337,5 +450,6 @@ __all__ = [
     "clear_provider_admission",
     "clear_current_provider_admission",
     "current_provider_admission",
+    "require_derived_launch_admission",
     "require_provider_admission",
 ]

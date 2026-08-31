@@ -143,6 +143,8 @@ def build_agent(
     _turn_origin_policy=None,
     _requires_turn_origin_policy: bool = False,
     _provider_call_admission_port=None,
+    _derived_launch_admission_port=None,
+    _requires_derived_launch_admission_port: bool = False,
 ) -> Agent:
     """Construct Agent from validated init data.
 
@@ -198,7 +200,11 @@ def build_agent(
         _forced_disable=_forced_disable,
         _turn_origin_policy=_turn_origin_policy,
         _requires_turn_origin_policy=_requires_turn_origin_policy,
+        _requires_derived_launch_admission_port=(
+            _requires_derived_launch_admission_port
+        ),
         provider_call_admission_port=_provider_call_admission_port,
+        derived_launch_admission_port=_derived_launch_admission_port,
         _from_init_boot=True,
     )
 

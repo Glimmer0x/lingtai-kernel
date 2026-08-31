@@ -68,6 +68,8 @@ def run_acp(
     turn_origin_policy=None,
     requires_turn_origin_policy: bool = False,
     provider_call_admission_port=None,
+    derived_launch_admission_port=None,
+    requires_derived_launch_admission_port: bool = False,
     puffo_runtime=None,
 ) -> None:
     """Compose one Agent and the local ACP stdio driving adapter.
@@ -81,6 +83,10 @@ def run_acp(
     wire_out = output_stream if output_stream is not None else sys.stdout
     if requires_turn_origin_policy and turn_origin_policy is None:
         raise ValueError("constrained ACP composition requires a turn-origin policy")
+    if requires_derived_launch_admission_port and derived_launch_admission_port is None:
+        raise ValueError(
+            "constrained ACP composition requires a derived-launch admission port"
+        )
     if input_stream is None:
         reconfigure_in = getattr(wire_in, "reconfigure", None)
         if callable(reconfigure_in):
@@ -145,6 +151,10 @@ def run_acp(
             build_options["_requires_turn_origin_policy"] = True
         if provider_call_admission_port is not None:
             build_options["_provider_call_admission_port"] = provider_call_admission_port
+        if derived_launch_admission_port is not None:
+            build_options["_derived_launch_admission_port"] = derived_launch_admission_port
+        if requires_derived_launch_admission_port:
+            build_options["_requires_derived_launch_admission_port"] = True
         agent = build_agent(data, agent_dir, **build_options)
         agent._venv_path = str(venv_dir)
         agent.start()
@@ -232,6 +242,8 @@ def handle_acp_command(args) -> None:
         turn_origin_policy=RUNTIME_POLICY,
         requires_turn_origin_policy=True,
         provider_call_admission_port=RUNTIME_POLICY,
+        derived_launch_admission_port=RUNTIME_POLICY,
+        requires_derived_launch_admission_port=True,
     )
 
 

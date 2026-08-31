@@ -3479,12 +3479,13 @@ class DaemonManager:
         secret_capsule: dict | None = None,
         use_central_manager: bool = False,
     ) -> None:
-        """Write the run manifest and spawn the detached supervisor for it.
+        """Write the run manifest and spawn an already-authorized detached run.
 
-        Raises on any failure (unwritable manifest, spawn error, or a startup
-        handshake timeout) so the caller can mark the run failed and refuse
-        the batch entry cleanly — never claims a detached run started when it
-        did not.
+        The caller must authorize the derived launch before committing it to
+        the canonical dispatch ledger. Raises on any post-admission failure
+        (unwritable manifest, spawn error, or a startup handshake timeout) so
+        the caller can mark the run failed cleanly — never claims a detached
+        run started when it did not.
         """
         from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
         from lingtai.kernel.daemon_supervisor.manifest import build_manifest, write_manifest
@@ -5535,6 +5536,7 @@ class DaemonManager:
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
             try:
+                self._authorize_derived_launch("daemon")
                 self._commit_dispatch(run_dir)
                 self._spawn_detached_lingtai_run(
                     run_dir,
@@ -5554,7 +5556,13 @@ class DaemonManager:
                 )
             except Exception as e:
                 run_dir.mark_failed(e)
-                return {"status": "error", "message": str(e)}
+                result = {"status": "error", "message": str(e)}
+                from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
+
+                if isinstance(e, DerivedLaunchAdmissionError):
+                    result["reason_code"] = e.decision.reason_code
+                    result["audit_id"] = e.decision.audit_id
+                return result
             self._emanations[em_id] = {
                 "detached": True,
                 "task": spec["task"],
@@ -5857,6 +5865,7 @@ class DaemonManager:
             # boundary.  The parent writes a complete, redacted manifest and
             # retains only the durable run-dir facade.
             try:
+                self._authorize_derived_launch("daemon")
                 self._commit_dispatch(run_dir)
                 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
                 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
@@ -9509,6 +9518,36 @@ class DaemonManager:
     def _log(self, event_type: str, **fields) -> None:
         """Log through Daemon's narrow parent-runtime port."""
         self._runtime.log(event_type, **fields)
+
+    def _authorize_derived_launch(self, capability_name: str) -> None:
+        """Reach the host decision seam before a daemon launch side effect."""
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchAdmissionError,
+            DerivedLaunchCapability,
+        )
+
+        capability = DerivedLaunchCapability(capability_name)
+        try:
+            decision = self._runtime.authorize_derived_launch(capability)
+        except DerivedLaunchAdmissionError as exc:
+            decision = exc.decision
+            self._log(
+                "derived_launch_admission_decision",
+                capability=capability.value,
+                state=decision.state.value,
+                reason_code=decision.reason_code,
+                audit_id=decision.audit_id,
+            )
+            raise
+        self._log(
+            "derived_launch_admission_decision",
+            capability=capability.value,
+            state=decision.state.value,
+            reason_code=decision.reason_code,
+            audit_id=decision.audit_id,
+        )
+        if not decision.allowed:
+            raise DerivedLaunchAdmissionError(decision)
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s

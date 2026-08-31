@@ -165,13 +165,152 @@ class TestAvatarManager:
         """Ledger should record the spawn event with name + boot_status."""
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
-                            capabilities=["avatar"])
+                        capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
         mgr.handle({"action": "spawn", "input": {"name": "clone", "confirm": True}})
         ledger = (parent._working_dir / "delegates" / "ledger.jsonl").read_text().strip()
-        record = json.loads(ledger)
+        records = [json.loads(line) for line in ledger.splitlines()]
+        assert records[0]["event"] == "avatar_admission_decision"
+        assert records[0]["reason_code"] == "legacy_default"
+        record = records[-1]
         assert record["name"] == "clone"
         assert record["boot_status"] == "ok"
+
+    def test_profile_avatar_launch_reaches_structured_admission_before_spawn(
+        self, tmp_path, monkeypatch
+    ):
+        """The real AvatarManager/Agent adapter path reaches the 2a seam."""
+        from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchCapability,
+            DerivedLaunchDecision,
+            ProviderAdmissionState,
+            RootProviderAdmission,
+            bind_provider_admission,
+            clear_provider_admission,
+        )
+        from lingtai.agent import Agent
+
+        class _DenyingPort:
+            def __init__(self):
+                self.calls = []
+
+            def authorize_derived_launch(self, parent, capability):
+                self.calls.append((parent, capability))
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.DENIED,
+                    "derived_launch_denied_by_test",
+                    audit_id="audit-avatar-2a",
+                )
+
+        parent = Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=tmp_path / "parent",
+            capabilities=["avatar"],
+            _turn_origin_policy=RUNTIME_POLICY,
+            derived_launch_admission_port=_DenyingPort(),
+        )
+        port = parent._derived_launch_admission_port
+        root = RootProviderAdmission("root-avatar-2a", RUNTIME_POLICY.policy_version)
+        token = bind_provider_admission(root)
+        try:
+            result = parent.get_capability("avatar").handle(
+                {"action": "spawn", "input": {"name": "child", "confirm": True}}
+            )
+        finally:
+            clear_provider_admission(token)
+
+        assert "derived_launch_denied_by_test" in result["error"]
+        assert port.calls == [(root, DerivedLaunchCapability.AVATAR)]
+        assert not (parent._working_dir.parent / "child").exists()
+        records = [
+            json.loads(line)
+            for line in (parent._working_dir / "delegates" / "ledger.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert records == [
+            {
+                "ts": records[0]["ts"],
+                "event": "avatar_admission_decision",
+                "name": "child",
+                "capability": "avatar",
+                "state": "denied",
+                "reason_code": "derived_launch_denied_by_test",
+                "audit_id": "audit-avatar-2a",
+            }
+        ]
+
+    def test_profile_avatar_grant_reaches_the_same_launch_recorder(
+        self, tmp_path, monkeypatch
+    ):
+        """The zero-avatar-spawn assertion has a same-recorder positive control."""
+        from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchCapability,
+            DerivedLaunchDecision,
+            ProviderAdmissionState,
+            RootProviderAdmission,
+            bind_provider_admission,
+            clear_provider_admission,
+        )
+        from lingtai.agent import Agent
+
+        class _GrantingPort:
+            def __init__(self):
+                self.calls = []
+
+            def authorize_derived_launch(self, parent, capability):
+                self.calls.append((parent, capability))
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.GRANTED,
+                    "derived_launch_allowed_by_test",
+                    audit_id="audit-avatar-positive-2a",
+                )
+
+        launch_calls = []
+        proc = MagicMock(pid=12345)
+        proc.poll.return_value = None
+        receipt = AvatarLaunchReceipt(pid=12345, handle=proc)
+        monkeypatch.setattr(
+            AvatarManager,
+            "_launch",
+            lambda _self, working_dir: (
+                launch_calls.append(working_dir)
+                or (receipt, Path("/tmp/avatar-positive-2a.stderr"))
+            ),
+        )
+        parent = Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=tmp_path / "parent",
+            capabilities=["avatar"],
+            _turn_origin_policy=RUNTIME_POLICY,
+            derived_launch_admission_port=_GrantingPort(),
+        )
+        port = parent._derived_launch_admission_port
+        root = RootProviderAdmission("root-avatar-positive-2a", RUNTIME_POLICY.policy_version)
+        token = bind_provider_admission(root)
+        try:
+            result = parent.get_capability("avatar").handle(
+                {"action": "spawn", "input": {"name": "child", "confirm": True}}
+            )
+        finally:
+            clear_provider_admission(token)
+
+        assert result["status"] == "ok"
+        assert port.calls == [(root, DerivedLaunchCapability.AVATAR)]
+        assert launch_calls == [parent._working_dir.parent / "child"]
+        records = [
+            json.loads(line)
+            for line in (parent._working_dir / "delegates" / "ledger.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert records[0]["event"] == "avatar_admission_decision"
+        assert records[0]["state"] == "granted"
+        assert records[0]["audit_id"] == "audit-avatar-positive-2a"
 
 
 class TestMissionQualityGate:
