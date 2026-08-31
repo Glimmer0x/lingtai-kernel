@@ -418,14 +418,18 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
         if state is ProviderAdmissionState.GRANTED:
             if received_fd is None:
                 raise DriverAuthorityTransportError("granted launch omitted child endpoint")
+            endpoint: socket.socket | None = None
             try:
                 endpoint = socket.socket(fileno=received_fd)
                 os.set_inheritable(endpoint.fileno(), False)
             except OSError as exc:
-                try:
-                    os.close(received_fd)
-                except OSError:
-                    pass
+                if endpoint is not None:
+                    endpoint.close()
+                else:
+                    try:
+                        os.close(received_fd)
+                    except OSError:
+                        pass
                 raise DriverAuthorityTransportError("granted child endpoint is invalid") from exc
             return DerivedLaunchDecision(
                 state,
@@ -435,7 +439,12 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 child_endpoint_lease=DriverChildEndpointLease(endpoint),
             )
         if received_fd is not None:
-            raise DriverAuthorityTransportError("denied launch carried child endpoint")
+            # A policy decision stays authoritative despite this framing
+            # violation: release the resource without erasing reason/audit.
+            try:
+                os.close(received_fd)
+            except OSError:
+                pass
         return DerivedLaunchDecision(state, reason, audit_id=audit_id, admission_id=admission_id)
 
 

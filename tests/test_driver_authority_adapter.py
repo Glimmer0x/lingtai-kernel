@@ -103,6 +103,22 @@ def test_truncated_ancillary_data_closes_every_delivered_descriptor(monkeypatch)
     assert closed == [delivered_fd]
 
 
+def test_denied_child_endpoint_is_closed_without_erasing_driver_reason(monkeypatch):
+    adapter = object.__new__(DriverAuthorityAdapter)
+    closed: list[int] = []
+    monkeypatch.setattr(os, "close", closed.append)
+
+    decision = adapter._derived_decision(
+        {"version": 1, "state": "denied", "reason_code": "policy_denied", "audit_id": "audit-1"},
+        731,
+    )
+
+    assert closed == [731]
+    assert decision.state is ProviderAdmissionState.DENIED
+    assert decision.reason_code == "policy_denied"
+    assert decision.audit_id == "audit-1"
+
+
 def test_root_driver_adapter_receives_one_child_endpoint_lease_and_consumes_once():
     client, server = socket.socketpair()
     child_client, child_driver = socket.socketpair()
