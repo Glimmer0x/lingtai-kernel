@@ -148,6 +148,7 @@ def test_derived_decision_is_the_only_owner_of_a_denied_child_descriptor(monkeyp
                 "state": "denied",
                 "reason_code": "policy_denied",
                 "audit_id": "audit-1",
+                "call_id": request["call_id"],
             },
             731,
         )
@@ -162,16 +163,15 @@ def test_derived_decision_is_the_only_owner_of_a_denied_child_descriptor(monkeyp
     )
 
     assert closed == [731]
-    assert requests == [
-        (
-            {
-                "op": "authorize_derived_launch",
-                "launch_id": "root-1",
-                "capability": "avatar",
-            },
-            None,
-        )
-    ]
+    assert len(requests) == 1
+    request, expect_fd = requests[0]
+    assert {key: request[key] for key in request if key != "call_id"} == {
+        "op": "authorize_derived_launch",
+        "launch_id": "root-1",
+        "capability": "avatar",
+    }
+    assert isinstance(request["call_id"], str) and request["call_id"]
+    assert expect_fd is None
     assert decision.state is ProviderAdmissionState.DENIED
     assert decision.reason_code == "policy_denied"
 
