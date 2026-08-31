@@ -40,6 +40,14 @@ derived adapter as `derived_admission_port_unconnected`; do not install a
 permissive fallback or reuse a root decision. A retry requests a new admission
 at the next real provider call.
 
+For a derived launch with no endpoint, a composition that marks admission
+`required` records `INDETERMINATE /
+required_derived_launch_admission_port_missing` before applying the local
+nested-child backstop: missing authority is not an audited policy denial.
+Only the generic non-required path may use auditless `DENIED /
+nested_derived_launch_denied`; a live Driver's non-indeterminate decision must
+carry an audit id.
+
 ## Verifying a change
 
 Run:

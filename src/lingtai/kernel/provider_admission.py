@@ -318,21 +318,24 @@ def require_derived_launch_admission(
         raise TypeError("derived launch capability must be typed")
     parent = current_provider_admission()
     if port is None:
-        # Preserve the structural one-hop backstop even if a constrained child
-        # loses its transport.  With a live port the same nested request must
-        # still cross Driver so it receives the authoritative denial/audit.
-        if isinstance(parent, DerivedProviderAdmission):
-            raise DerivedLaunchAdmissionError(
-                DerivedLaunchDecision(
-                    ProviderAdmissionState.DENIED,
-                    "nested_derived_launch_denied",
-                )
-            )
+        # In a constrained composition, a missing authority endpoint is the
+        # most specific observable failure even for a nested child. It must
+        # not be recorded as an auditless policy denial. A live port still
+        # receives nested requests first, so Driver owns their denial/audit.
         if required:
             raise DerivedLaunchAdmissionError(
                 DerivedLaunchDecision(
                     ProviderAdmissionState.INDETERMINATE,
                     "required_derived_launch_admission_port_missing",
+                )
+            )
+        # Generic (non-required) composition retains the structural one-hop
+        # backstop if a derived child has no transport at all.
+        if isinstance(parent, DerivedProviderAdmission):
+            raise DerivedLaunchAdmissionError(
+                DerivedLaunchDecision(
+                    ProviderAdmissionState.DENIED,
+                    "nested_derived_launch_denied",
                 )
             )
         return DerivedLaunchDecision(ProviderAdmissionState.GRANTED, "legacy_default")

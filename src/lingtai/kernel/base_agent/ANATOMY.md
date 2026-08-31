@@ -81,6 +81,9 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
   service so every `send`, `send_stream`, and direct `generate` checks this
   Port immediately before provider I/O. `turn.py` binds a root parent only
   after its final origin admission and resets it on turn/loop teardown.
+  Its derived-launch gate records a missing endpoint as `INDETERMINATE` before
+  the generic nested-child backstop when authority is required; the detailed
+  ledger precedence remains normative in `CONTRACT.md`.
   Adapters own authentication and transport; Core does not encode ACP, sockets,
   paths, or a serializable bearer token here. The operator procedure and
   failure modes are in [`docs/references/provider-admission.md`](../../../../docs/references/provider-admission.md).

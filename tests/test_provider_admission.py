@@ -923,9 +923,21 @@ def test_required_derived_launch_port_cannot_fall_back_to_legacy_default():
     assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
 
 
-@pytest.mark.parametrize("required", (False, True))
-def test_nested_launch_backstop_precedes_missing_authority_port(required):
-    """A derived child has a certain structural denial regardless of transport."""
+@pytest.mark.parametrize(
+    ("required", "state", "reason_code"),
+    (
+        (False, ProviderAdmissionState.DENIED, "nested_derived_launch_denied"),
+        (
+            True,
+            ProviderAdmissionState.INDETERMINATE,
+            "required_derived_launch_admission_port_missing",
+        ),
+    ),
+)
+def test_missing_authority_precedes_nested_backstop_when_required(
+    required, state, reason_code
+):
+    """A constrained child reports lost authority; generic mode keeps the backstop."""
 
     root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
     child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
@@ -933,7 +945,7 @@ def test_nested_launch_backstop_precedes_missing_authority_port(required):
     try:
         with pytest.raises(
             DerivedLaunchAdmissionError,
-            match="nested_derived_launch_denied",
+            match=reason_code,
         ) as raised:
             require_derived_launch_admission(
                 None, DerivedLaunchCapability.AVATAR, required=required
@@ -941,7 +953,7 @@ def test_nested_launch_backstop_precedes_missing_authority_port(required):
     finally:
         clear_provider_admission(token)
 
-    assert raised.value.decision.state is ProviderAdmissionState.DENIED
+    assert raised.value.decision.state is state
     assert raised.value.decision.audit_id is None
 
 

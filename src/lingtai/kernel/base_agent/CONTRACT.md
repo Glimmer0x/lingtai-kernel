@@ -446,7 +446,14 @@ Clause IDs are stable; each rule composes the linked normative source.
    I/O rather than restoring generic behavior. Those persistent child-local
    requirements prevent accidental launch and restart confusion; they do not
    resist a same-OS-user child that can rewrite its own avatar directory or
-   daemon run manifest to remove/downgrade the requirement. Core's local one-shot lease guard is resource management,
+   daemon run manifest to remove/downgrade the requirement. With no endpoint,
+   a `required` launch records `INDETERMINATE /
+   required_derived_launch_admission_port_missing` before the local nested
+   backstop, because lost authority is not an audited policy denial. The
+   non-required generic fallback retains that backstop as auditless `DENIED /
+   nested_derived_launch_denied`; every non-indeterminate decision supplied by
+   a live Driver must carry its authority audit id. Core's local one-shot lease
+   guard is resource management,
    not the security claim: the Driver must atomically enforce
    `ISSUED -> CLAIMED` when the first v1 handshake succeeds, and must
    deny/audit every competing or later claimant. For any wire disagreement with
