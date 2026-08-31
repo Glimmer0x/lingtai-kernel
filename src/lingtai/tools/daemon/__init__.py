@@ -5479,7 +5479,7 @@ class DaemonManager:
                 "daemon", len(tasks)
             )
         except DerivedLaunchAdmissionError as error:
-            return self._admission_error_result(error)
+            return _admission_error_result(error)
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
@@ -5806,7 +5806,7 @@ class DaemonManager:
                 "daemon", len(tasks)
             )
         except DerivedLaunchAdmissionError as error:
-            return self._admission_error_result(error)
+            return _admission_error_result(error)
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
