@@ -1405,6 +1405,8 @@ def test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches(
     assert daemon_result == {
         "status": "error",
         "message": "derived launch was not admitted: nested_derived_launch_denied",
+        "reason_code": "nested_derived_launch_denied",
+        "audit_id": "audit-nested-daemon",
     }
     assert daemon_audit == [
         (

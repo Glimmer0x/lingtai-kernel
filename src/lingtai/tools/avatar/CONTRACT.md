@@ -24,6 +24,7 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_cli.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -326,6 +327,9 @@ live descendant.
   parent identity, or authorization boundary; in the same-OS-user trusted-host
   model it protects against accidental launch-path/configuration loss, not a
   child that can edit its own directory.
+- A denied derived avatar spawn returns `error` plus the admission decision's
+  `reason_code` and `audit_id`. Those fields preserve correlation evidence for
+  the denied attempt; they are not credentials, grants, or bearer values.
 - `AvatarManager` resolves the existing interpreter policy and submits the
   exact argv `[python, "-m", "lingtai", "run", <dir>]` plus
   `logs/spawn.stderr` to the avatar-local Port. Cwd is inherited. The
@@ -401,6 +405,7 @@ live descendant.
 | Name validation / path-scope guard holds | `tests/test_layers_avatar.py::test_spawn_rejects_unsafe_name` | Spawn with `name="../x"`, confirm refusal | Avatar dir escapes the network root |
 | Boot verification catches early child exit | `tests/test_avatar_launcher.py::test_manager_boot_policy_uses_opaque_port_and_preserves_precedence` | Corrupt an avatar `init.json`, spawn, confirm `failed` + stderr | Parent thinks a crashed avatar is alive |
 | Omitted `action` never defaults to spawn | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_missing_action_fails_deterministically_regardless_of_payload_shape` | Call `avatar(input={"name": "x", "confirm": true}, reasoning="...")` with no `action`, confirm error + no spawned process | A model omitting `action` could accidentally spawn an untracked process |
+| A denied derived avatar spawn preserves `reason_code` and `audit_id` | `tests/test_cli.py::test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches` | Spawn from a derived child, confirm the public refusal includes both decision fields | Audit correlation evidence is lost from the public refusal |
 | Rules propagate to the whole subtree | `tests/test_avatar_rules.py::test_rules_distributes_recursively` | Set rules on a root, confirm `.rules` on each descendant | Descendants run stale/ungoverned rules |
 | `manual` action is read-only | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_manual_returns_exact_body_and_performs_no_mutation` | Call `avatar(action="manual", input={}, reasoning="...")`, confirm no new files | A "manual" call could accidentally spawn or mutate rules |
 | Settings SHOW is exact, fresh, bounded, read-only, and excludes private state | `tests/test_tool_family_avatar_migration.py` settings tests plus `tests/test_tool_settings_contract.py` | Call settings with `{}` and a set-shaped input; inspect exact fields/order/manual targets and no source mutation | A writer, stale result, partial inventory, or host-state leak could drift from the owner contract |

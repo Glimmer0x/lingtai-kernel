@@ -96,6 +96,17 @@ from .posix_process import PosixDaemonProcessPort
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 
+def _admission_error_result(error: Exception) -> dict[str, Any]:
+    """Expose denied derived-launch evidence uniformly at daemon boundaries."""
+    result: dict[str, Any] = {"status": "error", "message": str(error)}
+    from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
+
+    if isinstance(error, DerivedLaunchAdmissionError):
+        result["reason_code"] = error.decision.reason_code
+        result["audit_id"] = error.decision.audit_id
+    return result
+
+
 def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float = 3.0) -> None:
     """Reclaim a legacy Popen using its explicit ownership scope.
 
@@ -5511,7 +5522,7 @@ class DaemonManager:
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
-                return {"status": "error", "message": str(e)}
+                return _admission_error_result(e)
             # Plugin skills join the skill catalog; plugin mcp.json servers join
             # the task MCP registrations (mounted as task-scoped clients below).
             if plugin_skill_rows:
@@ -5527,6 +5538,7 @@ class DaemonManager:
 
             system_prompt = "[daemon prompt pending MCP startup]"
 
+            launch_decision = launch_decisions[i]
             # Construct run_dir — creates folder on disk, writes daemon.json,
             # .prompt, .heartbeat, daemon_start event. If FS construction fails,
             # propagate as a tool-level error and skip scheduling for this spec.
@@ -5606,7 +5618,7 @@ class DaemonManager:
                 self._close_task_mcp_clients(task_mcp_clients)
                 run_dir.mark_failed(e)
                 self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
-                return {"status": "error", "message": str(e)}
+                return _admission_error_result(e)
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
             try:
@@ -5630,14 +5642,8 @@ class DaemonManager:
                 )
             except Exception as e:
                 run_dir.mark_failed(e)
-                result = {"status": "error", "message": str(e)}
-                from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
-
-                if isinstance(e, DerivedLaunchAdmissionError):
-                    result["reason_code"] = e.decision.reason_code
-                    result["audit_id"] = e.decision.audit_id
                 self._close_unconsumed_derived_launch_decisions(launch_decisions[i + 1:])
-                return result
+                return _admission_error_result(e)
             finally:
                 self._close_derived_launch_lease(launch_decision)
             self._emanations[em_id] = {
@@ -5843,6 +5849,7 @@ class DaemonManager:
                     "\n\nParent-provided daemon context (oneshot):\n"
                     + task_context
                 )
+            launch_decision = launch_decisions[i]
             try:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._workdir.path,
@@ -5941,7 +5948,7 @@ class DaemonManager:
             except Exception as e:
                 run_dir.mark_failed(e)
                 self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
-                return {"status": "error", "message": str(e)}
+                return _admission_error_result(e)
 
             # Persist user-supplied options separately from harness-owned argv
             # so run artifacts do not imply the model supplied MCP loader flags.
@@ -6028,7 +6035,7 @@ class DaemonManager:
             except Exception as e:
                 run_dir.mark_failed(e)
                 self._close_unconsumed_derived_launch_decisions(launch_decisions[i + 1:])
-                return {"status": "error", "message": str(e)}
+                return _admission_error_result(e)
             finally:
                 self._close_derived_launch_lease(launch_decision)
             self._emanations[em_id] = {
@@ -9632,16 +9639,6 @@ class DaemonManager:
     def _log(self, event_type: str, **fields) -> None:
         """Log through Daemon's narrow parent-runtime port."""
         self._runtime.log(event_type, **fields)
-
-    @staticmethod
-    def _admission_error_result(error: "DerivedLaunchAdmissionError") -> dict[str, str]:
-        """Expose structured refusal evidence without creating a run artifact."""
-        return {
-            "status": "error",
-            "message": str(error),
-            "reason_code": error.decision.reason_code,
-            "audit_id": error.decision.audit_id,
-        }
 
     @staticmethod
     def _close_derived_launch_lease(decision: object) -> None:

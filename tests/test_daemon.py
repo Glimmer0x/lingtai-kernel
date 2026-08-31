@@ -1,5 +1,6 @@
 # tests/test_daemon.py
 """Tests for the daemon (神識) capability — subagent system."""
+import ast
 import json
 import os
 import queue
@@ -1966,6 +1967,93 @@ def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
             },
         )
     ]
+
+
+def _unmapped_daemon_error_return_lines(source: str) -> list[int]:
+    """Find two-field public returns from handlers that can catch admission errors."""
+    lines: list[int] = []
+    for handler in (
+        node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ExceptHandler)
+    ):
+        caught = (
+            {handler.type.id}
+            if isinstance(handler.type, ast.Name)
+            else {
+                item.id
+                for item in handler.type.elts
+                if isinstance(item, ast.Name)
+            }
+            if isinstance(handler.type, ast.Tuple)
+            else {"Exception"}
+            if handler.type is None
+            else set()
+        )
+        if not {"Exception", "BaseException"} & caught:
+            continue
+        assigned_dicts = {
+            target.id: node.value
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Dict)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        for node in ast.walk(handler):
+            if not isinstance(node, ast.Return):
+                continue
+            value = node.value
+            if isinstance(value, ast.Name):
+                value = assigned_dicts.get(value.id)
+            if not isinstance(value, ast.Dict):
+                continue
+            keys = {
+                key.value
+                for key in value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+            if keys == {"status", "message"}:
+                lines.append(node.lineno)
+    return sorted(lines)
+
+
+def test_daemon_error_boundaries_share_admission_evidence_mapper():
+    """New daemon exception boundaries cannot silently drop admission evidence."""
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "lingtai" / "tools" / "daemon" / "__init__.py"
+    ).read_text(encoding="utf-8")
+    mapper_calls = sum(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_admission_error_result"
+        for node in ast.walk(ast.parse(source))
+    )
+
+    assert _unmapped_daemon_error_return_lines(source) == []
+    assert mapper_calls == 5
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """
+try:
+    pass
+except Exception as e:
+    return {"message": str(e), "status": "error"}
+""",
+        """
+try:
+    pass
+except Exception as e:
+    result = {"status": "error", "message": str(e)}
+    return result
+""",
+    ],
+)
+def test_daemon_error_boundary_check_detects_structural_variants(source):
+    """The AST guard rejects reordered and assigned broad-error results."""
+    assert _unmapped_daemon_error_return_lines(source)
 
 
 def test_task_skills_render_compact_catalog_from_dir_and_file(tmp_path):

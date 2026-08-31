@@ -8,7 +8,7 @@ description: >
   terminal notifications, and compaction boundaries.
 status: active
 contract_version: 14
-last_changed_at: "2026-08-29"
+last_changed_at: "2026-08-31"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
@@ -57,6 +57,7 @@ related_files:
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon_settings.py
   - tests/test_daemon.py
+  - tests/test_cli.py
   - tests/test_daemon_empty_parity.py
   - tests/test_daemon_missing_finish_guidance.py
   - tests/test_apriori_summary_executor.py
@@ -1002,6 +1003,10 @@ In the absence of a real authority that request is a structured
 `required_derived_launch_admission_port_missing` refusal before launch side
 effects; it must not fall back to generic `legacy_default` allow. This is
 refusal-side Step 3 evidence, not a legal root-to-one-hop allow or complete 2b.
+Every `DerivedLaunchAdmissionError` surfaced by `daemon` preserves the
+decision's `reason_code` and `audit_id` in its public error result alongside
+`status: "error"` and `message`. They are correlation evidence for the denied
+attempt, not credentials, grants, or bearer values.
 This requirement flag is not a grant, parent identity, or bearer. A future
 Driver authority bridge must supply those separately before any legitimate
 derived launch can be allowed.
@@ -1093,6 +1098,7 @@ Re-check this contract when touching:
 | LingTai task-scoped MCP calls remove server-undeclared `_reasoning`, retain ordinary unknown business fields, and preserve strict LTP-v2 restoration | `src/lingtai/services/mcp.py`, `src/lingtai/tools/daemon/__init__.py` | `tests/test_mcp_v2_adapter_metadata.py::test_task_daemon_adapts_host_private_arguments_at_mcp_boundary` |
 | `_DaemonMetaState.snapshot` carries `agent_state.context.system_prompt` only while this daemon's own local rendered prompt is strictly above the effective `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` threshold (default 40%) of its own resolved window, never the parent's | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_meta_state_system_prompt_warning_is_local_not_parent` |
 | `compact.action` is required; `manual` is read-only, omission is refused, and explicit `run` resets with fresh post-compact metadata | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_compact_schema_requires_explicit_run_or_manual_action`, `::test_compact_missing_action_is_refused_without_reset`, `::test_compact_success_prunes_to_system_call_and_result` |
+| Every denied derived daemon launch preserves `reason_code` and `audit_id` in its public result through the shared error-result mapper | `src/lingtai/tools/daemon/__init__.py` | `tests/test_cli.py::test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches`, `tests/test_daemon.py::test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor`, `::test_daemon_error_boundaries_share_admission_evidence_mapper` |
 | `reclaim` cancels running emanations; agent stop shuts the daemon down first | `src/lingtai/tools/daemon/__init__.py` | `tests/test_lifecycle_daemon_shutdown.py::test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock` |
 | `emanate`'s explicit `timeout` (schema: `minimum: 5`, no `maximum`) is an uncapped override reaching `daemon.json` and `supervisor_manifest.json` unchanged; omitting it (`null`) falls back to the manager's default. Unlike `timeout`, `max_turns` has a schema `maximum` and IS capped at the manager's ceiling. | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_per_batch_limits.py::test_emanate_honors_explicit_timeout_above_default_ceiling`, `::test_emanate_caps_max_turns_at_ceiling` |
 
