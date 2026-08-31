@@ -11,6 +11,12 @@ Modes:
   nocontext -- _execute reverted to pre-fix ``item.fn()``; MUST go red, which
                is what proves this probe actually measures the propagation
                rather than passing for unrelated reasons.
+
+Before running, create the supported isolated interpreter with
+``scripts/setup_driver_supervisor_e2e_env.sh <venv-dir>``. Invoke this probe
+through ``<venv-dir>/bin/python`` with both ``--lingtai-src`` and
+``--puffo-src``; the latter is source-only and must not be installed into the
+probe environment.
 """
 
 from __future__ import annotations
