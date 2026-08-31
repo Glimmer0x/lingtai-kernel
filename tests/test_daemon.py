@@ -3122,7 +3122,7 @@ def test_run_emanation_respects_cancel_before_first_send(tmp_path):
 
 def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
     """emanate dispatches tasks and returns compact unique IDs."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}, "file": {}})
     _enable_detached_fake_llm(agent, monkeypatch)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
@@ -3137,8 +3137,11 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
     assert result["handoff"] == (
         "While waiting, go idle or call system(action='sleep'); the terminal result "
         "will arrive and wake you as a notification; read daemon-manual and "
-        "notification-manual for details. If Telegram is connected and a Task Card "
-        "is available for the current turn, use it to report progress; call "
+        "notification-manual for details. For large concurrent batches, strongly "
+        "recommend notification(action='delay') on the daemon channel to reduce wake "
+        "frequency; delay masks attention only, never daemon truth. If Telegram is "
+        "connected and a Task Card is available for the current turn, use it to report "
+        "progress; call "
         "`telegram(action='manual')` and follow its `Programmable Task Card` "
         "section for details."
         " You dispatched 2 daemon(s) with no active task_card watch — consider "
