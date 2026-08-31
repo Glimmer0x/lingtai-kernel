@@ -41,7 +41,7 @@ Avatar capability — spawn independent peer agents (分身) as fully detached
 processes. Two modes:
 
 - **Shallow (初生):** Copy `init.json`, write restrictive
-  `system/derived_child.json` to a new working dir, strip identity, launch.
+  `.lingtai-derived-child.json` to a new working dir, strip identity, launch.
   The avatar gets the same LLM config + capabilities but no history.
 - **Deep (二重身):** Copy identity and durable knowledge (`system/`, `knowledge/`, `exports/`)
   plus `init.json`, strip name + history. The avatar is a doppelgänger — same
@@ -56,7 +56,8 @@ independent life — its existence does not depend on yours.
   manual child, validation, preparation, boot policy, ledger, rules, schemas,
   and registrar setup. The core class is `AvatarManager`.
 - `avatar/_launcher.py` — immutable launch request/receipt, the avatar-local
-  opaque-handle Port, and the restrictive child-boot marker name.
+  opaque-handle Port, restrictive child-boot marker name, and its shared
+  present/absent/unknown marker probe.
 - `cli.py:run()` — consumes that marker when an avatar process boots and makes
   a missing nested-derived authority fail closed; it does not receive authority
   through the environment.
@@ -164,9 +165,10 @@ avatar/__init__.py
 - **Liveness check:** Before spawning, existing ledger entries are observed through a target-bound `PosixAgentPresenceStoreAdapter` and Core `observe_alive()` policy. If a live avatar with the same name exists, the spawn is refused with `already_active`.
 - **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or Port exit truth within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported. Port release after observation never kills a live slow avatar.
 - **Derived child requirement:** `_spawn()` atomically writes
-  `system/derived_child.json` before launch. `cli.run()` reads that durable
-  state on every boot and turns it into the restrictive requirement that any
-  nested daemon/avatar launch has authority. The launcher also adds
+  `.lingtai-derived-child.json` before launch, outside the child-managed
+  `system/` namespace. `cli.run()` reads that durable state on every boot and
+  turns it into the restrictive requirement that any nested daemon/avatar
+  launch has authority. The launcher also adds
   `LINGTAI_DERIVED_AVATAR_EXECUTION=1` as redundant immediate-launch defense.
   Neither form carries a parent, grant, or authority bearer.
 - **Deep copy scope guard:** `_prepare_deep()` asserts `dst.parent == src.parent` to prevent rmtree from reaching outside the network root.

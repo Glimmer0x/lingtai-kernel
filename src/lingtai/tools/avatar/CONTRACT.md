@@ -81,7 +81,8 @@ per-action `input` object, and the model-facing root is exactly `action`,
   summarizer rather than silently ignored.
 
 **contract_version 6**: each spawned avatar persists a restrictive
-`system/derived_child.json` marker before it is launched. This makes the
+`.lingtai-derived-child.json` marker before it is launched, outside the
+child-managed `system/` namespace. This makes the
 requirement for nested derived-launch authority survive a direct restart of the
 same child directory; the launch environment marker is redundant only. It does
 not carry, create, or validate authority, and it does not claim to withstand a
@@ -296,7 +297,7 @@ the network root (`<parent>/..`):
   .rules                          # distributed rules signal
   logs/spawn.stderr               # captured child stderr for boot diagnosis
   logs/agent.log                  # rotating stdlib logging (boot + runtime warnings)
-  system/derived_child.json       # durable restrictive derived-child state
+  .lingtai-derived-child.json     # durable restrictive derived-child state
   knowledge/ exports/ combo.json  # deep mode only (system/ also has deep state)
 ```
 
@@ -313,7 +314,7 @@ live descendant.
 
 ## Cross-platform launcher contract
 
-- `AvatarManager` writes `system/derived_child.json` before process launch.
+- `AvatarManager` writes `.lingtai-derived-child.json` before process launch.
   Its presence is the authoritative restrictive state: every later
   `lingtai run <dir>` treats that directory as derived and requires authority
   before a nested daemon/avatar launch. Malformed or unexpected marker state

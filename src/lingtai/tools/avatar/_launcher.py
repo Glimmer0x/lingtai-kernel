@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Mapping, Protocol
 
@@ -24,9 +25,34 @@ DERIVED_AVATAR_STATE = {
 }
 
 
+class DerivedAvatarState(str, Enum):
+    """The durable marker's observable state without collapsing I/O failure."""
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    UNKNOWN = "unknown"
+
+
 def derived_avatar_state_path(working_dir: Path) -> Path:
     """Return the durable, restrictive state location for one avatar child."""
     return working_dir / DERIVED_AVATAR_STATE_RELATIVE_PATH
+
+
+def probe_derived_avatar_state(working_dir: Path) -> DerivedAvatarState:
+    """Classify the marker without treating unreadable storage as absence.
+
+    Only ``FileNotFoundError`` proves that the durable restriction was removed.
+    Other filesystem failures stay observable to the caller as ``UNKNOWN`` so
+    each caller can apply its own conservative policy without duplicating the
+    lossy ``exists()`` predicate.
+    """
+    try:
+        derived_avatar_state_path(working_dir).lstat()
+    except FileNotFoundError:
+        return DerivedAvatarState.ABSENT
+    except OSError:
+        return DerivedAvatarState.UNKNOWN
+    return DerivedAvatarState.PRESENT
 
 
 @dataclass(frozen=True)

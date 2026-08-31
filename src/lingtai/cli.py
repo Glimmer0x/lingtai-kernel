@@ -336,19 +336,12 @@ def _derived_avatar_requires_admission(working_dir: Path) -> bool:
     It is not an authority credential and is only a defense against accidental
     loss of the requirement in a trusted-host deployment.
     """
-    from lingtai.tools.avatar._launcher import derived_avatar_state_path
+    from lingtai.tools.avatar._launcher import (
+        DerivedAvatarState,
+        probe_derived_avatar_state,
+    )
 
-    marker = derived_avatar_state_path(working_dir)
-    try:
-        marker.lstat()
-    except FileNotFoundError:
-        return False
-    except OSError:
-        # Inaccessible storage is not evidence that the restrictive marker was
-        # intentionally removed. Preserve the requirement until a normal boot
-        # can inspect it again.
-        return True
-    return True
+    return probe_derived_avatar_state(working_dir) is not DerivedAvatarState.ABSENT
 
 
 def run(working_dir: Path) -> None:

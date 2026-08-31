@@ -4,7 +4,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from lingtai.tools.avatar import AvatarManager
-from lingtai.tools.avatar._launcher import AvatarLaunchReceipt, AvatarLaunchRequest
+from lingtai.tools.avatar._launcher import (
+    AvatarLaunchReceipt,
+    AvatarLaunchRequest,
+    DerivedAvatarState,
+    derived_avatar_state_path,
+    probe_derived_avatar_state,
+)
 from lingtai.adapters.posix.avatar_launcher import PosixAvatarLauncherAdapter
 
 
@@ -44,6 +50,26 @@ def test_posix_launch_propagates_explicit_derived_child_requirement(tmp_path):
     with patch("lingtai.adapters.posix.avatar_launcher.subprocess.Popen", return_value=process) as popen:
         PosixAvatarLauncherAdapter().launch(request)
     assert popen.call_args.kwargs["env"]["LINGTAI_DERIVED_AVATAR_EXECUTION"] == "1"
+
+
+def test_derived_avatar_state_probe_keeps_io_failure_distinct_from_absence(
+    tmp_path, monkeypatch,
+):
+    """Only a missing marker relaxes the durable child restriction."""
+    marker = derived_avatar_state_path(tmp_path)
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.ABSENT
+    marker.write_text("present", encoding="utf-8")
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.PRESENT
+
+    real_lstat = Path.lstat
+
+    def fail_for_marker(path):
+        if path == marker:
+            raise PermissionError("simulated marker read failure")
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_for_marker)
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.UNKNOWN
 
 
 def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):
