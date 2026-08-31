@@ -1048,6 +1048,25 @@ def test_run_keeps_malformed_persisted_avatar_state_restrictive(monkeypatch, tmp
     assert captured["kwargs"] == {"_requires_derived_launch_admission_port": True}
 
 
+def test_derived_avatar_marker_io_error_stays_restrictive(monkeypatch, tmp_path):
+    """Only a true missing marker may relax the restart restriction."""
+    from lingtai import cli
+    from lingtai.tools.avatar._launcher import derived_avatar_state_path
+
+    marker = derived_avatar_state_path(tmp_path)
+    marker.parent.mkdir(parents=True)
+    marker.write_text("present", encoding="utf-8")
+    real_lstat = Path.lstat
+
+    def fail_for_marker(path):
+        if path == marker:
+            raise PermissionError("simulated marker read failure")
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_for_marker)
+    assert cli._derived_avatar_requires_admission(tmp_path) is True
+
+
 def test_avatar_child_cli_boot_reaches_structured_missing_authority_denial(
     monkeypatch, tmp_path,
 ):

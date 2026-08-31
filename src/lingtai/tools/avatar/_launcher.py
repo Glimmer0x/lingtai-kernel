@@ -14,7 +14,10 @@ DERIVED_AVATAR_EXECUTION_ENV = "LINGTAI_DERIVED_AVATAR_EXECUTION"
 # directory, not of one particular launcher invocation.  Its mere presence is
 # restrictive: malformed content or an unexpected replacement must never make
 # a previously-derived child fall back to legacy admission behavior.
-DERIVED_AVATAR_STATE_RELATIVE_PATH = Path("system") / "derived_child.json"
+# This is deliberately outside the child-managed ``system/`` namespace.  The
+# marker is a restart restriction, not ordinary agent state that a capability
+# may clean up while doing its own maintenance.
+DERIVED_AVATAR_STATE_RELATIVE_PATH = Path(".lingtai-derived-child.json")
 DERIVED_AVATAR_STATE = {
     "schema_version": 1,
     "requires_derived_launch_admission": True,

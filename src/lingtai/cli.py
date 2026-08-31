@@ -339,7 +339,16 @@ def _derived_avatar_requires_admission(working_dir: Path) -> bool:
     from lingtai.tools.avatar._launcher import derived_avatar_state_path
 
     marker = derived_avatar_state_path(working_dir)
-    return marker.exists() or marker.is_symlink()
+    try:
+        marker.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        # Inaccessible storage is not evidence that the restrictive marker was
+        # intentionally removed. Preserve the requirement until a normal boot
+        # can inspect it again.
+        return True
+    return True
 
 
 def run(working_dir: Path) -> None:
