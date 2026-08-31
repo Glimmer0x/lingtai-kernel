@@ -49,6 +49,8 @@ related_files:
   - reports/ANATOMY.md
   - setup.py
   - scripts/check_docs_governance.py
+  - scripts/setup_driver_supervisor_e2e_env.sh
+  - scripts/verify_driver_executor_audit.py
   - scripts/generate_release_manifest.py
   - scripts/publish_release_assets.py
   - scripts/sync_gitee_mirror.py
@@ -217,7 +219,10 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   invokes the generator and the publisher (always with `--skip-gitee`;
   no path in that workflow touches Gitee) with `--execute` on a real
   `release.published` event (or an explicit `workflow_dispatch` with
-  `publish: true`) — every other trigger shape stays dry-run.
+  `publish: true`) — every other trigger shape stays dry-run. The Driver
+  acceptance probes use `setup_driver_supervisor_e2e_env.sh` to create the
+  supported isolated interpreter; `verify_driver_executor_audit.py` then
+  checks Driver executor audit boundaries against source-only Puffo input.
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request
   templates. `workflows/wheels.yml` is the release build/verify/manifest
   pipeline; `kernel-windows-pr.yml` and `shell-windows-pr.yml` are the native

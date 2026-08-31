@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the one supported interpreter for verify_driver_supervisor_execution_e2e.
+# Build the one supported interpreter for cross-repository Driver probes.
 #
 # The probe imports LingTai and the Puffo Driver server in one interpreter.  Do
 # not install Puffo's runtime into it: Puffo's MCP 1.x dependency conflicts
