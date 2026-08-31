@@ -5449,11 +5449,13 @@ class DaemonManager:
                     group_id, task_files_rows
                 )
             except (OSError, ValueError) as exc:
+                self._close_unconsumed_derived_launch_decisions(launch_decisions)
                 return {"status": "error", "message": f"task_files: {exc}"}
 
         for i, spec in enumerate(tasks):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
             ids.append(em_id)
+            launch_decision = launch_decisions[i]
             resolved = resolved_presets[i]
             effective_llm = (
                 resolved["llm"] if resolved else self._implicit_parent_preset_llm()
@@ -5477,6 +5479,7 @@ class DaemonManager:
                 task_files_catalog = self._render_task_files_catalog(task_files_rows[i])
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
                 return {"status": "error", "message": str(e)}
             # Plugin skills join the skill catalog; plugin mcp.json servers join
             # the task MCP registrations (mounted as task-scoped clients below).
@@ -5493,7 +5496,6 @@ class DaemonManager:
 
             system_prompt = "[daemon prompt pending MCP startup]"
 
-            launch_decision = launch_decisions[i]
             # Construct run_dir — creates folder on disk, writes daemon.json,
             # .prompt, .heartbeat, daemon_start event. If FS construction fails,
             # propagate as a tool-level error and skip scheduling for this spec.
@@ -5530,6 +5532,7 @@ class DaemonManager:
                 )
             except OSError as e:
                 self._close_task_mcp_clients(task_mcp_clients)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
 
@@ -5571,6 +5574,7 @@ class DaemonManager:
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 run_dir.mark_failed(e)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
                 return {"status": "error", "message": str(e)}
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
@@ -5601,7 +5605,10 @@ class DaemonManager:
                 if isinstance(e, DerivedLaunchAdmissionError):
                     result["reason_code"] = e.decision.reason_code
                     result["audit_id"] = e.decision.audit_id
+                self._close_unconsumed_derived_launch_decisions(launch_decisions[i + 1:])
                 return result
+            finally:
+                self._close_derived_launch_lease(launch_decision)
             self._emanations[em_id] = {
                 "detached": True,
                 "task": spec["task"],
@@ -5763,11 +5770,13 @@ class DaemonManager:
                     group_id, task_files_rows
                 )
             except (OSError, ValueError) as exc:
+                self._close_unconsumed_derived_launch_decisions(launch_decisions)
                 return {"status": "error", "message": f"task_files: {exc}"}
 
         for i, (spec, context) in enumerate(zip(tasks, contexts)):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
             ids.append(em_id)
+            launch_decision = launch_decisions[i]
             task_files_catalog = self._render_task_files_catalog(task_files_rows[i])
             user_backend_argv = list(context.backend_argv)
             backend_argv = list(user_backend_argv)
@@ -5792,7 +5801,6 @@ class DaemonManager:
                     "\n\nParent-provided daemon context (oneshot):\n"
                     + task_context
                 )
-            launch_decision = launch_decisions[i]
             try:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._workdir.path,
@@ -5824,6 +5832,7 @@ class DaemonManager:
                     backend=backend,
                 )
             except OSError as e:
+                self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
 
@@ -5889,6 +5898,7 @@ class DaemonManager:
                 backend_argv = [*user_backend_argv, *backend_harness_argv]
             except Exception as e:
                 run_dir.mark_failed(e)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
                 return {"status": "error", "message": str(e)}
 
             # Persist user-supplied options separately from harness-owned argv
@@ -5896,30 +5906,32 @@ class DaemonManager:
             from lingtai.kernel.daemon_supervisor.manifest import (
                 redact_durable_argv, redact_durable_value,
             )
-            if backend_options is not None:
-                state_updates["backend_options"] = redact_durable_value(
-                    backend_options, field="backend_options"
-                )
-                state_updates["backend_argv"] = redact_durable_argv(user_backend_argv)
-            if backend_harness_argv:
-                state_updates["backend_harness_argv"] = redact_durable_argv(
-                    backend_harness_argv
-                )
-            if state_updates:
-                run_dir.update_state(**state_updates)
-            self._log("daemon_backend_options",
-                      em_id=em_id, backend=backend,
-                      argv=redact_durable_argv(user_backend_argv),
-                      harness_argv=redact_durable_argv(backend_harness_argv))
+            try:
+                if backend_options is not None:
+                    state_updates["backend_options"] = redact_durable_value(
+                        backend_options, field="backend_options"
+                    )
+                    state_updates["backend_argv"] = redact_durable_argv(user_backend_argv)
+                if backend_harness_argv:
+                    state_updates["backend_harness_argv"] = redact_durable_argv(
+                        backend_harness_argv
+                    )
+                if state_updates:
+                    run_dir.update_state(**state_updates)
+                self._log("daemon_backend_options",
+                          em_id=em_id, backend=backend,
+                          argv=redact_durable_argv(user_backend_argv),
+                          harness_argv=redact_durable_argv(backend_harness_argv))
+            except Exception as e:
+                run_dir.mark_failed(e)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
+                return {"status": "error", "message": str(e)}
 
             # All backend execution now crosses the same detached supervisor
             # boundary.  The parent writes a complete, redacted manifest and
             # retains only the durable run-dir facade.
             try:
                 if launch_decision.child_endpoint_lease is not None:
-                    from lingtai.adapters.acp.driver_authority import close_child_endpoint_lease
-
-                    close_child_endpoint_lease(launch_decision.child_endpoint_lease)
                     raise RuntimeError(
                         "external daemon backend is unsupported by Driver admission"
                     )
@@ -5973,7 +5985,10 @@ class DaemonManager:
                     self._await_supervisor_startup(run_dir)
             except Exception as e:
                 run_dir.mark_failed(e)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions[i + 1:])
                 return {"status": "error", "message": str(e)}
+            finally:
+                self._close_derived_launch_lease(launch_decision)
             self._emanations[em_id] = {
                 "detached": True,
                 "task": spec["task"],
@@ -9587,19 +9602,24 @@ class DaemonManager:
         }
 
     @staticmethod
-    def _close_unconsumed_derived_launch_decisions(decisions: list[object]) -> None:
+    def _close_derived_launch_lease(decision: object) -> None:
+        """Deterministically release an unconsumed Driver child endpoint."""
+        from lingtai.adapters.acp.driver_authority import close_child_endpoint_lease
+
+        close_child_endpoint_lease(getattr(decision, "child_endpoint_lease", None))
+
+    @classmethod
+    def _close_unconsumed_derived_launch_decisions(
+        cls, decisions: list[object]
+    ) -> None:
         """Release pre-authorized decisions that have not reached a child yet.
 
         Every Driver admission grant carries a linear child endpoint lease.
         A later batch denial occurs before any child can consume earlier grants,
         so those leases must be closed before returning to the caller.
         """
-        from lingtai.adapters.acp.driver_authority import close_child_endpoint_lease
-
         for decision in decisions:
-            close_child_endpoint_lease(
-                getattr(decision, "child_endpoint_lease", None)
-            )
+            cls._close_derived_launch_lease(decision)
 
     def _authorize_derived_launch_batch(
         self, capability_name: str, task_count: int

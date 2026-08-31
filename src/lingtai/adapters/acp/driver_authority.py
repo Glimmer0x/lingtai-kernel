@@ -71,11 +71,12 @@ class DriverChildEndpointLease:
     def _take_for_posix_spawn(self) -> int:
         if self._consumed:
             raise DriverAuthorityTransportError("child endpoint lease already consumed")
-        self._consumed = True
         try:
-            return self._socket.detach()
+            endpoint_fd = self._socket.detach()
         except OSError as exc:
             raise DriverAuthorityTransportError("child endpoint lease unavailable") from exc
+        self._consumed = True
+        return endpoint_fd
 
     def close(self) -> None:
         if self._consumed:

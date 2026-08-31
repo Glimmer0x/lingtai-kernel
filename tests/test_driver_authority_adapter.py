@@ -10,11 +10,13 @@ import threading
 import time
 import traceback
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
 from lingtai.adapters.acp.driver_authority import (
     DriverAuthorityAdapter,
+    DriverChildEndpointLease,
     DriverAuthorityEndpointBindingMismatch,
     DriverAuthorityTransportError,
     UnavailableDriverAuthorityAdapter,
@@ -253,6 +255,21 @@ def test_root_driver_adapter_receives_one_child_endpoint_lease_and_consumes_once
     finally:
         os.close(inherited_fd)
         child_driver.close()
+
+
+def test_child_endpoint_lease_remains_explicitly_closeable_after_detach_failure():
+    """A failed handoff must not mark an open endpoint as consumed."""
+    endpoint = SimpleNamespace(
+        detach=MagicMock(side_effect=OSError("detach failed")),
+        close=MagicMock(),
+    )
+    lease = DriverChildEndpointLease(endpoint)
+
+    with pytest.raises(DriverAuthorityTransportError, match="lease unavailable"):
+        consume_posix_child_endpoint_lease(lease)
+
+    lease.close()
+    endpoint.close.assert_called_once_with()
 
 
 def test_derived_endpoint_cannot_mint_a_second_child_even_if_it_has_a_socket():
