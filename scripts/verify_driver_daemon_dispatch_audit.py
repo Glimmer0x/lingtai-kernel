@@ -5,6 +5,10 @@ Driver server for a root-to-daemon endpoint handoff, composes LingTai's
 ``DetachedDaemonExecutionHost``, performs one legal provider call, and invokes
 the real daemon and avatar dispatch handlers.  The same Driver audit stream
 must contain the provider grant and both nested-launch denials.
+
+Prepare the interpreter with ``scripts/setup_driver_supervisor_e2e_env.sh
+<venv-dir>`` and run this script through ``<venv-dir>/bin/python`` with both
+``--lingtai-src`` and source-only ``--puffo-src`` arguments.
 """
 
 from __future__ import annotations
@@ -233,10 +237,6 @@ def main(lingtai_src: Path, puffo_src: Path) -> None:
             assert avatar["reason_code"] == "nested_derived_launch_denied"
             assert isinstance(avatar["audit_id"], str) and avatar["audit_id"]
             assert avatar["audit_id"] in [r.audit_id for r in nested_records]
-            assert daemon == {
-                "status": "error",
-                "message": "derived launch was not admitted: nested_derived_launch_denied",
-            }
             assert len(daemon_decisions) == 1
             daemon_decision = daemon_decisions[0]
             assert daemon_decision["state"] == "denied"
@@ -244,6 +244,11 @@ def main(lingtai_src: Path, puffo_src: Path) -> None:
             assert isinstance(daemon_decision["audit_id"], str) and daemon_decision["audit_id"]
             assert daemon_decision["audit_id"] in [r.audit_id for r in nested_records]
             assert daemon_decision["audit_id"] != avatar["audit_id"]
+            assert daemon["status"] == "error"
+            assert daemon["message"] == "derived launch was not admitted: nested_derived_launch_denied"
+            assert daemon["reason_code"] == "nested_derived_launch_denied"
+            assert isinstance(daemon["audit_id"], str) and daemon["audit_id"]
+            assert daemon["audit_id"] == daemon_decision["audit_id"]
             assert all(isinstance(r.audit_id, str) and r.audit_id for r in nested_records)
     finally:
         if host is not None:
