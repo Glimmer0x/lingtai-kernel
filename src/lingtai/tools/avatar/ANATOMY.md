@@ -37,10 +37,11 @@ maintenance: |
 Avatar capability — spawn independent peer agents (分身) as fully detached
 processes. Two modes:
 
-- **Shallow (初生):** Copy `init.json` to a new working dir, strip identity,
+- **Shallow (初生):** Copy `init.json` and create a narrow Psyche prompt-owner
+  document in a new working dir, strip identity,
   launch. The avatar gets the same LLM config + capabilities but no history.
 - **Deep (二重身):** Copy identity and durable knowledge (`system/`, `knowledge/`, `exports/`)
-  plus `init.json`, strip name + history. The avatar is a doppelgänger — same
+  plus `init.json` and the narrow Psyche prompt-owner document, strip name + history. The avatar is a doppelgänger — same
   character, pad, knowledge — but starts a fresh conversation.
 
 Both modes launch `lingtai-agent run <dir>` as a detached process. The avatar is an
@@ -120,6 +121,7 @@ avatar/__init__.py
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
   ├── _make_avatar_init()           — builds avatar's init.json from parent's (strips identity, reroots paths)
+  ├── _make_avatar_psyche_settings() — carries only base/covenant owner inputs and replaces spawn comment
   ├── _prepare_deep()               — copies system/ + knowledge/ + exports/ + combo.json for deep mode
   ├── _launch()                     — resolves argv and delegates to the launcher Port
   ├── _wait_for_boot()              — polls .agent.heartbeat or Port exit truth

@@ -27,10 +27,11 @@ maintenance: |
 
 Mandatory LTP v2 family that is the one public root for the four durable
 domains (`pad + lingtai + knowledge + skills = psyche`). Five actions are
-read-only manual loaders; the reserved `settings` child returns two fully
-redacted Psyche-owned Pad rows. The package owns no domain state, catalog, or
-composer of its own. Its only non-dispatch lifecycle code is `boot`, which
-invokes composers the domain packages still own.
+read-only manual loaders; the reserved `settings` child returns eight fully
+redacted Psyche-owned rows: Pad plus the three configurable prompt pairs. The
+package owns no domain catalog or composer; its closed `settings/psyche.json`
+v1 parser owns only those six prompt inputs. Its only non-dispatch lifecycle
+code is `boot`, which invokes composers the domain packages still own.
 
 ## Components
 
@@ -47,10 +48,11 @@ invokes composers the domain packages still own.
 - `_FAMILY`, `_ACTION_ENUM_DESCRIPTION`, `get_description`, `get_schema` —
   settings-opted schema-only family plus the model-facing routing prose
   (`src/lingtai/tools/psyche/__init__.py:124-177`).
-- `settings.py::build_settings_provider` — binds the Agent's last successfully
-  reconstructed Pad snapshot into the exact two-row provider; both rows carry
-  the private full-redaction marker and the provider performs no source I/O
-  (`src/lingtai/tools/psyche/settings.py:11-43`).
+- `settings.py::{read_resolved_prompt_inputs,build_settings_provider}` — reads
+  the bounded stable closed owner document once per reconstruction, resolves its
+  three pairs with the existing helper, and binds the Agent's last successfully
+  applied eight-value snapshot into the full-redaction provider. SHOW performs
+  no source I/O.
 - `_adapt_manual_result` — the one post-dispatch Host adapter producing the flat
   `{status, manual, manual_path}` shape
   (`src/lingtai/tools/psyche/__init__.py:180-195`).
@@ -83,12 +85,11 @@ invokes composers the domain packages still own.
   `Agent._reload_prompt_sections` reuses. No edge runs the other way: nothing in
   this package is imported by the domain packages, by
   `Agent._reload_prompt_sections`, or by the catalog composers.
-- `Agent._reload_prompt_sections` consumes the canonical resolved Pad inputs,
-  writes configured Pad content only when `system/pad.md` is missing/empty,
-  delegates composition to `pad._pad_load`, and commits the narrow
-  `(pad, pad_file)` discovery snapshot only after the complete section pass
-  succeeds. No Psyche public action reaches that edge or rereads either source
-  (`src/lingtai/agent.py:2479-2784`).
+- `Agent._reload_prompt_sections` consumes Pad plus one resolved Psyche owner
+  read, overlays only the six prompt values into its local composition input,
+  preserves the existing base/covenant mirrors and comment non-mirroring, and
+  commits the applied eight-value snapshot only after the complete section pass
+  succeeds. No Psyche public action reaches that edge or rereads a source.
 
 ## Composition
 
@@ -97,14 +98,16 @@ Parent: [`tools/ANATOMY.md`](../ANATOMY.md). Paired interface promise:
 owners — [`pad`](../pad/ANATOMY.md), [`lingtai`](../lingtai/ANATOMY.md),
 [`knowledge`](../knowledge/ANATOMY.md), [`skills`](../skills/ANATOMY.md) — which
 retain their private composers, catalogs, and lifecycle; this package routes to
-their manuals and reads only the two Pad configuration inputs it owns.
+their manuals and reads only Pad configuration plus its six prompt-owner inputs.
 
 ## State
 
 The package writes no persistent state. `Agent` owns one narrow ephemeral
-`_psyche_settings_snapshot` tuple, initialized to the two meaningful defaults
-and replaced only by successful canonical reconstruction; SHOW binds to that
-tuple and does not inspect ambient sources. Prompt sections, catalogs, `system/pad.md`,
+`_psyche_settings_snapshot`, initialized to eight meaningful defaults and
+replaced only by successful canonical reconstruction; SHOW binds to that state
+and does not inspect ambient sources. The independently user-authored
+`settings/psyche.json` is a strict owner source, not package state. Prompt
+sections, catalogs, `system/pad.md`,
 `system/pad_append.json`, `system/lingtai.md`, `knowledge/`, and `.library/` are
 owned elsewhere and untouched by every public Psyche action. Agent-owned full
 reconstruction may seed a missing/empty durable Pad before its canonical
