@@ -1054,7 +1054,7 @@ def test_derived_avatar_marker_io_error_stays_restrictive(monkeypatch, tmp_path)
     from lingtai.tools.avatar._launcher import derived_avatar_state_path
 
     marker = derived_avatar_state_path(tmp_path)
-    marker.parent.mkdir(parents=True)
+    marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("present", encoding="utf-8")
     real_lstat = Path.lstat
 
