@@ -61,7 +61,9 @@ the root endpoint is close-on-exec and never becomes a child `pass_fds` entry.
 That execution-child spawn attempt consumes the supervisor-held endpoint even
 when process launch fails; the supervisor cannot retry it and any later attempt
 fails closed without authority. An invalid inherited endpoint is discarded and
-recorded as a supervisor diagnostic rather than silently treated as absent.
+recorded as a supervisor diagnostic rather than silently treated as absent; if
+socket adoption itself fails, the adapter closes the raw descriptor it still
+owns before returning the fail-closed result.
 Windows has no equivalent Driver endpoint transport and rejects such a lease
 before launch.
 

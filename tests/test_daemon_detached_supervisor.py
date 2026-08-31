@@ -1445,6 +1445,26 @@ def test_invalid_supervisor_authority_fd_is_logged_and_removed(monkeypatch, capl
     assert "daemon_supervisor_authority_endpoint_invalid" in caplog.text
 
 
+def test_supervisor_closes_fd_when_endpoint_adoption_fails(monkeypatch):
+    """A failed socket wrapper must not orphan the consumed environment fd."""
+    from lingtai.adapters.posix import daemon_supervisor as supervisor_module
+
+    closed: list[int] = []
+    monkeypatch.setattr(supervisor_module, "_SUPERVISOR_AUTHORITY_ENDPOINT", None)
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", "731")
+    monkeypatch.setattr(
+        supervisor_module.socket,
+        "socket",
+        lambda *, fileno: (_ for _ in ()).throw(OSError("simulated adoption failure")),
+    )
+    monkeypatch.setattr(supervisor_module.os, "close", closed.append)
+
+    supervisor_module.adopt_supervisor_authority_endpoint()
+
+    assert "LINGTAI_DRIVER_AUTHORITY_FD" not in os.environ
+    assert closed == [731]
+
+
 def test_real_daemon_second_hop_loses_root_fd_but_keeps_the_adopted_endpoint(
     tmp_path, monkeypatch,
 ):

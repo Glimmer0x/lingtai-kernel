@@ -45,8 +45,9 @@ The supervisor Port and durable run schemas define the narrow process boundary; 
 - `tools/daemon/supervisor_runtime.py:77-138` — detached startup identity, run attachment, and terminal dispatch.
 - `tools/daemon/supervisor_runtime.py:219-394` — execution-child ownership plus the exact control/deadline watcher.
 - `adapters/posix/daemon_supervisor.py:53-283` — concrete interpreter/session/log
-  launch adapter; it adopts one inherited authority endpoint once, logs and
-  discards malformed transport, and transfers it to one execution-child spawn.
+  launch adapter; it adopts one inherited authority endpoint once, closes a
+  raw descriptor when adoption fails, logs/discards malformed transport, and
+  transfers it to one execution-child spawn.
 - `tools/daemon/execution_host.py:24-224` — composition root that reuses manager setup and every `_BackendSpec` runner; selected Shell alone invokes its private composer for the run-local `shell_prompt_events.py` NotificationPort adapter and `<run>/shell-jobs` namespace, rather than the stub's absent Agent route or shared parent jobs.
 
 ## Connections

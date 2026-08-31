@@ -65,13 +65,20 @@ def adopt_supervisor_authority_endpoint() -> None:
     if raw_fd is None:
         return
     endpoint: socket.socket | None = None
+    adopted_fd: int | None = None
     try:
-        endpoint = socket.socket(fileno=int(raw_fd))
+        adopted_fd = int(raw_fd)
+        endpoint = socket.socket(fileno=adopted_fd)
         os.set_inheritable(endpoint.fileno(), False)
     except (OSError, ValueError) as exc:
         if endpoint is not None:
             try:
                 endpoint.close()
+            except OSError:
+                pass
+        elif adopted_fd is not None:
+            try:
+                os.close(adopted_fd)
             except OSError:
                 pass
         _LOGGER.warning("daemon_supervisor_authority_endpoint_invalid: %s", exc)
