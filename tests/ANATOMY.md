@@ -12,6 +12,7 @@ related_files:
   - tests/_agent_dir_helpers.py
   - tests/_agent_presence_helpers.py
   - tests/_chat_completion_helpers.py
+  - tests/_daemon_authority_probe.py
   - tests/_daemon_helpers.py
   - tests/_detached_cli_parent.py
   - tests/_fake_codex_app_server.py
@@ -513,6 +514,9 @@ complete, not to pair with a governed contract.
   - **Detached-process parents:** `_detached_cli_parent.py` and
     `_manager_detached_parent.py`, executed as real child processes by the
     daemon and lifecycle suites.
+  - **Authority child probe:** `_daemon_authority_probe.py`, executed by the
+    detached-supervisor tests to prove a child can handshake only with its
+    passed Driver endpoint and cannot reopen the parent endpoint.
 - `codex` and `opencode` — executable `/bin/sh` shims on the test PATH. Each
   execs `_fake_resume_cli.py` under `${PYTHON:-python}`; `opencode` additionally
   exports `FAKE_DAEMON_CLI=opencode` so one fake CLI serves both daemon
