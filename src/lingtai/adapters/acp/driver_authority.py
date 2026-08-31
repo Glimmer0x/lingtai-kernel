@@ -186,6 +186,10 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
                         except OSError:
                             pass
                         received_fd = None
+                        # A non-grant still retains its policy evidence, but
+                        # an endpoint on that frame violates framing. Retire
+                        # the authority stream before any later request.
+                        self._close_locked()
                     return DriverDerivedLaunchGrant(state, reason, audit_id)
                 if received_fd is None:
                     raise DriverAuthorityTransportError("granted launch omitted child endpoint")
@@ -275,7 +279,7 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
 
     @staticmethod
     def _parse_identity(response: dict[str, Any]) -> DriverAuthorityIdentity:
-        if response.get("version") != _PROTOCOL_VERSION:
+        if not DriverAuthorityClient._has_protocol_version(response):
             raise DriverAuthorityTransportError("authority protocol version mismatch")
         role, launch_id, capability = response.get("role"), response.get("launch_id"), response.get("capability")
         if role not in {"root", "derived"} or not isinstance(launch_id, str) or not launch_id:
@@ -288,7 +292,7 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
 
     @staticmethod
     def _decision(response: dict[str, Any]) -> tuple[ProviderAdmissionState, str, str | None]:
-        if response.get("version") != _PROTOCOL_VERSION:
+        if not DriverAuthorityClient._has_protocol_version(response):
             raise DriverAuthorityTransportError("authority protocol version mismatch")
         try: state = ProviderAdmissionState(response.get("state"))
         except (TypeError, ValueError) as exc: raise DriverAuthorityTransportError("authority decision state is invalid") from exc
@@ -296,6 +300,11 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
         if not isinstance(reason, str) or not reason or (audit_id is not None and (not isinstance(audit_id, str) or not audit_id)):
             raise DriverAuthorityTransportError("authority decision fields are invalid")
         return state, reason, audit_id
+
+    @staticmethod
+    def _has_protocol_version(response: dict[str, Any]) -> bool:
+        version = response.get("version")
+        return isinstance(version, int) and not isinstance(version, bool) and version == _PROTOCOL_VERSION
 
     @staticmethod
     def _checked_endpoint(fd: int) -> socket.socket:
@@ -316,4 +325,8 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
     def _valid_provider_parent(self, parent: ProviderAdmissionParent, call_class: ProviderCallClass) -> bool:
         if not isinstance(call_class, ProviderCallClass): return False
         if self._identity.role == "root": return isinstance(parent, RootProviderAdmission) and call_class is ProviderCallClass.ROOT
-        return isinstance(parent, DerivedProviderAdmission) and parent.call_class is call_class
+        if not isinstance(parent, DerivedProviderAdmission) or parent.call_class is not call_class:
+            return False
+        endpoint_capability = DerivedLaunchCapability(self._identity.capability)
+        endpoint_call_class = ProviderCallClass.DAEMON if endpoint_capability is DerivedLaunchCapability.DAEMON else ProviderCallClass.AVATAR_CHILD
+        return call_class is endpoint_call_class

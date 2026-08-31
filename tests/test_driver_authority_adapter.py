@@ -20,6 +20,7 @@ from lingtai.kernel.provider_admission import (
     ProviderAdmissionState,
     ProviderCallClass,
     RootProviderAdmission,
+    begin_derived_provider_admission,
 )
 
 
@@ -286,6 +287,84 @@ def test_derived_provider_call_uses_its_own_endpoint_and_driver_known_fields():
     thread.join(2)
     assert not errors
     assert decision.state is ProviderAdmissionState.GRANTED
+
+
+def test_daemon_endpoint_cannot_admit_avatar_child_call_class():
+    def handler(sock):
+        _hello(sock, role="derived", capability="daemon")
+        ready, _, _ = select.select([sock], [], [], 0.2)
+        if ready:
+            request = _recv(sock)
+            _send(sock, {
+                "version": 1, "call_id": request["call_id"], "state": "granted",
+                "reason_code": "unexpected_avatar_child_grant",
+            })
+
+    endpoint, thread, errors = _server(handler)
+    client = DriverAuthorityClient(endpoint)
+    avatar_parent = begin_derived_provider_admission(
+        RootProviderAdmission("turn", "v1"), ProviderCallClass.AVATAR_CHILD,
+    )
+    decision = client.authorize_provider_call(avatar_parent, ProviderCallClass.AVATAR_CHILD)
+    thread.join(2)
+    client.close()
+    assert not errors
+    assert decision.state is ProviderAdmissionState.DENIED
+    assert decision.reason_code == "provider_parent_endpoint_mismatch"
+
+
+def test_denied_endpoint_reply_invalidates_authority_before_a_second_request():
+    peer, denied_driver_end = socket.socketpair()
+    granted_peer, granted_driver_end = socket.socketpair()
+
+    def handler(sock):
+        _hello(sock)
+        first = _recv(sock)
+        _send(sock, {
+            "version": 1, "call_id": first["call_id"], "state": "denied",
+            "reason_code": "policy_denied",
+        }, fd=denied_driver_end.fileno())
+        denied_driver_end.close()
+        try:
+            second = _recv(sock)
+        except struct.error:
+            return
+        _send(sock, {
+            "version": 1, "call_id": second["call_id"], "state": "granted",
+            "reason_code": "unexpected_second_grant",
+        }, fd=granted_driver_end.fileno())
+        granted_driver_end.close()
+
+    endpoint, thread, errors = _server(handler)
+    client = DriverAuthorityClient(endpoint)
+    first = client.request_derived_launch(RootProviderAdmission("turn", "v1"), DerivedLaunchCapability.DAEMON)
+    second = client.request_derived_launch(RootProviderAdmission("turn", "v1"), DerivedLaunchCapability.AVATAR)
+    thread.join(2)
+    assert not errors
+    assert first.state is ProviderAdmissionState.DENIED
+    assert second.state is ProviderAdmissionState.INDETERMINATE
+    assert peer.recv(1) == b""
+    peer.close()
+    granted_peer.close()
+
+
+def test_boolean_protocol_version_cannot_construct_client():
+    def handler(sock):
+        request = _recv(sock)
+        _send(sock, {
+            "version": True, "call_id": request["call_id"], "role": "root",
+            "launch_id": "launch-1", "capability": None,
+        })
+
+    endpoint, thread, errors = _server(handler)
+    try:
+        DriverAuthorityClient(endpoint)
+    except DriverAuthorityTransportError:
+        pass
+    else:
+        raise AssertionError("boolean protocol version constructed a client")
+    thread.join(2)
+    assert not errors
 
 
 def test_malformed_driver_provider_reply_fails_closed_before_provider_io():
