@@ -222,7 +222,6 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 return ProviderCallDecision(ProviderAdmissionState.DENIED, "provider_parent_endpoint_mismatch")
         else:
             return ProviderCallDecision(ProviderAdmissionState.INDETERMINATE, "derived_admission_port_unconnected")
-        received_fd = None
         with self._lock:
             try:
                 response, received_fd = self._exchange_locked(
@@ -273,7 +272,6 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 ProviderAdmissionState.INDETERMINATE,
                 "derived_launch_admission_port_unconnected",
             )
-        received_fd = None
         with self._lock:
             try:
                 response, received_fd = self._exchange_locked(

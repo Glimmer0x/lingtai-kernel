@@ -876,6 +876,12 @@ def test_driver_launch_decisions_require_a_nonempty_audit_id(state):
         clear_provider_admission(token)
 
     assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+    assert raised.value.decision.driver_state is state
+    assert raised.value.decision.driver_reason_code == "driver_response_without_audit"
+    assert (
+        raised.value.decision.protocol_violation_reason
+        == "missing_derived_launch_admission_audit_id"
+    )
 
 
 def test_driver_provider_grant_requires_a_nonempty_audit_id():
@@ -917,8 +923,9 @@ def test_required_derived_launch_port_cannot_fall_back_to_legacy_default():
     assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
 
 
-def test_required_missing_port_precedes_the_nested_launch_backstop():
-    """A constrained derived child must report lost authority, not an auditless deny."""
+@pytest.mark.parametrize("required", (False, True))
+def test_nested_launch_backstop_precedes_missing_authority_port(required):
+    """A derived child has a certain structural denial regardless of transport."""
 
     root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
     child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
@@ -926,15 +933,15 @@ def test_required_missing_port_precedes_the_nested_launch_backstop():
     try:
         with pytest.raises(
             DerivedLaunchAdmissionError,
-            match="required_derived_launch_admission_port_missing",
+            match="nested_derived_launch_denied",
         ) as raised:
             require_derived_launch_admission(
-                None, DerivedLaunchCapability.AVATAR, required=True
+                None, DerivedLaunchCapability.AVATAR, required=required
             )
     finally:
         clear_provider_admission(token)
 
-    assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
+    assert raised.value.decision.state is ProviderAdmissionState.DENIED
     assert raised.value.decision.audit_id is None
 
 

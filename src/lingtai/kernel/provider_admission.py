@@ -149,6 +149,12 @@ class DerivedLaunchDecision:
     reason_code: str
     audit_id: str | None = None
     admission_id: str | None = None
+    # When a Driver decision is malformed, the fail-closed projection retains
+    # the original disposition/reason separately instead of falsifying it as a
+    # generic transport failure.
+    driver_state: ProviderAdmissionState | None = None
+    driver_reason_code: str | None = None
+    protocol_violation_reason: str | None = None
     # This is a Driver-adapter-owned, non-serializable spawn handoff.  Core can
     # carry it only opaquely to the process-launch adapter; it is neither a
     # descriptor number nor a bearer that Core can inspect or reconstruct.
@@ -315,18 +321,18 @@ def require_derived_launch_admission(
         # Preserve the structural one-hop backstop even if a constrained child
         # loses its transport.  With a live port the same nested request must
         # still cross Driver so it receives the authoritative denial/audit.
-        if required:
-            raise DerivedLaunchAdmissionError(
-                DerivedLaunchDecision(
-                    ProviderAdmissionState.INDETERMINATE,
-                    "required_derived_launch_admission_port_missing",
-                )
-            )
         if isinstance(parent, DerivedProviderAdmission):
             raise DerivedLaunchAdmissionError(
                 DerivedLaunchDecision(
                     ProviderAdmissionState.DENIED,
                     "nested_derived_launch_denied",
+                )
+            )
+        if required:
+            raise DerivedLaunchAdmissionError(
+                DerivedLaunchDecision(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "required_derived_launch_admission_port_missing",
                 )
             )
         return DerivedLaunchDecision(ProviderAdmissionState.GRANTED, "legacy_default")
@@ -350,14 +356,6 @@ def require_derived_launch_admission(
         or not isinstance(decision.state, ProviderAdmissionState)
         or not isinstance(decision.reason_code, str)
         or not decision.reason_code
-        # Every response received from a configured Driver port must be
-        # correlatable.  A missing audit id is not merely incomplete
-        # observability: it makes a grant or denial unverifiable at the
-        # authority boundary, so fail closed before process state changes.
-        or (
-            decision.state is not ProviderAdmissionState.INDETERMINATE
-            and (not isinstance(decision.audit_id, str) or not decision.audit_id)
-        )
         or any(
             value is not None and (not isinstance(value, str) or not value)
             for value in (decision.admission_id,)
@@ -379,6 +377,21 @@ def require_derived_launch_admission(
         decision = DerivedLaunchDecision(
             ProviderAdmissionState.INDETERMINATE,
             "malformed_derived_launch_admission_decision",
+        )
+    elif (
+        decision.state is not ProviderAdmissionState.INDETERMINATE
+        and (not isinstance(decision.audit_id, str) or not decision.audit_id)
+    ):
+        # A configured Driver's non-indeterminate response must be correlated,
+        # but a missing audit id must not erase the denial/grant it actually
+        # sent. Keep that evidence in the fail-closed projection.
+        _discard_child_endpoint_lease(decision.child_endpoint_lease)
+        decision = DerivedLaunchDecision(
+            ProviderAdmissionState.INDETERMINATE,
+            "malformed_derived_launch_admission_decision",
+            driver_state=decision.state,
+            driver_reason_code=decision.reason_code,
+            protocol_violation_reason="missing_derived_launch_admission_audit_id",
         )
     # A nested request must be presented to Driver first, so the Driver can
     # record its own denial.  Core remains a second, structural one-hop

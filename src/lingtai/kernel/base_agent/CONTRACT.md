@@ -449,10 +449,11 @@ Clause IDs are stable; each rule composes the linked normative source.
    daemon run manifest to remove/downgrade the requirement. Core's local one-shot lease guard is resource management,
    not the security claim: the Driver must atomically enforce
    `ISSUED -> CLAIMED` when the first v1 handshake succeeds, and must
-   deny/audit every competing or later claimant. Any wire disagreement with
-   the Driver-bound launch, capability, provider, role, or depth is the
-   distinct high-signal `DENIED / endpoint_binding_mismatch`, never an
-   ordinary business denial. The daemon/avatar compositions each compare their
+   deny/audit every competing or later claimant. For any wire disagreement with
+   the Driver-bound launch, capability, provider, role, or depth, the Driver
+   must respond with the distinct high-signal `DENIED /
+   endpoint_binding_mismatch`, never an ordinary business denial. The
+   daemon/avatar compositions each compare their
    locally expected call class with the endpoint hello capability; a cross-mode
    endpoint becomes that same denial before provider I/O. Until the external #299 CAS work lands,
    `authorize_provider_call` is a per-call decision only: it does not provide
