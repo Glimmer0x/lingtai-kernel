@@ -16,6 +16,7 @@ import pytest
 from lingtai.kernel.config import AgentConfig
 from lingtai.kernel.provider_admission import (
     DerivedLaunchCapability,
+    DerivedLaunchAdmissionError,
     DerivedLaunchDecision,
     ProviderAdmissionState,
     RootProviderAdmission,
@@ -1971,24 +1972,27 @@ def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
 
 def _unmapped_daemon_error_return_lines(source: str) -> list[int]:
     """Find two-field public returns from handlers that can catch admission errors."""
+    admission_error_bases = {
+        error_type.__name__ for error_type in DerivedLaunchAdmissionError.__mro__
+    }
     lines: list[int] = []
     for handler in (
         node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ExceptHandler)
     ):
-        caught = (
-            {handler.type.id}
-            if isinstance(handler.type, ast.Name)
-            else {
-                item.id
-                for item in handler.type.elts
-                if isinstance(item, ast.Name)
-            }
-            if isinstance(handler.type, ast.Tuple)
-            else {"Exception"}
-            if handler.type is None
-            else set()
+        caught_nodes = (
+            handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
         )
-        if not {"Exception", "BaseException"} & caught:
+        caught = {
+            item.id
+            if isinstance(item, ast.Name)
+            else item.attr
+            if isinstance(item, ast.Attribute)
+            else "BaseException"
+            if item is None
+            else None
+            for item in caught_nodes
+        }
+        if not admission_error_bases & caught:
             continue
         assigned_dicts = {
             target.id: node.value
@@ -2030,7 +2034,7 @@ def test_daemon_error_boundaries_share_admission_evidence_mapper():
     )
 
     assert _unmapped_daemon_error_return_lines(source) == []
-    assert mapper_calls == 5
+    assert mapper_calls == 15
 
 
 @pytest.mark.parametrize(
@@ -2049,10 +2053,22 @@ except Exception as e:
     result = {"status": "error", "message": str(e)}
     return result
 """,
+        """
+try:
+    pass
+except OSError as e:
+    return {"status": "error", "message": str(e)}
+""",
+        """
+try:
+    pass
+except DerivedLaunchAdmissionError as e:
+    return {"status": "error", "message": str(e)}
+""",
     ],
 )
 def test_daemon_error_boundary_check_detects_structural_variants(source):
-    """The AST guard rejects reordered and assigned broad-error results."""
+    """The AST guard rejects structurally varied admission-catching results."""
     assert _unmapped_daemon_error_return_lines(source)
 
 

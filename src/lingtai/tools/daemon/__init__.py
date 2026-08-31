@@ -96,9 +96,14 @@ from .posix_process import PosixDaemonProcessPort
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 
-def _admission_error_result(error: Exception) -> dict[str, Any]:
+def _admission_error_result(
+    error: Exception, *, message: str | None = None
+) -> dict[str, Any]:
     """Expose denied derived-launch evidence uniformly at daemon boundaries."""
-    result: dict[str, Any] = {"status": "error", "message": str(error)}
+    result: dict[str, Any] = {
+        "status": "error",
+        "message": str(error) if message is None else message,
+    }
     from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
 
     if isinstance(error, DerivedLaunchAdmissionError):
@@ -5492,7 +5497,7 @@ class DaemonManager:
                 )
             except (OSError, ValueError) as exc:
                 self._close_unconsumed_derived_launch_decisions(launch_decisions)
-                return {"status": "error", "message": f"task_files: {exc}"}
+                return _admission_error_result(exc, message=f"task_files: {exc}")
 
         for i, spec in enumerate(tasks):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
@@ -5576,8 +5581,9 @@ class DaemonManager:
             except OSError as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
-                return {"status": "error",
-                        "message": f"Failed to create daemon folder: {e}"}
+                return _admission_error_result(
+                    e, message=f"Failed to create daemon folder: {e}"
+                )
 
             # Detached ownership is unconditional. The supervisor reconstructs
             # preset/MCP/skills from this run's validated, redacted durable
@@ -5819,7 +5825,7 @@ class DaemonManager:
                 )
             except (OSError, ValueError) as exc:
                 self._close_unconsumed_derived_launch_decisions(launch_decisions)
-                return {"status": "error", "message": f"task_files: {exc}"}
+                return _admission_error_result(exc, message=f"task_files: {exc}")
 
         for i, (spec, context) in enumerate(zip(tasks, contexts)):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
@@ -5882,8 +5888,9 @@ class DaemonManager:
                 )
             except OSError as e:
                 self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
-                return {"status": "error",
-                        "message": f"Failed to create daemon folder: {e}"}
+                return _admission_error_result(
+                    e, message=f"Failed to create daemon folder: {e}"
+                )
 
             try:
                 mcp_regs = (
@@ -6743,8 +6750,9 @@ class DaemonManager:
         except OSError as e:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
-            return {"status": "error",
-                    "message": f"Failed to start claude CLI: {e}"}
+            return _admission_error_result(
+                e, message=f"Failed to start claude CLI: {e}"
+            )
         # Surface that an ask just started so `daemon(check)` shows it
         # immediately, even before any stream-json event arrives.
         # record_cli_output already routes its filesystem writes through
@@ -6963,8 +6971,9 @@ class DaemonManager:
         except OSError as e:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
-            return {"status": "error",
-                    "message": f"Failed to start codex CLI: {e}"}
+            return _admission_error_result(
+                e, message=f"Failed to start codex CLI: {e}"
+            )
         # Ask follow-ups are not part of any batch (see claude-code ask).
         # See _handle_ask_cli for the rationale on the narrowed except.
         try:
@@ -8217,8 +8226,9 @@ class DaemonManager:
         except OSError as e:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
-            return {"status": "error",
-                    "message": f"Failed to start {backend_name} CLI: {e}"}
+            return _admission_error_result(
+                e, message=f"Failed to start {backend_name} CLI: {e}"
+            )
         try:
             run_dir.record_cli_output(
                 f"[ask dispatched] {message[:200]}", stream="stdout",
@@ -8744,8 +8754,9 @@ class DaemonManager:
         except OSError as e:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
-            return {"status": "error",
-                    "message": f"Failed to start Cursor CLI: {e}"}
+            return _admission_error_result(
+                e, message=f"Failed to start Cursor CLI: {e}"
+            )
         # Ask follow-ups are not part of any batch (see claude-code ask).
         try:
             run_dir.record_cli_output(
@@ -9003,7 +9014,9 @@ class DaemonManager:
         try:
             state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
-            return {"status": "error", "message": f"daemon.json read failed: {e}"}
+            return _admission_error_result(
+                e, message=f"daemon.json read failed: {e}"
+            )
 
         # events.jsonl — append-only, missing means no events yet
         events: list[dict] = []
@@ -9013,7 +9026,9 @@ class DaemonManager:
                 with open(events_path, "r", encoding="utf-8") as f:
                     raw_lines = f.readlines()
             except OSError as e:
-                return {"status": "error", "message": f"events.jsonl read failed: {e}"}
+                return _admission_error_result(
+                    e, message=f"events.jsonl read failed: {e}"
+                )
             events_total = len(raw_lines)
             tail = raw_lines[-last:] if last > 0 else []
             for line in tail:
