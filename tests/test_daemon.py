@@ -1546,12 +1546,15 @@ def test_profile_daemon_later_batch_denial_leaves_no_task_file_store_or_run(
     tmp_path, monkeypatch, backend
 ):
     """Pre-authorizing all children keeps later denial free of durable residue."""
+    from lingtai.adapters.acp.driver_authority import DriverChildEndpointLease
     from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
     from tests._daemon_helpers import install_fake_detached_owner
 
     class _GrantThenDenyPort:
         def __init__(self):
             self.calls = []
+            self.first_endpoint = MagicMock()
+            self.first_lease = DriverChildEndpointLease(self.first_endpoint)
 
         def authorize_derived_launch(self, parent, capability):
             self.calls.append((parent, capability))
@@ -1560,6 +1563,7 @@ def test_profile_daemon_later_batch_denial_leaves_no_task_file_store_or_run(
                     ProviderAdmissionState.GRANTED,
                     "first_child_allowed_by_batch_test",
                     audit_id=f"audit-first-{backend}",
+                    child_endpoint_lease=self.first_lease,
                 )
             return DerivedLaunchDecision(
                 ProviderAdmissionState.DENIED,
@@ -1600,6 +1604,7 @@ def test_profile_daemon_later_batch_denial_leaves_no_task_file_store_or_run(
 
     assert result["reason_code"] == "second_child_denied_by_batch_test"
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
+    port.first_endpoint.close.assert_called_once_with()
     daemon_root = agent._working_dir / "daemons"
     assert not (daemon_root / "_task_files").exists()
     assert not daemon_root.exists() or not any(
