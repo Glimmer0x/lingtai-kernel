@@ -346,7 +346,7 @@ class AvatarParentPort(Protocol):
         """Whether this parent may distribute rules through its avatar subtree."""
 
     def authorize_derived_launch(self, capability: Any) -> Any:
-        """Decide one avatar-derived process launch before side effects."""
+        """Decide one avatar-derived process launch before process launch."""
 
 
 class DaemonRuntimePort(Protocol):
@@ -393,7 +393,7 @@ class DaemonRuntimePort(Protocol):
         """Resolved construction options for this daemon manager binding."""
 
     def authorize_derived_launch(self, capability: Any) -> Any:
-        """Decide one daemon-derived process launch before side effects."""
+        """Decide one daemon-derived process launch before process launch."""
 
     def setup_preset_capability(
         self, name: str, kwargs: Mapping[str, Any]

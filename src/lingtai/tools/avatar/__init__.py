@@ -916,32 +916,23 @@ class AvatarManager:
         from lingtai.kernel.provider_admission import (
             DerivedLaunchAdmissionError,
             DerivedLaunchCapability,
-            DerivedLaunchDecision,
-            ProviderAdmissionState,
         )
 
-        authorize = getattr(self._host.avatar_parent, "authorize_derived_launch", None)
-        if callable(authorize):
-            try:
-                decision = authorize(DerivedLaunchCapability.AVATAR)
-            except DerivedLaunchAdmissionError as exc:
-                decision = exc.decision
-                self._append_ledger(
-                    "avatar_admission_decision",
-                    peer_name,
-                    capability=DerivedLaunchCapability.AVATAR.value,
-                    state=decision.state.value,
-                    reason_code=decision.reason_code,
-                    audit_id=decision.audit_id,
-                )
-                raise
-        else:
-            # Direct legacy test/composition hosts predate the narrow decision
-            # operation. Puffo-v0 never takes this branch: its Agent adapter
-            # always supplies a configured (currently fail-closed) port.
-            decision = DerivedLaunchDecision(
-                ProviderAdmissionState.GRANTED, "legacy_default"
+        try:
+            decision = self._host.avatar_parent.authorize_derived_launch(
+                DerivedLaunchCapability.AVATAR
             )
+        except DerivedLaunchAdmissionError as exc:
+            decision = exc.decision
+            self._append_ledger(
+                "avatar_admission_decision",
+                peer_name,
+                capability=DerivedLaunchCapability.AVATAR.value,
+                state=decision.state.value,
+                reason_code=decision.reason_code,
+                audit_id=decision.audit_id,
+            )
+            raise
         self._append_ledger(
             "avatar_admission_decision",
             peer_name,
@@ -950,6 +941,8 @@ class AvatarManager:
             reason_code=decision.reason_code,
             audit_id=decision.audit_id,
         )
+        if not decision.allowed:
+            raise DerivedLaunchAdmissionError(decision)
 
     # ------------------------------------------------------------------
     # Ledger reading

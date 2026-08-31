@@ -1396,6 +1396,8 @@ def test_profile_daemon_launch_reaches_structured_admission_before_supervisor(
 
     assert result["status"] == "error"
     assert "derived_launch_denied_by_test" in result["message"]
+    assert result["reason_code"] == "derived_launch_denied_by_test"
+    assert result["audit_id"] == "audit-daemon-2a"
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
     assert supervisor_calls == []
     decisions = [row for row in audit if row[0] == "derived_launch_admission_decision"]

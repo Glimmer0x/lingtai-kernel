@@ -5555,7 +5555,13 @@ class DaemonManager:
                 )
             except Exception as e:
                 run_dir.mark_failed(e)
-                return {"status": "error", "message": str(e)}
+                result = {"status": "error", "message": str(e)}
+                from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
+
+                if isinstance(e, DerivedLaunchAdmissionError):
+                    result["reason_code"] = e.decision.reason_code
+                    result["audit_id"] = e.decision.audit_id
+                return result
             self._emanations[em_id] = {
                 "detached": True,
                 "task": spec["task"],
@@ -9539,6 +9545,8 @@ class DaemonManager:
             reason_code=decision.reason_code,
             audit_id=decision.audit_id,
         )
+        if not decision.allowed:
+            raise DerivedLaunchAdmissionError(decision)
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s
