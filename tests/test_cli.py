@@ -1281,7 +1281,7 @@ def test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches(
         {"manifest": {"capabilities": {"daemon": {}, "avatar": {}}}},
     )
     state_path = derived_avatar_state_path(tmp_path)
-    state_path.parent.mkdir(parents=True)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(DERIVED_AVATAR_STATE), encoding="utf-8")
     client, server = socket.socketpair()
     server_errors = []
