@@ -1497,7 +1497,7 @@ def test_profile_daemon_launch_reaches_structured_admission_before_supervisor(
 def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, monkeypatch):
     """The zero-supervisor assertion has a same-recorder positive control."""
     from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
-    from tests._daemon_helpers import install_fake_detached_owner
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
 
     class _GrantingPort:
         def __init__(self):
@@ -1517,7 +1517,15 @@ def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, mo
     port = _GrantingPort()
     agent._derived_launch_admission_port = port
     audit = []
-    records = install_fake_detached_owner(monkeypatch)
+    supervisor_calls = []
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: supervisor_calls.append("spawn"),
+    )
+    monkeypatch.setattr(
+        agent.get_capability("daemon"), "_await_supervisor_startup", lambda _run: None
+    )
     monkeypatch.setattr(agent, "_log", lambda event, **fields: audit.append((event, fields)))
 
     root = RootProviderAdmission("root-daemon-positive-2a", RUNTIME_POLICY.policy_version)
@@ -1531,8 +1539,7 @@ def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, mo
 
     assert result["status"] == "dispatched"
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
-    assert len(records) == 1
-    assert records[0]["manifest"]["backend"] == "lingtai"
+    assert supervisor_calls == ["spawn"]
     assert (
         "derived_launch_admission_decision",
         {

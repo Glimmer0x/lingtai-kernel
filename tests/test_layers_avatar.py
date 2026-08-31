@@ -269,7 +269,7 @@ class TestAvatarManager:
     def test_profile_avatar_grant_reaches_the_same_launch_recorder(
         self, tmp_path, monkeypatch
     ):
-        """The zero-avatar-spawn assertion has a same-recorder positive control."""
+        """The zero-avatar-directory assertion has a positive control too."""
         from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
         from lingtai.kernel.provider_admission import (
             DerivedLaunchCapability,
@@ -330,6 +330,7 @@ class TestAvatarManager:
 
         assert result["status"] == "ok"
         assert port.calls == [(root, DerivedLaunchCapability.AVATAR)]
+        assert (parent._working_dir.parent / "child").is_dir()
         assert launch_calls == [parent._working_dir.parent / "child"]
         records = [
             json.loads(line)
