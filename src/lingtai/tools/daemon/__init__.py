@@ -5396,6 +5396,19 @@ class DaemonManager:
                 "preset_handlers": preset_handlers,
             })
 
+        # Every task is one derived launch request. Admit the entire batch
+        # before publishing its shared immutable task-file store: a denial in
+        # any later task must not leave earlier task input blobs or manifests
+        # behind. The decisions remain task-indexed for downstream Driver
+        # adapters, which attach one child endpoint lease to each launch.
+        from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
+        try:
+            launch_decisions = self._authorize_derived_launch_batch(
+                "daemon", len(tasks)
+            )
+        except DerivedLaunchAdmissionError as error:
+            return self._admission_error_result(error)
+
         ids = []
         group_id = DaemonRunDir.new_group_id()
         parent_addr = self._workdir.path.name
@@ -5454,15 +5467,6 @@ class DaemonManager:
             task_context = self._append_daemon_common_context(task_context)
 
             system_prompt = "[daemon prompt pending MCP startup]"
-
-            # Admission is deliberately before constructing ``DaemonRunDir``:
-            # that constructor creates a per-run directory and durable prompt /
-            # state files. A rejected derived launch must leave no run artifact.
-            from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
-            try:
-                self._authorize_derived_launch("daemon")
-            except DerivedLaunchAdmissionError as error:
-                return self._admission_error_result(error)
 
             # Construct run_dir — creates folder on disk, writes daemon.json,
             # .prompt, .heartbeat, daemon_start event. If FS construction fails,
@@ -5705,6 +5709,17 @@ class DaemonManager:
                 backend_env=backend_env,
             ))
 
+        # Every task is one derived launch request. Complete all admission
+        # decisions before publishing the batch's shared immutable task-file
+        # store, so a later denial cannot retain an earlier task's input.
+        from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
+        try:
+            launch_decisions = self._authorize_derived_launch_batch(
+                "daemon", len(tasks)
+            )
+        except DerivedLaunchAdmissionError as error:
+            return self._admission_error_result(error)
+
         ids = []
         group_id = DaemonRunDir.new_group_id()
         parent_addr = self._workdir.path.name
@@ -5750,14 +5765,6 @@ class DaemonManager:
                     "\n\nParent-provided daemon context (oneshot):\n"
                     + task_context
                 )
-            # The external path has the same durable run-dir boundary as the
-            # native LingTai path. Do not materialize its prompt, state, or
-            # backend MCP configuration until the derived launch is admitted.
-            from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
-            try:
-                self._authorize_derived_launch("daemon")
-            except DerivedLaunchAdmissionError as error:
-                return self._admission_error_result(error)
             try:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._workdir.path,
@@ -9544,7 +9551,30 @@ class DaemonManager:
             "audit_id": error.decision.audit_id,
         }
 
-    def _authorize_derived_launch(self, capability_name: str) -> None:
+    @staticmethod
+    def _close_unconsumed_derived_launch_decisions(decisions: list[object]) -> None:
+        """Release pre-authorized decisions that have not reached a child yet.
+
+        This base layer has no resource-bearing decisions. The Driver adapter
+        layer supplies a child endpoint lease per decision and replaces this
+        hook with deterministic release before it can use batch pre-admission.
+        """
+        return None
+
+    def _authorize_derived_launch_batch(
+        self, capability_name: str, task_count: int
+    ) -> list[object]:
+        """Authorize every child in a batch before any durable batch write."""
+        decisions: list[object] = []
+        try:
+            for _ in range(task_count):
+                decisions.append(self._authorize_derived_launch(capability_name))
+        except Exception:
+            self._close_unconsumed_derived_launch_decisions(decisions)
+            raise
+        return decisions
+
+    def _authorize_derived_launch(self, capability_name: str) -> object:
         """Reach the host decision seam before a daemon launch side effect."""
         from lingtai.kernel.provider_admission import (
             DerivedLaunchAdmissionError,
@@ -9573,6 +9603,7 @@ class DaemonManager:
         )
         if not decision.allowed:
             raise DerivedLaunchAdmissionError(decision)
+        return decision
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s
