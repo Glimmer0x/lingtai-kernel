@@ -252,7 +252,9 @@ argv, environment, or MCP command from the remote caller.
     kernel reports `MSG_CTRUNC`, the adapter closes every descriptor already
     delivered with the ancillary data before failing closed. A non-granted
     decision carrying an unexpected endpoint closes that endpoint while
-    retaining the Driver's decision reason and audit id. Core does
+    retaining the Driver's decision reason and audit id. The response translator
+    owns every delivered descriptor on every path; callers never close a raw
+    descriptor after that translator has adopted or released it. Core does
     not parse fd/frame/registry data. A derived endpoint is server-bound to
     `depth=1` and cannot mint another child. A persistent derived marker means
     authority is required, never granted: missing, closed, malformed, or

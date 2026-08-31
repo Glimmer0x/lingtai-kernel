@@ -261,8 +261,6 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 expect_fd=None,
             )
             decision = self._derived_decision(response, received_fd)
-            if not decision.allowed and received_fd is not None:
-                os.close(received_fd)
             return decision
         except DriverAuthorityTransportError:
             return DerivedLaunchDecision(
@@ -406,6 +404,7 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
     def _derived_decision(
         self, response: dict[str, Any], received_fd: int | None
     ) -> DerivedLaunchDecision:
+        """Translate one response while owning ``received_fd`` on every path."""
         try:
             state, reason, audit_id, admission_id = self._state(response)
         except Exception:

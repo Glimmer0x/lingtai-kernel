@@ -119,6 +119,47 @@ def test_denied_child_endpoint_is_closed_without_erasing_driver_reason(monkeypat
     assert decision.audit_id == "audit-1"
 
 
+def test_derived_decision_is_the_only_owner_of_a_denied_child_descriptor(monkeypatch):
+    """The caller must not double-close a descriptor already released below."""
+    adapter = object.__new__(DriverAuthorityAdapter)
+    adapter._identity = SimpleNamespace(role="root", launch_id="root-1")
+    adapter._exchange = lambda *_args, **_kwargs: (
+        {"version": 1, "state": "denied", "reason_code": "policy_denied", "audit_id": "audit-1"},
+        731,
+    )
+    closed: list[int] = []
+    monkeypatch.setattr(os, "close", closed.append)
+
+    decision = adapter.authorize_derived_launch(
+        RootProviderAdmission("turn-1", "puffo-v0.full-tool-acp-ingress.v1"),
+        DerivedLaunchCapability.AVATAR,
+    )
+
+    assert closed == [731]
+    assert decision.state is ProviderAdmissionState.DENIED
+    assert decision.reason_code == "policy_denied"
+
+
+def test_granted_endpoint_wrapper_owns_cleanup_after_descriptor_adoption(monkeypatch):
+    """A stale raw fd must not be closed after ``socket(fileno=...)`` adopts it."""
+    adapter = object.__new__(DriverAuthorityAdapter)
+    endpoint = SimpleNamespace(close=lambda: closed_wrappers.append(True), fileno=lambda: 731)
+    closed_wrappers: list[bool] = []
+    raw_closes: list[int] = []
+    monkeypatch.setattr(socket, "socket", lambda *, fileno: endpoint)
+    monkeypatch.setattr(os, "set_inheritable", lambda *_args: (_ for _ in ()).throw(OSError("bad fd")))
+    monkeypatch.setattr(os, "close", raw_closes.append)
+
+    with pytest.raises(DriverAuthorityTransportError, match="child endpoint is invalid"):
+        adapter._derived_decision(
+            {"version": 1, "state": "granted", "reason_code": "allowed", "audit_id": "audit-1"},
+            731,
+        )
+
+    assert closed_wrappers == [True]
+    assert raw_closes == []
+
+
 def test_root_driver_adapter_receives_one_child_endpoint_lease_and_consumes_once():
     client, server = socket.socketpair()
     child_client, child_driver = socket.socketpair()
