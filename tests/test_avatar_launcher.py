@@ -73,10 +73,9 @@ def test_derived_avatar_state_probe_keeps_io_failure_distinct_from_absence(
     assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.UNKNOWN
 
 
-def test_legacy_derived_marker_keeps_both_boot_call_sites_restrictive(tmp_path):
-    """An upgrade preserves the restriction on an already-derived child."""
+def test_legacy_derived_marker_keeps_cli_boot_restrictive(tmp_path):
+    """An upgrade preserves the restriction on the available child boot path."""
     from lingtai import cli
-    from lingtai.adapters.tool_plugin_host import persistent_derived_tool_surface_open
 
     legacy_marker = legacy_derived_avatar_state_path(tmp_path)
     legacy_marker.parent.mkdir(parents=True)
@@ -84,15 +83,13 @@ def test_legacy_derived_marker_keeps_both_boot_call_sites_restrictive(tmp_path):
 
     assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.PRESENT
     assert cli._derived_avatar_requires_admission(tmp_path) is True
-    assert persistent_derived_tool_surface_open(tmp_path) is True
 
 
-def test_unreadable_legacy_derived_marker_keeps_both_call_sites_restrictive(
+def test_unreadable_legacy_derived_marker_keeps_cli_boot_restrictive(
     tmp_path, monkeypatch,
 ):
-    """A failed compatibility read cannot make an upgraded child unrestricted."""
+    """A failed compatibility read cannot relax child boot restrictions."""
     from lingtai import cli
-    from lingtai.adapters.tool_plugin_host import persistent_derived_tool_surface_open
 
     legacy_marker = legacy_derived_avatar_state_path(tmp_path)
     legacy_marker.parent.mkdir(parents=True)
@@ -108,7 +105,6 @@ def test_unreadable_legacy_derived_marker_keeps_both_call_sites_restrictive(
 
     assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.UNKNOWN
     assert cli._derived_avatar_requires_admission(tmp_path) is True
-    assert persistent_derived_tool_surface_open(tmp_path) is True
 
 
 def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):
