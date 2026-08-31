@@ -1449,6 +1449,7 @@ def test_avatar_spawned_directory_stays_restricted_without_launch_env(
             return DerivedLaunchDecision(
                 ProviderAdmissionState.GRANTED,
                 "driver_allowed",
+                audit_id="audit-avatar-restart-restricted",
                 child_endpoint_lease=object(),
             )
 
