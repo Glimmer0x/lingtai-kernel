@@ -82,7 +82,8 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   loss, malformed frames, bad versions, and invalid descriptors become
   structured indeterminacy, never a default grant. A failed exchange holds its
   response lock while it clears buffered bytes and closes the endpoint, so a
-  late response cannot become a later decision. This module is an ACP/Driver
+  late response cannot become a later decision; it also validates each decision
+  response's `call_id` before adopting a child endpoint. This module is an ACP/Driver
   boundary, not a registry, identity-binding, or sandbox implementation.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
   quarantines Python application stdout to stderr before Agent construction,

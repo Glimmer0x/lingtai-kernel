@@ -35,6 +35,9 @@ from lingtai.kernel.provider_admission import (
 )
 
 
+_RESPONSE_CALL_IDS: dict[int, str] = {}
+
+
 def _recv_frame(sock: socket.socket) -> dict:
     header = sock.recv(4)
     assert len(header) == 4
@@ -42,10 +45,15 @@ def _recv_frame(sock: socket.socket) -> dict:
     payload = bytearray()
     while len(payload) < size:
         payload.extend(sock.recv(size - len(payload)))
-    return json.loads(bytes(payload).decode("utf-8"))
+    value = json.loads(bytes(payload).decode("utf-8"))
+    if isinstance(value.get("call_id"), str):
+        _RESPONSE_CALL_IDS[sock.fileno()] = value["call_id"]
+    return value
 
 
 def _send_frame(sock: socket.socket, payload: dict, *, fd: int | None = None) -> None:
+    if "state" in payload and "call_id" not in payload:
+        payload = {**payload, "call_id": _RESPONSE_CALL_IDS[sock.fileno()]}
     encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     frame = struct.pack("!I", len(encoded)) + encoded
     if fd is None:
@@ -478,6 +486,50 @@ def test_timeout_invalidates_endpoint_so_a_late_grant_cannot_admit_next_call():
     assert first.state is ProviderAdmissionState.INDETERMINATE
     assert second.state is ProviderAdmissionState.INDETERMINATE
     assert second.audit_id is None
+
+
+def test_mismatched_derived_response_id_closes_a_foreign_child_endpoint():
+    """A valid endpoint from another request cannot become this child's lease."""
+
+    client, server = socket.socketpair()
+    foreign_client, foreign_driver = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {"version": 1, "role": "root", "launch_id": "root-mismatch", "capability": None},
+        )
+        request = _recv_frame(sock)
+        assert request["op"] == "authorize_derived_launch"
+        _send_frame(
+            sock,
+            {
+                "version": 1,
+                "state": "granted",
+                "reason_code": "allowed",
+                "audit_id": "audit-foreign",
+                "call_id": "different-request",
+            },
+            fd=foreign_client.fileno(),
+        )
+        foreign_client.close()
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client)
+    root = RootProviderAdmission("turn-mismatch", "puffo-v0.test")
+    decision = adapter.authorize_derived_launch(root, DerivedLaunchCapability.DAEMON)
+    adapter.close()
+    thread.join(timeout=2)
+    foreign_driver.settimeout(1)
+    try:
+        assert foreign_driver.recv(1) == b""
+    finally:
+        foreign_driver.close()
+
+    assert errors == []
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert decision.audit_id is None
 
 
 def test_invalid_fd_locator_never_falls_back_to_a_legacy_adapter(monkeypatch):

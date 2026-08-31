@@ -259,6 +259,7 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 response, received_fd = self._exchange_locked(
                     {
                         "op": "authorize_derived_launch",
+                        "call_id": str(uuid.uuid4()),
                         "launch_id": self._identity.launch_id,
                         "capability": capability.value,
                     },
@@ -310,6 +311,14 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
         payload = {"version": _PROTOCOL_VERSION, **request}
         self._send_frame(payload)
         response, received_fd = self._recv_frame()
+        request_call_id = request.get("call_id")
+        if request_call_id is not None and response.get("call_id") != request_call_id:
+            if received_fd is not None:
+                try:
+                    os.close(received_fd)
+                except OSError:
+                    pass
+            raise DriverAuthorityTransportError("authority response call_id does not match request")
         if expect_fd is not None and expect_fd != (received_fd is not None):
             if received_fd is not None:
                 os.close(received_fd)

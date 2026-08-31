@@ -256,7 +256,9 @@ argv, environment, or MCP command from the remote caller.
     owns every delivered descriptor on every path; callers never close a raw
     descriptor after that translator has adopted or released it. The adapter
     holds its response lock through failed-exchange invalidation, so a late
-    response cannot become another caller's decision. Core does
+    response cannot become another caller's decision. Every decision response
+    MUST echo its request's `call_id`; mismatch closes any delivered endpoint
+    and fails closed. Core does
     not parse fd/frame/registry data. A derived endpoint is server-bound to
     `depth=1` and cannot mint another child. A persistent derived marker means
     authority is required, never granted: missing, closed, malformed, or
