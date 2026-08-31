@@ -7,8 +7,8 @@ description: >
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.13.0
-last_changed_at: 2026-08-29T00:00:00Z
+version: 0.13.1
+last_changed_at: 2026-08-30T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -308,6 +308,35 @@ Behavior notes:
   receipts, `daemon.json`, and aggregate truth remain readable; choose a bounded
   duration and let the delay-alarm mirror re-expose the channel. Read
   `notification-manual` before selecting the duration or handling expiry.
+
+### Runtime-identity mismatch after refresh
+
+If `emanate` refuses before a new worker starts with either **“resident central
+ daemon manager runtime identity does not match”** or **“starting central daemon
+ manager runtime identity does not match”**, stop retrying and use this manual.
+This is a fail-closed safety fence: it prevents a persistent POSIX manager loaded
+from different code, source root, or daemon-notification protocol from accepting
+new work. Existing queued or active work is deliberately not taken over.
+
+A common cause is an agent that has refreshed or changed runtime source while an
+older resident manager process remains alive (including a legacy record without
+the runtime-identity stamp). It is not by itself evidence that the requested
+model, preset, task, or repository is broken.
+
+1. **Inspect; do not reclaim or kill on a hunch.** Give the runtime owner the
+   error, manager PID/incarnation, runtime-identity record, queue count, and
+   journal states. A mismatch can coexist with real queued or active work.
+2. **Preserve fail-closed safety.** If the PID/incarnation cannot be confirmed,
+   any queue entry exists, or any journal is nonterminal, do not terminate or
+   take over the manager. Escalate to the runtime owner.
+3. **Only an authorized owner may recover an actually idle manager.** After
+   confirming the exact manager process, an empty queue, and terminal-only
+   journal records, perform a controlled manager restart, then run one small
+   no-write daemon check. Refresh/relaunch the agent only through its normal
+   lifecycle procedure; do not edit private manager records to bypass the fence.
+4. **Report the outcome.** State whether a fresh manager wrote a current runtime
+   identity and whether the bounded check dispatched and finished. If it still
+   refuses, preserve the exact error and escalate rather than repeatedly retrying.
 
 ## Core rules to keep resident
 

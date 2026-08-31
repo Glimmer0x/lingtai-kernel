@@ -153,14 +153,16 @@ def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
         raise RuntimeError(
             "resident central daemon manager runtime identity does not match the "
             "current agent (loaded code head, source root, or daemon notification "
-            "protocol); refusing to submit new work"
+            "protocol); refusing to submit new work; see daemon-manual for safe "
+            "diagnosis and recovery"
         )
     if isinstance(started_at, (int, float)) and time.time() - started_at < _PID_STALE_AFTER_S:
         if info.get("manager_runtime_identity") == expected_runtime_identity:
             return
         raise RuntimeError(
             "starting central daemon manager runtime identity does not match the "
-            "current agent; refusing to submit new work"
+            "current agent; refusing to submit new work; see daemon-manual for safe "
+            "diagnosis and recovery"
         )
     token = uuid.uuid4().hex
     _write_private_json(
