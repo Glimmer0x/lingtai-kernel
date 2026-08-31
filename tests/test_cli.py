@@ -1406,7 +1406,10 @@ def test_persisted_derived_child_exposes_both_tools_and_denies_nested_launches(
         "status": "error",
         "message": "derived launch was not admitted: nested_derived_launch_denied",
         "reason_code": "nested_derived_launch_denied",
-        "audit_id": "audit-nested-daemon",
+        # Driver routing is introduced by #1563.  At this layer Core's
+        # structural nested-launch backstop owns the refusal and has no
+        # Driver audit correlation yet.
+        "audit_id": None,
     }
     assert daemon_audit == [
         (

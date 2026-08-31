@@ -5981,7 +5981,7 @@ class DaemonManager:
             except Exception as e:
                 run_dir.mark_failed(e)
                 self._close_unconsumed_derived_launch_decisions(launch_decisions[i:])
-                return {"status": "error", "message": str(e)}
+                return _admission_error_result(e)
 
             # All backend execution now crosses the same detached supervisor
             # boundary.  The parent writes a complete, redacted manifest and

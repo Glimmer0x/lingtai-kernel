@@ -2034,7 +2034,7 @@ def test_daemon_error_boundaries_share_admission_evidence_mapper():
     )
 
     assert _unmapped_daemon_error_return_lines(source) == []
-    assert mapper_calls == 15
+    assert mapper_calls == 18
 
 
 @pytest.mark.parametrize(
