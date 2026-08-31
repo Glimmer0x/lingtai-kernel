@@ -1489,20 +1489,42 @@ def test_profile_daemon_grant_reaches_the_same_recording_supervisor(tmp_path, mo
 def test_profile_daemon_batch_admits_each_child_before_task_file_materialization(
     tmp_path, monkeypatch, backend
 ):
-    """Every child is admitted before the batch publishes immutable inputs."""
+    """Every live Driver grant carries one lease before batch publication.
+
+    LingTai consumes those leases at the detached POSIX boundary.  External
+    daemon backends deliberately reject Driver-owned leases instead of
+    detaching an endpoint into a process they do not own.
+    """
+    from lingtai.adapters.acp.driver_authority import (
+        DriverChildEndpointLease,
+        consume_posix_child_endpoint_lease,
+    )
     from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
     from tests._daemon_helpers import install_fake_detached_owner
 
     class _GrantingPort:
         def __init__(self):
             self.calls = []
+            self.leases = []
+            self.peers = []
+            self.endpoints = []
 
         def authorize_derived_launch(self, parent, capability):
             self.calls.append((parent, capability))
+            if backend == "lingtai":
+                endpoint, peer = socket.socketpair()
+                self.peers.append(peer)
+            else:
+                endpoint = MagicMock()
+            self.endpoints.append(endpoint)
+            lease = DriverChildEndpointLease(endpoint)
+            self.leases.append(lease)
             return DerivedLaunchDecision(
                 ProviderAdmissionState.GRANTED,
                 "derived_launch_allowed_by_batch_test",
                 audit_id=f"audit-daemon-batch-{backend}",
+                child_endpoint_lease=lease,
             )
 
     agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
@@ -1511,6 +1533,22 @@ def test_profile_daemon_batch_admits_each_child_before_task_file_materialization
     port = _GrantingPort()
     agent._derived_launch_admission_port = port
     records = install_fake_detached_owner(monkeypatch)
+    consumed = []
+    if backend == "lingtai":
+        detached_owner = PosixDaemonSupervisorAdapter.spawn_detached
+
+        def _consume_then_record(
+            adapter, request, *, capsule=None, authority_lease=None
+        ):
+            assert authority_lease is not None
+            consumed.append(authority_lease)
+            inherited_fd = consume_posix_child_endpoint_lease(authority_lease)
+            os.close(inherited_fd)
+            return detached_owner(adapter, request, capsule=capsule)
+
+        monkeypatch.setattr(
+            PosixDaemonSupervisorAdapter, "spawn_detached", _consume_then_record
+        )
     input_path = agent._working_dir / "batch-input.txt"
     input_path.write_text("batch task input\n", encoding="utf-8")
 
@@ -1535,11 +1573,22 @@ def test_profile_daemon_batch_admits_each_child_before_task_file_materialization
         result = agent.get_capability("daemon").handle(request)
     finally:
         clear_provider_admission(token)
+        for peer in port.peers:
+            peer.close()
 
-    assert result["status"] == "dispatched"
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
-    assert len(records) == 2
-    assert (agent._working_dir / "daemons" / "_task_files").is_dir()
+    if backend == "lingtai":
+        assert result["status"] == "dispatched"
+        assert consumed == port.leases
+        assert consumed[0] is not consumed[1]
+        assert len(records) == 2
+        assert (agent._working_dir / "daemons" / "_task_files").is_dir()
+    else:
+        assert result["status"] == "error"
+        assert result["message"] == "external daemon backend is unsupported by Driver admission"
+        assert records == []
+        for endpoint in port.endpoints:
+            endpoint.close.assert_called_once_with()
 
 
 def test_profile_daemon_batch_consumes_distinct_driver_lease_per_child(
