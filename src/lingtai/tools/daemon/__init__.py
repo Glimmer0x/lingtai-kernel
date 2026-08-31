@@ -3479,14 +3479,14 @@ class DaemonManager:
         secret_capsule: dict | None = None,
         use_central_manager: bool = False,
     ) -> None:
-        """Write the run manifest and spawn the detached supervisor for it.
+        """Write the run manifest and spawn an already-authorized detached run.
 
-        Raises on any failure (unwritable manifest, spawn error, or a startup
-        handshake timeout) so the caller can mark the run failed and refuse
-        the batch entry cleanly — never claims a detached run started when it
-        did not.
+        The caller must authorize the derived launch before committing it to
+        the canonical dispatch ledger. Raises on any post-admission failure
+        (unwritable manifest, spawn error, or a startup handshake timeout) so
+        the caller can mark the run failed cleanly — never claims a detached
+        run started when it did not.
         """
-        self._authorize_derived_launch("daemon")
         from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
         from lingtai.kernel.daemon_supervisor.manifest import build_manifest, write_manifest
 
@@ -5536,6 +5536,7 @@ class DaemonManager:
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
             try:
+                self._authorize_derived_launch("daemon")
                 self._commit_dispatch(run_dir)
                 self._spawn_detached_lingtai_run(
                     run_dir,

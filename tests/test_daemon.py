@@ -20,6 +20,7 @@ from lingtai.kernel.provider_admission import (
     bind_provider_admission,
     clear_provider_admission,
 )
+from lingtai.kernel import daemon_dispatch
 from lingtai.kernel.llm.base import ChatSession, FunctionSchema, LLMResponse, ToolCall, UsageMetadata
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock, ToolResultBlock
 from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
@@ -1400,6 +1401,16 @@ def test_profile_daemon_launch_reaches_structured_admission_before_supervisor(
     assert result["audit_id"] == "audit-daemon-2a"
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)]
     assert supervisor_calls == []
+    assert daemon_dispatch.read_dispatches(
+        agent._working_dir, full_history=True
+    ).records == ()
+    assert daemon_dispatch.recovery_markers(agent._working_dir) == []
+    run_dirs = [
+        path for path in (agent._working_dir / "daemons").iterdir()
+        if path.is_dir() and path.name.startswith("em-")
+    ]
+    assert len(run_dirs) == 1
+    assert DaemonRunDir.read_state_from_disk(run_dirs[0]).get("dispatch_sequence") is None
     decisions = [row for row in audit if row[0] == "derived_launch_admission_decision"]
     assert decisions == [
         (
