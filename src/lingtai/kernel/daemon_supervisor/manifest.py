@@ -8,6 +8,7 @@ kept dependency-free so it remains a Core schema/validation boundary.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shlex
 from pathlib import Path
@@ -17,6 +18,8 @@ MANIFEST_SCHEMA = "lingtai.daemon_supervisor_manifest.v3"
 _LEGACY_MANIFEST_SCHEMA = "lingtai.daemon_supervisor_manifest.v2"
 MANIFEST_FILENAME = "supervisor_manifest.json"
 DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD = "derived_launch_admission_required"
+_MISSING = object()
+_LOGGER = logging.getLogger(__name__)
 _REQUIRED_FIELDS = (
     "schema", "run_id", "backend", "parent_working_dir", "run_dir", "task",
     "tools", "max_turns", "timeout_s", "group_id",
@@ -44,17 +47,26 @@ def manifest_path_for(run_dir: Path) -> Path:
 
 
 def manifest_requires_derived_launch_admission(manifest: dict) -> bool:
-    """Read the durable restrictive bit without letting malformed v3 widen.
+    """Read the durable restrictive bit without letting downgrade widen.
 
     v2 manifests predate this security property and keep their historical
-    generic behavior. Every v3 manifest is explicit at construction; a missing
-    or malformed value in v3 is deliberately restrictive instead of silently
-    restoring legacy provider I/O.
+    generic behavior only when they carry no restrictive evidence. Every v3
+    manifest is explicit at construction; a missing or malformed value in v3
+    is deliberately restrictive. A non-v3 manifest that still carries the bit
+    is a downgrade signal, not legacy evidence, and remains restrictive with a
+    visible diagnostic.
     """
 
-    if manifest.get("schema") != MANIFEST_SCHEMA:
+    value = manifest.get(DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD, _MISSING)
+    if manifest.get("schema") == MANIFEST_SCHEMA:
+        return value is not False
+    if value is _MISSING or value is False:
         return False
-    return manifest.get(DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD) is not False
+    _LOGGER.warning(
+        "derived_launch_admission_manifest_schema_downgrade",
+        extra={"manifest_schema": manifest.get("schema")},
+    )
+    return True
 
 
 def _is_reference_key(key: object) -> bool:

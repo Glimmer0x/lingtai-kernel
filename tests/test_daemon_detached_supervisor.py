@@ -1394,8 +1394,8 @@ def test_daemon_execution_composition_preserves_cross_mode_endpoint_binding_deni
     assert inner.session.calls == []
 
 
-def test_v3_daemon_manifest_missing_or_malformed_requirement_is_restrictive(tmp_path):
-    """Only an explicit v3 false, or legacy v2, may retain generic behavior."""
+def test_daemon_manifest_restricts_schema_downgrade_with_explicit_evidence(tmp_path):
+    """Only evidence-free legacy manifests may retain generic behavior."""
     from lingtai.kernel.daemon_supervisor.manifest import (
         DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD,
         manifest_requires_derived_launch_admission,
@@ -1412,7 +1412,37 @@ def test_v3_daemon_manifest_missing_or_malformed_requirement_is_restrictive(tmp_
     manifest[DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD] = "not-a-bool"
     assert manifest_requires_derived_launch_admission(manifest) is True
     manifest["schema"] = "lingtai.daemon_supervisor_manifest.v2"
+    assert manifest_requires_derived_launch_admission(manifest) is True
+    manifest[DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD] = False
     assert manifest_requires_derived_launch_admission(manifest) is False
+    manifest.pop(DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD)
+    assert manifest_requires_derived_launch_admission(manifest) is False
+
+
+def test_daemon_manifest_schema_downgrade_is_observable(tmp_path, caplog):
+    from lingtai.kernel.daemon_supervisor.manifest import (
+        DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD,
+        manifest_requires_derived_launch_admission,
+    )
+
+    manifest = {
+        "schema": "unexpected-schema",
+        DERIVED_LAUNCH_ADMISSION_REQUIRED_FIELD: True,
+    }
+    with caplog.at_level("WARNING"):
+        assert manifest_requires_derived_launch_admission(manifest) is True
+    assert "derived_launch_admission_manifest_schema_downgrade" in caplog.text
+
+
+def test_invalid_supervisor_authority_fd_is_logged_and_removed(monkeypatch, caplog):
+    from lingtai.adapters.posix import daemon_supervisor as supervisor_module
+
+    monkeypatch.setattr(supervisor_module, "_SUPERVISOR_AUTHORITY_ENDPOINT", None)
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", "not-a-fd")
+    with caplog.at_level("WARNING"):
+        supervisor_module.adopt_supervisor_authority_endpoint()
+    assert "LINGTAI_DRIVER_AUTHORITY_FD" not in os.environ
+    assert "daemon_supervisor_authority_endpoint_invalid" in caplog.text
 
 
 def test_real_daemon_second_hop_loses_root_fd_but_keeps_the_adopted_endpoint(

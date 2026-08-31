@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import logging
 import re
 import socket
 import subprocess
@@ -48,6 +49,7 @@ _CLI_CREDENTIAL_ENV_NAMES = {
     "cursor": {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CURSOR_API_KEY"},
 }
 _SUPERVISOR_AUTHORITY_ENDPOINT: socket.socket | None = None
+_LOGGER = logging.getLogger(__name__)
 
 
 def adopt_supervisor_authority_endpoint() -> None:
@@ -62,10 +64,17 @@ def adopt_supervisor_authority_endpoint() -> None:
     raw_fd = os.environ.pop("LINGTAI_DRIVER_AUTHORITY_FD", None)
     if raw_fd is None:
         return
+    endpoint: socket.socket | None = None
     try:
         endpoint = socket.socket(fileno=int(raw_fd))
         os.set_inheritable(endpoint.fileno(), False)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if endpoint is not None:
+            try:
+                endpoint.close()
+            except OSError:
+                pass
+        _LOGGER.warning("daemon_supervisor_authority_endpoint_invalid: %s", exc)
         return
     if _SUPERVISOR_AUTHORITY_ENDPOINT is not None:
         _SUPERVISOR_AUTHORITY_ENDPOINT.close()
@@ -73,7 +82,12 @@ def adopt_supervisor_authority_endpoint() -> None:
 
 
 def _take_supervisor_authority_fd(module: str) -> int | None:
-    """Detach the exact endpoint only for the execution-child entrypoint."""
+    """Detach the exact endpoint only for one execution-child spawn attempt.
+
+    An attempted spawn consumes this one-shot transport even if ``Popen`` then
+    fails. The supervisor does not retry with the old endpoint; a later attempt
+    has no authority and must fail closed.
+    """
 
     global _SUPERVISOR_AUTHORITY_ENDPOINT
     if module != EXECUTION_CHILD_MODULE:

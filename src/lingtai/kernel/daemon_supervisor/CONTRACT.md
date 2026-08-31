@@ -58,6 +58,10 @@ or process handle is retained, and no broad process matching is performed.
 When it receives an opaque Driver authority lease, it passes only the resulting
 child endpoint to the detached supervisor and then its exact execution child;
 the root endpoint is close-on-exec and never becomes a child `pass_fds` entry.
+That execution-child spawn attempt consumes the supervisor-held endpoint even
+when process launch fails; the supervisor cannot retry it and any later attempt
+fails closed without authority. An invalid inherited endpoint is discarded and
+recorded as a supervisor diagnostic rather than silently treated as absent.
 Windows has no equivalent Driver endpoint transport and rejects such a lease
 before launch.
 

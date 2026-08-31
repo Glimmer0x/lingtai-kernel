@@ -35,13 +35,18 @@ The supervisor Port and durable run schemas define the narrow process boundary; 
 ## Components
 
 - `__init__.py:34-134` — immutable request wire schema and spawn Port.
-- `manifest.py:44-190` — secret-free manifest build/write/read and identity validation.
+- `manifest.py:48-205` — secret-free manifest build/write/read and identity
+  validation; its derived-admission predicate preserves an explicit restrictive
+  bit across a schema downgrade and emits a diagnostic rather than treating it
+  as evidence-free legacy state.
 - `control.py:12-96` — UUID request spool with schema/run identity and ack markers.
 - `agent_stub.py:1-58` — the minimal agent surface a detached run composes against, so Core owns no live Agent.
 - `adapters/windows/daemon_supervisor.py:117-247` — the Windows launch adapter for the same Port.
 - `tools/daemon/supervisor_runtime.py:77-138` — detached startup identity, run attachment, and terminal dispatch.
 - `tools/daemon/supervisor_runtime.py:219-394` — execution-child ownership plus the exact control/deadline watcher.
-- `adapters/posix/daemon_supervisor.py:94-267` (`PosixDaemonSupervisorAdapter`) — concrete interpreter/session/log launch adapter.
+- `adapters/posix/daemon_supervisor.py:53-283` — concrete interpreter/session/log
+  launch adapter; it adopts one inherited authority endpoint once, logs and
+  discards malformed transport, and transfers it to one execution-child spawn.
 - `tools/daemon/execution_host.py:24-224` — composition root that reuses manager setup and every `_BackendSpec` runner; selected Shell alone invokes its private composer for the run-local `shell_prompt_events.py` NotificationPort adapter and `<run>/shell-jobs` namespace, rather than the stub's absent Agent route or shared parent jobs.
 
 ## Connections
