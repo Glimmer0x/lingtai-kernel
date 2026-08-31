@@ -163,8 +163,8 @@ child is injected immediately before `manual`; per-call dispatch binds
 `build_settings_provider(agent)` to that same family. The provider captures the
 Agent-owned applied snapshot and performs no file I/O. Agent reconstruction
 reads Psyche's strict owner document exactly once, uses the existing prompt
-file-over-inline helper, then replaces the snapshot only after the complete
-prompt-section pass succeeds.
+file-over-inline helper, then publishes the replacement snapshot only after the
+successful final prompt flush.
 
 `psyche` is a mandatory intrinsic: `tools/registry.py` wires it through
 `INTRINSICS`, and it composes its dispatching family per call rather than owning
