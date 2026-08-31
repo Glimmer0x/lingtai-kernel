@@ -168,6 +168,7 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
         if not isinstance(capability, DerivedLaunchCapability):
             return DriverDerivedLaunchGrant(ProviderAdmissionState.INDETERMINATE, "driver_authority_unavailable")
         with self._lock:
+            received_fd: int | None = None
             try:
                 response, received_fd = self._exchange({
                     "op": "authorize_derived_launch", "call_id": self._call_id(),
@@ -184,11 +185,22 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
                             os.close(received_fd)
                         except OSError:
                             pass
+                        received_fd = None
                     return DriverDerivedLaunchGrant(state, reason, audit_id)
                 if received_fd is None:
                     raise DriverAuthorityTransportError("granted launch omitted child endpoint")
-                return DriverDerivedLaunchGrant(state, reason, audit_id, DriverChildEndpointLease(self._checked_endpoint(received_fd)))
+                # _checked_endpoint takes ownership of the descriptor, whether
+                # validation succeeds or fails. Clear this cleanup handle first
+                # so an error cannot close a recycled descriptor a second time.
+                endpoint_fd, received_fd = received_fd, None
+                endpoint = self._checked_endpoint(endpoint_fd)
+                return DriverDerivedLaunchGrant(state, reason, audit_id, DriverChildEndpointLease(endpoint))
             except DriverAuthorityTransportError:
+                if received_fd is not None:
+                    try:
+                        os.close(received_fd)
+                    except OSError:
+                        pass
                 self._close_locked()
                 return DriverDerivedLaunchGrant(ProviderAdmissionState.INDETERMINATE, "driver_authority_unavailable")
 

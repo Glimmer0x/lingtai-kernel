@@ -94,6 +94,28 @@ def test_mismatched_call_id_closes_received_endpoint_and_fails_closed():
     peer.close()
 
 
+def test_malformed_derived_decision_closes_received_endpoint_and_fails_closed():
+    peer, driver_end = socket.socketpair()
+
+    def handler(sock):
+        _hello(sock)
+        request = _recv(sock)
+        _send(sock, {
+            "version": 1, "call_id": request["call_id"], "state": "granted",
+            "reason_code": "",  # invalid decision field
+        }, fd=driver_end.fileno())
+        driver_end.close()
+
+    endpoint, thread, errors = _server(handler)
+    client = DriverAuthorityClient(endpoint)
+    decision = client.request_derived_launch(RootProviderAdmission("turn", "v1"), DerivedLaunchCapability.DAEMON)
+    thread.join(2)
+    assert not errors
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert peer.recv(1) == b""
+    peer.close()
+
+
 def test_granted_launch_has_one_linear_inheritable_false_lease():
     child, driver_end = socket.socketpair()
     def handler(sock):
