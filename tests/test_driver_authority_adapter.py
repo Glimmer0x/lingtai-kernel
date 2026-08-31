@@ -584,6 +584,119 @@ def test_timeout_invalidates_endpoint_so_a_late_grant_cannot_admit_next_call():
     assert second.audit_id is None
 
 
+def test_timeout_invalidation_holds_the_exchange_lock_against_a_concurrent_request(monkeypatch):
+    """A concurrent request cannot consume the timed-out request's late grant.
+
+    The pause widens the former gap between `_exchange()` releasing its lock
+    and the caller invalidating the transport.  A server sends A's late grant
+    only after B has had an opportunity to enter that gap.  Before the fix B
+    returns that grant (`audit-late-first`) even though the server's decision
+    for B is denied.
+    """
+
+    client, server = socket.socketpair()
+    invalidation_started = threading.Event()
+    release_invalidation = threading.Event()
+    late_response_sent = threading.Event()
+    second_request_received = threading.Event()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {"version": 1, "role": "root", "launch_id": "root-concurrent-timeout", "capability": None},
+        )
+        first = _recv_frame(sock)
+        assert first["op"] == "authorize_provider_call"
+        time.sleep(0.04)  # A's 20ms receive timeout has elapsed.
+        try:
+            _send_frame(
+                sock,
+                {
+                    "version": 1,
+                    "state": "granted",
+                    "reason_code": "allowed",
+                    "audit_id": "audit-late-first",
+                },
+            )
+            late_response_sent.set()
+            header = sock.recv(4)
+            if not header:
+                return  # fixed code invalidated the endpoint before B sent
+            assert len(header) == 4
+            size = struct.unpack("!I", header)[0]
+            payload = bytearray()
+            while len(payload) < size:
+                data = sock.recv(size - len(payload))
+                if not data:
+                    return
+                payload.extend(data)
+            second = json.loads(bytes(payload).decode("utf-8"))
+            second_request_received.set()
+            assert second["op"] == "authorize_provider_call"
+            _send_frame(
+                sock,
+                {
+                    "version": 1,
+                    "state": "denied",
+                    "reason_code": "provider_denied",
+                    "audit_id": "audit-second-denied",
+                },
+            )
+        except (BrokenPipeError, ConnectionResetError, EOFError, OSError):
+            # Fixed code closes while holding the exchange lock, so B never
+            # sends a request on this desynchronized endpoint.
+            pass
+
+    original_invalidate = DriverAuthorityAdapter._invalidate_transport_locked
+
+    def pause_invalidation(self):
+        invalidation_started.set()
+        assert release_invalidation.wait(timeout=2)
+        original_invalidate(self)
+
+    monkeypatch.setattr(
+        DriverAuthorityAdapter, "_invalidate_transport_locked", pause_invalidation
+    )
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client, timeout=0.02)
+    root = RootProviderAdmission("turn-concurrent-timeout", "puffo-v0.test")
+    first_results: list = []
+    second_results: list = []
+
+    first_thread = threading.Thread(
+        target=lambda: first_results.append(
+            adapter.authorize_provider_call(root, ProviderCallClass.ROOT)
+        )
+    )
+    second_thread = threading.Thread(
+        target=lambda: second_results.append(
+            adapter.authorize_provider_call(root, ProviderCallClass.ROOT)
+        )
+    )
+    first_thread.start()
+    assert invalidation_started.wait(timeout=2)
+    second_thread.start()
+    assert late_response_sent.wait(timeout=2)
+    # On the old implementation this gives B time to enter the unlocked gap,
+    # send its request, and consume A's late response.  On fixed code B is
+    # blocked on the still-held exchange lock until invalidation closes it.
+    second_request_received.wait(timeout=0.1)
+    release_invalidation.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+    adapter.close()
+    thread.join(timeout=2)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert errors == []
+    assert not second_request_received.is_set()
+    assert first_results[0].state is ProviderAdmissionState.INDETERMINATE
+    assert second_results[0].state is ProviderAdmissionState.INDETERMINATE
+    assert second_results[0].audit_id is None
+
+
 @pytest.mark.parametrize("state", ("granted", "denied"))
 def test_driver_decision_without_audit_id_is_indeterminate(state):
     """Every Driver decision must have a stable audit correlation id."""
