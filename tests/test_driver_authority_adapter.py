@@ -8,6 +8,7 @@ import socket
 import struct
 import threading
 import time
+import traceback
 from types import SimpleNamespace
 
 import pytest
@@ -143,7 +144,13 @@ def test_derived_decision_is_the_only_owner_of_a_denied_child_descriptor(monkeyp
 def test_granted_endpoint_wrapper_owns_cleanup_after_descriptor_adoption(monkeypatch):
     """A stale raw fd must not be closed after ``socket(fileno=...)`` adopts it."""
     adapter = object.__new__(DriverAuthorityAdapter)
-    endpoint = SimpleNamespace(close=lambda: closed_wrappers.append(True), fileno=lambda: 731)
+    endpoint = SimpleNamespace(
+        close=lambda: closed_wrappers.append(True),
+        family=socket.AF_UNIX,
+        type=socket.SOCK_STREAM,
+        getpeername=lambda: "driver",
+        fileno=lambda: 731,
+    )
     closed_wrappers: list[bool] = []
     raw_closes: list[int] = []
     monkeypatch.setattr(socket, "socket", lambda *, fileno: endpoint)
@@ -158,6 +165,42 @@ def test_granted_endpoint_wrapper_owns_cleanup_after_descriptor_adoption(monkeyp
 
     assert closed_wrappers == [True]
     assert raw_closes == []
+
+
+def test_unconnected_unix_endpoint_is_explicitly_closed_by_decision_parser(monkeypatch):
+    """An unconnected child descriptor cannot become a Driver lease."""
+    from lingtai.adapters.acp import driver_authority as authority_module
+
+    adapter = object.__new__(DriverAuthorityAdapter)
+    unconnected = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    close_stacks = []
+    real_socket = authority_module.socket.socket
+
+    class _CloseRecordingSocket(real_socket):
+        def close(self):
+            close_stacks.append(traceback.extract_stack())
+            return super().close()
+
+    monkeypatch.setattr(authority_module.socket, "socket", _CloseRecordingSocket)
+    try:
+        with pytest.raises(DriverAuthorityTransportError, match="child endpoint is invalid"):
+            adapter._derived_decision(
+                {"version": 1, "state": "granted", "reason_code": "allowed", "audit_id": "audit-1"},
+                unconnected.detach(),
+            )
+    finally:
+        # ``detach`` transfers ownership to the parser; this only keeps the
+        # test robust if construction failed before the parser adopted it.
+        try:
+            unconnected.close()
+        except OSError:
+            pass
+
+    assert any(
+        frame.name == "_derived_decision"
+        for stack in close_stacks
+        for frame in stack
+    ), "the parser must explicitly close the endpoint, not defer to __del__"
 
 
 def test_root_driver_adapter_receives_one_child_endpoint_lease_and_consumes_once():
