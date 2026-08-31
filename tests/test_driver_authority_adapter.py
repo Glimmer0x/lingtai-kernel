@@ -222,12 +222,13 @@ def test_root_driver_adapter_receives_one_child_endpoint_lease_and_consumes_once
         assert _recv_frame(sock) == {"version": 1, "op": "hello"}
         _send_frame(sock, {"version": 1, "role": "root", "launch_id": "root-1", "capability": None})
         request = _recv_frame(sock)
-        assert request == {
+        assert {key: request[key] for key in request if key != "call_id"} == {
             "version": 1,
             "op": "authorize_derived_launch",
             "launch_id": "root-1",
             "capability": "avatar",
         }
+        assert isinstance(request["call_id"], str) and request["call_id"]
         _send_frame(
             sock,
             {
