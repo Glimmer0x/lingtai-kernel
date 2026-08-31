@@ -80,7 +80,9 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   every locally delivered descriptor when ancillary data is truncated), and opaque
   single-use lease handling; Core receives typed Port decisions only. Socket
   loss, malformed frames, bad versions, and invalid descriptors become
-  structured indeterminacy, never a default grant. This module is an ACP/Driver
+  structured indeterminacy, never a default grant. A failed exchange holds its
+  response lock while it clears buffered bytes and closes the endpoint, so a
+  late response cannot become a later decision. This module is an ACP/Driver
   boundary, not a registry, identity-binding, or sandbox implementation.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
   quarantines Python application stdout to stderr before Agent construction,

@@ -126,7 +126,8 @@ def test_derived_decision_is_the_only_owner_of_a_denied_child_descriptor(monkeyp
     """The caller must not double-close a descriptor already released below."""
     adapter = object.__new__(DriverAuthorityAdapter)
     adapter._identity = SimpleNamespace(role="root", launch_id="root-1")
-    adapter._exchange = lambda *_args, **_kwargs: (
+    adapter._lock = threading.Lock()
+    adapter._exchange_locked = lambda *_args, **_kwargs: (
         {"version": 1, "state": "denied", "reason_code": "policy_denied", "audit_id": "audit-1"},
         731,
     )
@@ -433,6 +434,50 @@ def test_closed_truncated_or_timed_out_driver_reply_is_structured_indeterminate(
     assert errors == []
     assert decision.state is ProviderAdmissionState.INDETERMINATE
     assert decision.reason_code == "derived_admission_port_unconnected"
+
+
+def test_timeout_invalidates_endpoint_so_a_late_grant_cannot_admit_next_call():
+    """A response belongs to its request, never to the next socket wait."""
+
+    client, server = socket.socketpair()
+
+    def handler(sock):
+        assert _recv_frame(sock) == {"version": 1, "op": "hello"}
+        _send_frame(
+            sock,
+            {"version": 1, "role": "root", "launch_id": "root-timeout", "capability": None},
+        )
+        first = _recv_frame(sock)
+        assert first["op"] == "authorize_provider_call"
+        # The first wait expires at 20ms; this late response must not be
+        # consumed as a decision for the subsequent request.
+        time.sleep(0.03)
+        try:
+            _send_frame(
+                sock,
+                {
+                    "version": 1,
+                    "state": "granted",
+                    "reason_code": "allowed",
+                    "audit_id": "audit-late-first",
+                },
+            )
+            _recv_frame(sock)
+        except (BrokenPipeError, ConnectionResetError, EOFError, OSError):
+            pass
+
+    thread, errors = _server_thread(server, handler)
+    adapter = DriverAuthorityAdapter(client, timeout=0.02)
+    root = RootProviderAdmission("turn-timeout", "puffo-v0.test")
+    first = adapter.authorize_provider_call(root, ProviderCallClass.ROOT)
+    second = adapter.authorize_provider_call(root, ProviderCallClass.ROOT)
+    adapter.close()
+    thread.join(timeout=2)
+
+    assert errors == []
+    assert first.state is ProviderAdmissionState.INDETERMINATE
+    assert second.state is ProviderAdmissionState.INDETERMINATE
+    assert second.audit_id is None
 
 
 def test_invalid_fd_locator_never_falls_back_to_a_legacy_adapter(monkeypatch):

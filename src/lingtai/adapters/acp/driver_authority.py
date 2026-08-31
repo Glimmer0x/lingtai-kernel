@@ -216,26 +216,28 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 return ProviderCallDecision(ProviderAdmissionState.DENIED, "provider_parent_endpoint_mismatch")
         else:
             return ProviderCallDecision(ProviderAdmissionState.INDETERMINATE, "derived_admission_port_unconnected")
-        try:
-            response, received_fd = self._exchange(
-                {
-                    "op": "authorize_provider_call",
-                    "call_id": str(uuid.uuid4()),
-                    "launch_id": self._identity.launch_id,
-                    "provider": "llm",
-                    "capability": call_class.value,
-                },
-                expect_fd=False,
-            )
-            if received_fd is not None:
-                os.close(received_fd)
-                raise DriverAuthorityTransportError("provider decision must not return an fd")
-            return self._provider_decision(response)
-        except DriverAuthorityTransportError:
-            return ProviderCallDecision(
-                ProviderAdmissionState.INDETERMINATE,
-                "derived_admission_port_unconnected",
-            )
+        with self._lock:
+            try:
+                response, received_fd = self._exchange_locked(
+                    {
+                        "op": "authorize_provider_call",
+                        "call_id": str(uuid.uuid4()),
+                        "launch_id": self._identity.launch_id,
+                        "provider": "llm",
+                        "capability": call_class.value,
+                    },
+                    expect_fd=False,
+                )
+                if received_fd is not None:
+                    os.close(received_fd)
+                    raise DriverAuthorityTransportError("provider decision must not return an fd")
+                return self._provider_decision(response)
+            except DriverAuthorityTransportError:
+                self._invalidate_transport_locked()
+                return ProviderCallDecision(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "derived_admission_port_unconnected",
+                )
 
     def authorize_derived_launch(
         self,
@@ -252,34 +254,55 @@ class DriverAuthorityAdapter(ProviderCallAdmissionPort):
                 ProviderAdmissionState.INDETERMINATE,
                 "derived_launch_admission_port_unconnected",
             )
-        try:
-            response, received_fd = self._exchange(
-                {
-                    "op": "authorize_derived_launch",
-                    "launch_id": self._identity.launch_id,
-                    "capability": capability.value,
-                },
-                expect_fd=None,
-            )
-            decision = self._derived_decision(response, received_fd)
-            return decision
-        except DriverAuthorityTransportError:
-            return DerivedLaunchDecision(
-                ProviderAdmissionState.INDETERMINATE,
-                "derived_launch_admission_port_unconnected",
-            )
+        with self._lock:
+            try:
+                response, received_fd = self._exchange_locked(
+                    {
+                        "op": "authorize_derived_launch",
+                        "launch_id": self._identity.launch_id,
+                        "capability": capability.value,
+                    },
+                    expect_fd=None,
+                )
+                return self._derived_decision(response, received_fd)
+            except DriverAuthorityTransportError:
+                # `_derived_decision` owns a received launch fd on every path:
+                # it transfers a valid grant into the opaque lease, or closes
+                # it before raising. Do not close it here a second time.
+                self._invalidate_transport_locked()
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "derived_launch_admission_port_unconnected",
+                )
 
     def close(self) -> None:
+        with self._lock:
+            self._close_locked()
+
+    def _close_locked(self) -> None:
+        """Release the stream while request/response ownership is exclusive."""
+
+        self._buffer.clear()
         try:
             self._socket.close()
         except OSError:
             pass
 
-    def _exchange(
-        self, request: dict[str, Any], *, expect_fd: bool | None
-    ) -> tuple[dict[str, Any], int | None]:
+    def _invalidate_transport(self) -> None:
+        """Discard a desynchronized stream after any failed exchange.
+
+        A timeout leaves it unknowable whether a later frame belongs to the
+        request that timed out.  The adapter therefore clears its partial-frame
+        buffer and closes the endpoint before any later request can exchange.
+        """
+
         with self._lock:
-            return self._exchange_locked(request, expect_fd=expect_fd)
+            self._invalidate_transport_locked()
+
+    def _invalidate_transport_locked(self) -> None:
+        """Discard the stream before another caller can use it."""
+
+        self._close_locked()
 
     def _exchange_locked(
         self, request: dict[str, Any], *, expect_fd: bool | None
