@@ -4,9 +4,11 @@ from __future__ import annotations
 import array
 import json
 import os
+import select
 import socket
 import struct
 import threading
+from unittest.mock import patch
 
 from lingtai.adapters.acp.driver_authority import (
     DriverAuthorityClient,
@@ -113,3 +115,23 @@ def test_granted_launch_has_one_linear_inheritable_false_lease():
         pass
     else:
         raise AssertionError("lease was reusable")
+
+
+def test_detach_failure_leaves_lease_closable():
+    endpoint, peer = socket.socketpair()
+    from lingtai.adapters.acp.driver_authority import DriverChildEndpointLease
+
+    lease = DriverChildEndpointLease(endpoint)
+    with patch.object(socket.socket, "detach", side_effect=OSError("injected detach failure")):
+        try:
+            lease.consume_for_posix_spawn()
+        except DriverAuthorityTransportError:
+            pass
+        else:
+            raise AssertionError("detach failure did not surface")
+
+    lease.close()
+    ready, _, _ = select.select([peer], [], [], 0.2)
+    assert ready == [peer]
+    assert peer.recv(1) == b""
+    peer.close()
