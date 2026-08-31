@@ -149,3 +149,8 @@ scope.
 `puffo-v0` is a second gate on its controlled entrypoint, not host isolation:
 the same OS identity can still alter the registry or bypass it by launching the
 generic `--agent-dir` ACP command. That is an explicit host trust boundary.
+
+`driver_authority.py` is process-local protocol state: one authenticated
+AF_UNIX stream, a bounded receive buffer, one request lock, endpoint identity,
+and any one-use lease not yet consumed by a future launch consumer. It contains
+no daemon queue, supervisor, profile, or persistent state.
