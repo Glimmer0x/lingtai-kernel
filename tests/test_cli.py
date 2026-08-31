@@ -990,7 +990,7 @@ def test_run_marks_persisted_avatar_child_as_requiring_authority(monkeypatch, tm
     monkeypatch.setattr(venv_resolve, "resolve_venv", lambda data: tmp_path / "runtime-venv")
     monkeypatch.delenv("LINGTAI_DERIVED_AVATAR_EXECUTION", raising=False)
     state_path = derived_avatar_state_path(tmp_path)
-    state_path.parent.mkdir(parents=True)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(DERIVED_AVATAR_STATE), encoding="utf-8")
 
     cli.run(tmp_path)
@@ -1040,7 +1040,7 @@ def test_run_keeps_malformed_persisted_avatar_state_restrictive(monkeypatch, tmp
     monkeypatch.setattr(venv_resolve, "resolve_venv", lambda data: tmp_path / "runtime-venv")
     monkeypatch.delenv("LINGTAI_DERIVED_AVATAR_EXECUTION", raising=False)
     state_path = derived_avatar_state_path(tmp_path)
-    state_path.parent.mkdir(parents=True)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text("not-json", encoding="utf-8")
 
     cli.run(tmp_path)
@@ -1100,7 +1100,7 @@ def test_avatar_child_cli_boot_reaches_structured_missing_authority_denial(
 
     monkeypatch.delenv("LINGTAI_DERIVED_AVATAR_EXECUTION", raising=False)
     state_path = derived_avatar_state_path(tmp_path)
-    state_path.parent.mkdir(parents=True)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(DERIVED_AVATAR_STATE), encoding="utf-8")
 
     cli.run(tmp_path)
