@@ -176,8 +176,14 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
                 state, reason, audit_id = self._decision(response)
                 if state is not ProviderAdmissionState.GRANTED:
                     if received_fd is not None:
-                        os.close(received_fd)
-                        raise DriverAuthorityTransportError("non-grant must not return an endpoint")
+                        # The policy outcome is authoritative even if the
+                        # response also violates endpoint framing. Release the
+                        # unexpected descriptor without erasing its reason or
+                        # audit evidence.
+                        try:
+                            os.close(received_fd)
+                        except OSError:
+                            pass
                     return DriverDerivedLaunchGrant(state, reason, audit_id)
                 if received_fd is None:
                     raise DriverAuthorityTransportError("granted launch omitted child endpoint")
@@ -225,11 +231,13 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
             def read_exact(count: int) -> bytes:
                 while len(self._buffer) < count:
                     data, ancdata, flags, _ = self._socket.recvmsg(_MAX_FRAME_BYTES + 4, socket.CMSG_SPACE(fds.itemsize))
-                    if not data or flags & socket.MSG_CTRUNC:
-                        raise DriverAuthorityTransportError("authority response transport failed")
                     for level, kind, payload in ancdata:
                         if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
                             fds.frombytes(payload[:len(payload) - len(payload) % fds.itemsize])
+                    if not data:
+                        raise DriverAuthorityTransportError("authority peer closed")
+                    if flags & socket.MSG_CTRUNC:
+                        raise DriverAuthorityTransportError("authority ancillary data was truncated")
                     self._buffer.extend(data)
                 value = bytes(self._buffer[:count]); del self._buffer[:count]
                 return value
