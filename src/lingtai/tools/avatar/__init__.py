@@ -43,11 +43,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
+from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.i18n import t
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 from ..tool_family import ChildTool, SettingsProvider, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
-from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
+from ._launcher import (
+    DERIVED_AVATAR_EXECUTION_ENV,
+    DERIVED_AVATAR_STATE,
+    AvatarLaunchReceipt,
+    AvatarLaunchRequest,
+    AvatarLauncherPort,
+    derived_avatar_state_path,
+)
 from .settings import (
     AVATAR_NAME_MAX_CHARACTERS,
     AVATAR_NAME_MIN_CHARACTERS,
@@ -615,6 +623,16 @@ class AvatarManager:
             encoding="utf-8"
         )
 
+        # Derived status belongs to the child directory, not this particular
+        # process invocation.  A later ``lingtai run <dir>`` therefore keeps
+        # the restrictive nested-launch requirement even if a wrapper drops
+        # the redundant environment marker.
+        atomic_write_json(
+            derived_avatar_state_path(avatar_working_dir),
+            DERIVED_AVATAR_STATE,
+            sort_keys=True,
+        )
+
         # Drop the spawn prompt as a `.prompt` signal file — the avatar's
         # kernel watcher consumes it on first poll and delivers it once.
         (avatar_working_dir / ".prompt").write_text(first_prompt, encoding="utf-8")
@@ -907,7 +925,14 @@ class AvatarManager:
         logs_dir.mkdir(parents=True, exist_ok=True)
         stderr_path = logs_dir / "spawn.stderr"
         receipt = self._launcher.launch(
-            AvatarLaunchRequest(argv=cmd, stderr_path=stderr_path)
+            AvatarLaunchRequest(
+                argv=cmd,
+                stderr_path=stderr_path,
+                # Redundant boot signal only. The durable child state written
+                # during _spawn is authoritative for subsequent/restarted
+                # launches and never carries a grant or authority bearer.
+                environment={DERIVED_AVATAR_EXECUTION_ENV: "1"},
+            )
         )
         return receipt, stderr_path
 

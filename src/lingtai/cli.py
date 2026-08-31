@@ -327,6 +327,23 @@ def _check_duplicate_process(working_dir: Path) -> None:
         sys.exit(1)
 
 
+def _derived_avatar_requires_admission(working_dir: Path) -> bool:
+    """Whether durable avatar state restricts nested derived launches.
+
+    The state is deliberately presence-based.  The only safe way a child can
+    become less restricted is for the marker to be absent; a malformed file,
+    directory, or symlink at the marker location therefore remains restrictive.
+    It is not an authority credential and is only a defense against accidental
+    loss of the requirement in a trusted-host deployment.
+    """
+    from lingtai.tools.avatar._launcher import (
+        DerivedAvatarState,
+        probe_derived_avatar_state,
+    )
+
+    return probe_derived_avatar_state(working_dir) is not DerivedAvatarState.ABSENT
+
+
 def run(working_dir: Path) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
     _check_duplicate_process(working_dir)
@@ -356,7 +373,18 @@ def run(working_dir: Path) -> None:
     # explicitly edit it if they want to persist this choice.
     data["venv_path"] = str(venv_dir)
 
-    agent = build_agent(data, working_dir)
+    # Avatar child processes persist a restrictive state in their own working
+    # directory. The environment marker is only redundant transport for the
+    # immediate launch. Neither carries a parent, grant, or authority bearer.
+    from lingtai.tools.avatar._launcher import DERIVED_AVATAR_EXECUTION_ENV
+
+    build_options = {}
+    if (
+        _derived_avatar_requires_admission(working_dir)
+        or os.environ.get(DERIVED_AVATAR_EXECUTION_ENV) == "1"
+    ):
+        build_options["_requires_derived_launch_admission_port"] = True
+    agent = build_agent(data, working_dir, **build_options)
     agent._venv_path = str(venv_dir)
     _install_signal_handlers(working_dir, agent)
 

@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/settings.py
+  - src/lingtai/kernel/_fsutil.py
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
@@ -15,6 +16,8 @@ related_files:
   - src/lingtai/adapters/avatar_launcher.py
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/adapters/posix/avatar_launcher.py
+  - src/lingtai/cli.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/avatar/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - tests/test_avatar_rules.py
@@ -37,8 +40,9 @@ maintenance: |
 Avatar capability — spawn independent peer agents (分身) as fully detached
 processes. Two modes:
 
-- **Shallow (初生):** Copy `init.json` to a new working dir, strip identity,
-  launch. The avatar gets the same LLM config + capabilities but no history.
+- **Shallow (初生):** Copy `init.json`, write restrictive
+  `.lingtai-derived-child.json` to a new working dir, strip identity, launch.
+  The avatar gets the same LLM config + capabilities but no history.
 - **Deep (二重身):** Copy identity and durable knowledge (`system/`, `knowledge/`, `exports/`)
   plus `init.json`, strip name + history. The avatar is a doppelgänger — same
   character, pad, knowledge — but starts a fresh conversation.
@@ -51,8 +55,13 @@ independent life — its existence does not depend on yours.
 - `avatar/__init__.py` — static official `DECLARATION`, settings binding, local
   manual child, validation, preparation, boot policy, ledger, rules, schemas,
   and registrar setup. The core class is `AvatarManager`.
-- `avatar/_launcher.py` — immutable launch request/receipt and the avatar-local
-  opaque-handle Port.
+- `avatar/_launcher.py` — immutable launch request/receipt, the avatar-local
+  opaque-handle Port, current restrictive child-boot marker name, read-only
+  legacy-marker compatibility path, and their shared present/absent/unknown
+  marker probe.
+- `cli.py:run()` — consumes that marker when an avatar process boots and makes
+  a missing nested-derived authority fail closed; it does not receive authority
+  through the environment.
 - `avatar/settings.py` — the no-I/O `AvatarSettingsProvider` and the constants
   shared with Avatar's runtime validation/default/lifecycle consumers. It owns
   no store, environment reader, runtime object, or writer.
@@ -156,6 +165,16 @@ avatar/__init__.py
 - **Relative path re-rooting:** Preset paths (`default`, `active`, `allowed`) that are relative are re-rooted against the parent's working dir so they remain valid from the avatar's different directory.
 - **Liveness check:** Before spawning, existing ledger entries are observed through a target-bound `PosixAgentPresenceStoreAdapter` and Core `observe_alive()` policy. If a live avatar with the same name exists, the spawn is refused with `already_active`.
 - **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or Port exit truth within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported. Port release after observation never kills a live slow avatar.
+- **Derived child requirement:** `_spawn()` atomically writes
+  `.lingtai-derived-child.json` before launch, outside the child-managed
+  `system/` namespace. The shared probe also treats a legacy
+  `system/derived_child.json` as restrictive so existing children retain their
+  requirement after upgrade; only both locations being missing is absence.
+  `cli.run()` reads that durable state on every boot and turns it into the
+  restrictive requirement that any nested daemon/avatar launch has authority.
+  The launcher also adds
+  `LINGTAI_DERIVED_AVATAR_EXECUTION=1` as redundant immediate-launch defense.
+  Neither form carries a parent, grant, or authority bearer.
 - **Deep copy scope guard:** `_prepare_deep()` asserts `dst.parent == src.parent` to prevent rmtree from reaching outside the network root.
 - **Mission-quality gate (issue #33):** Before any filesystem mutation, `_spawn` runs `_mission_looks_unsafe(reasoning)` — empty / sub-20-char / debug-placeholder missions return `{"status": "confirmation_needed", ...}` unless `confirm=true`. The dry-run path is exempt (its purpose is preview without commitment).
 - **Dry-run (issue #33):** `dry_run=true` short-circuits after parent `init.json` is loaded and before any working dir is created or process launched, returning `{"status": "dry_run", "preview": {...}}`. The preview includes whether the mission would have tripped the quality gate.

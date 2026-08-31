@@ -67,6 +67,22 @@ def test_windows_launch_uses_detached_flags_and_disconnects_streams(tmp_path):
     assert stderr.parent.is_dir()
 
 
+def test_windows_launch_propagates_explicit_derived_child_requirement(tmp_path):
+    process = MagicMock(pid=910, poll=MagicMock(return_value=None))
+    stderr = tmp_path / "logs" / "spawn.stderr"
+    request = AvatarLaunchRequest(
+        ("python", "-m", "lingtai", "run", "/avatar"),
+        stderr,
+        environment={"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"},
+    )
+    with patch(
+        "lingtai.adapters.windows.avatar_launcher.subprocess.Popen",
+        return_value=process,
+    ) as popen:
+        WindowsAvatarLauncherAdapter().launch(request)
+    assert popen.call_args.kwargs["env"]["LINGTAI_DERIVED_AVATAR_EXECUTION"] == "1"
+
+
 def test_windows_terminate_and_force_terminate_both_forceful():
     """Owner decision U7: both map to the handle's forceful kill/terminate;
     the adapter never pretends a graceful tier exists."""

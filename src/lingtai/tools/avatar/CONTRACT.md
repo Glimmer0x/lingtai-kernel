@@ -1,12 +1,13 @@
 ---
 name: avatar-contract
 tool: avatar
-contract_version: 5
+contract_version: 6
 related_files:
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/settings.py
+  - src/lingtai/kernel/_fsutil.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/adapters/tool_plugin_host.py
@@ -15,6 +16,8 @@ related_files:
   - src/lingtai/adapters/avatar_launcher.py
   - src/lingtai/adapters/posix/avatar_launcher.py
   - src/lingtai/adapters/windows/avatar_launcher.py
+  - src/lingtai/cli.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
@@ -76,6 +79,14 @@ per-action `input` object, and the model-facing root is exactly `action`,
 - `avatar` joins the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist so the
   root `summarize` boolean it advertises is honored by the single central
   summarizer rather than silently ignored.
+
+**contract_version 6**: each spawned avatar persists a restrictive
+`.lingtai-derived-child.json` marker before it is launched, outside the
+child-managed `system/` namespace. This makes the
+requirement for nested derived-launch authority survive a direct restart of the
+same child directory; the launch environment marker is redundant only. It does
+not carry, create, or validate authority, and it does not claim to withstand a
+same-OS-user child that can edit its own directory.
 
 Schema composition and envelope dispatch are delegated to the optional generic
 `src/lingtai/tools/tool_family/` infrastructure. That is an implementation
@@ -286,7 +297,8 @@ the network root (`<parent>/..`):
   .rules                          # distributed rules signal
   logs/spawn.stderr               # captured child stderr for boot diagnosis
   logs/agent.log                  # rotating stdlib logging (boot + runtime warnings)
-  system/ knowledge/ exports/ combo.json   # deep mode only
+  .lingtai-derived-child.json     # durable restrictive derived-child state
+  knowledge/ exports/ combo.json  # deep mode only (system/ also has deep state)
 ```
 
 The avatar's `init.json` is a deep copy of the parent's with: `agent_name` set,
@@ -302,10 +314,23 @@ live descendant.
 
 ## Cross-platform launcher contract
 
+- `AvatarManager` writes `.lingtai-derived-child.json` before process launch.
+  Its presence is the authoritative restrictive state: every later
+  `lingtai run <dir>` treats that directory as derived and requires authority
+  before a nested daemon/avatar launch. Malformed or unexpected marker state
+  remains restrictive. For upgrade compatibility, the former
+  `system/derived_child.json` location is also restrictive when present; only
+  `FileNotFoundError` from both locations relaxes the state, while any other
+  read failure remains restrictive. This marker is not a credential, grant,
+  parent identity, or authorization boundary; in the same-OS-user trusted-host
+  model it protects against accidental launch-path/configuration loss, not a
+  child that can edit its own directory.
 - `AvatarManager` resolves the existing interpreter policy and submits the
   exact argv `[python, "-m", "lingtai", "run", <dir>]` plus
-  `logs/spawn.stderr` to the avatar-local Port. Cwd and environment are
-  inherited; the Port does not add a cwd or environment override.
+  `logs/spawn.stderr` to the avatar-local Port. Cwd is inherited. The
+  `LINGTAI_DERIVED_AVATAR_EXECUTION=1` environment override is redundant
+  immediate-launch defense only; it is non-secret and never carries an
+  authority bearer.
 - The Port returns a positive PID and an opaque adapter handle. `poll()` is
   nonblocking and returns the exact integer child return code or `None`.
 - Production adapters disconnect stdin/stdout and own a binary-write stderr

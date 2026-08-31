@@ -1,6 +1,7 @@
 """POSIX production adapter for the avatar launcher Port."""
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import Any
 
@@ -12,10 +13,15 @@ class PosixAvatarLauncherAdapter:
         request.stderr_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_fh = request.stderr_path.open("wb")
         try:
-            process = subprocess.Popen(
-                list(request.argv), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=stderr_fh, start_new_session=True,
-            )
+            kwargs = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": stderr_fh,
+                "start_new_session": True,
+            }
+            if request.environment is not None:
+                kwargs["env"] = {**os.environ, **request.environment}
+            process = subprocess.Popen(list(request.argv), **kwargs)
         finally:
             stderr_fh.close()
         return AvatarLaunchReceipt(process.pid, process)

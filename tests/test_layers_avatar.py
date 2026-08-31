@@ -98,6 +98,35 @@ class TestAvatarManager:
         assert "bash" not in child_caps
         assert "avatar" in child_caps
 
+    @pytest.mark.parametrize("avatar_type", ["shallow", "deep"])
+    def test_spawn_persists_restrictive_derived_child_state(self, tmp_path, avatar_type):
+        """Every spawn mode keeps the child directory derived after copying."""
+        from lingtai.agent import Agent
+        from lingtai.tools.avatar._launcher import (
+            DERIVED_AVATAR_STATE,
+            derived_avatar_state_path,
+        )
+
+        parent = Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=tmp_path / "test",
+            capabilities=["avatar"],
+        )
+        result = parent.get_capability("avatar").handle(
+            {
+                "action": "spawn",
+                "input": {"name": "child", "type": avatar_type, "confirm": True},
+            }
+        )
+
+        assert result["status"] == "ok"
+        assert json.loads(
+            derived_avatar_state_path(parent._working_dir.parent / "child").read_text(
+                encoding="utf-8"
+            )
+        ) == DERIVED_AVATAR_STATE
+
     def test_spawn_inherits_covenant(self, tmp_path):
         """Spawned agent should inherit parent's covenant."""
         from lingtai.agent import Agent
@@ -273,31 +302,35 @@ class TestAvatarManager:
         proc = MagicMock(pid=12345)
         proc.poll.return_value = None
         receipt = AvatarLaunchReceipt(pid=12345, handle=proc)
-        monkeypatch.setattr(
-            AvatarManager,
-            "_launch",
-            lambda _self, working_dir: (
-                launch_calls.append(working_dir)
-                or (receipt, Path("/tmp/avatar-positive-2a.stderr"))
-            ),
-        )
-        parent = Agent(
-            service=make_mock_service(),
-            agent_name="parent",
-            working_dir=tmp_path / "parent",
-            capabilities=["avatar"],
-            _turn_origin_policy=RUNTIME_POLICY,
-            derived_launch_admission_port=_GrantingPort(),
-        )
-        port = parent._derived_launch_admission_port
-        root = RootProviderAdmission("root-avatar-positive-2a", RUNTIME_POLICY.policy_version)
-        token = bind_provider_admission(root)
-        try:
-            result = parent.get_capability("avatar").handle(
-                {"action": "spawn", "input": {"name": "child", "confirm": True}}
+        # Scope this override inside the autouse fixture's AvatarManager patch.
+        # A test-level monkeypatch restored after that fixture would otherwise
+        # leave its stale mock behind for later launcher-contract tests.
+        with monkeypatch.context() as launch_patch:
+            launch_patch.setattr(
+                AvatarManager,
+                "_launch",
+                lambda _self, working_dir: (
+                    launch_calls.append(working_dir)
+                    or (receipt, Path("/tmp/avatar-positive-2a.stderr"))
+                ),
             )
-        finally:
-            clear_provider_admission(token)
+            parent = Agent(
+                service=make_mock_service(),
+                agent_name="parent",
+                working_dir=tmp_path / "parent",
+                capabilities=["avatar"],
+                _turn_origin_policy=RUNTIME_POLICY,
+                derived_launch_admission_port=_GrantingPort(),
+            )
+            port = parent._derived_launch_admission_port
+            root = RootProviderAdmission("root-avatar-positive-2a", RUNTIME_POLICY.policy_version)
+            token = bind_provider_admission(root)
+            try:
+                result = parent.get_capability("avatar").handle(
+                    {"action": "spawn", "input": {"name": "child", "confirm": True}}
+                )
+            finally:
+                clear_provider_admission(token)
 
         assert result["status"] == "ok"
         assert port.calls == [(root, DerivedLaunchCapability.AVATAR)]

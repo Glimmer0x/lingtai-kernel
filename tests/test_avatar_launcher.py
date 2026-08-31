@@ -4,7 +4,14 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from lingtai.tools.avatar import AvatarManager
-from lingtai.tools.avatar._launcher import AvatarLaunchReceipt, AvatarLaunchRequest
+from lingtai.tools.avatar._launcher import (
+    AvatarLaunchReceipt,
+    AvatarLaunchRequest,
+    DerivedAvatarState,
+    derived_avatar_state_path,
+    legacy_derived_avatar_state_path,
+    probe_derived_avatar_state,
+)
 from lingtai.adapters.posix.avatar_launcher import PosixAvatarLauncherAdapter
 
 
@@ -30,6 +37,87 @@ def test_posix_launch_contract_and_release(tmp_path):
     adapter.force_terminate(process)
     process.terminate.assert_called_once()
     process.kill.assert_called_once()
+
+
+def test_posix_launch_propagates_explicit_derived_child_requirement(tmp_path):
+    """A derived-avatar marker tightens child boot without carrying authority."""
+    process = MagicMock(pid=418, poll=MagicMock(return_value=None))
+    stderr = tmp_path / "logs" / "spawn.stderr"
+    request = AvatarLaunchRequest(
+        ("python", "-m", "lingtai", "run", "/avatar"),
+        stderr,
+        environment={"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"},
+    )
+    with patch("lingtai.adapters.posix.avatar_launcher.subprocess.Popen", return_value=process) as popen:
+        PosixAvatarLauncherAdapter().launch(request)
+    assert popen.call_args.kwargs["env"]["LINGTAI_DERIVED_AVATAR_EXECUTION"] == "1"
+
+
+def test_derived_avatar_state_probe_keeps_io_failure_distinct_from_absence(
+    tmp_path, monkeypatch,
+):
+    """Only a missing marker relaxes the durable child restriction."""
+    marker = derived_avatar_state_path(tmp_path)
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.ABSENT
+    marker.write_text("present", encoding="utf-8")
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.PRESENT
+
+    real_lstat = Path.lstat
+
+    def fail_for_marker(path):
+        if path == marker:
+            raise PermissionError("simulated marker read failure")
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_for_marker)
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.UNKNOWN
+
+
+def test_legacy_derived_marker_keeps_cli_boot_restrictive(tmp_path):
+    """An upgrade preserves the restriction on the available child boot path."""
+    from lingtai import cli
+
+    legacy_marker = legacy_derived_avatar_state_path(tmp_path)
+    legacy_marker.parent.mkdir(parents=True)
+    legacy_marker.write_text("present", encoding="utf-8")
+
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.PRESENT
+    assert cli._derived_avatar_requires_admission(tmp_path) is True
+
+
+def test_unreadable_legacy_derived_marker_keeps_cli_boot_restrictive(
+    tmp_path, monkeypatch,
+):
+    """A failed compatibility read cannot relax child boot restrictions."""
+    from lingtai import cli
+
+    legacy_marker = legacy_derived_avatar_state_path(tmp_path)
+    legacy_marker.parent.mkdir(parents=True)
+    legacy_marker.write_text("present", encoding="utf-8")
+    real_lstat = Path.lstat
+
+    def fail_for_legacy_marker(path):
+        if path == legacy_marker:
+            raise PermissionError("simulated legacy marker read failure")
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_for_legacy_marker)
+
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.UNKNOWN
+    assert cli._derived_avatar_requires_admission(tmp_path) is True
+
+
+def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):
+    """The production avatar launch request carries no authority bearer."""
+    launcher = MagicMock()
+    launcher.launch.return_value = AvatarLaunchReceipt(419, object())
+    manager = AvatarManager(SimpleNamespace(), launcher=launcher)
+    with patch("lingtai.venv_resolve.resolve_venv", return_value=tmp_path), patch(
+        "lingtai.venv_resolve.venv_python", return_value=tmp_path / "python"
+    ):
+        manager._launch(tmp_path)
+    request = launcher.launch.call_args.args[0]
+    assert request.environment == {"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"}
 
 
 def test_manager_boot_policy_uses_opaque_port_and_preserves_precedence(tmp_path):
