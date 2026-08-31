@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import re
+import socket
 import threading
 import time
 from pathlib import Path
@@ -1539,6 +1540,90 @@ def test_profile_daemon_batch_admits_each_child_before_task_file_materialization
     assert port.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
     assert len(records) == 2
     assert (agent._working_dir / "daemons" / "_task_files").is_dir()
+
+
+def test_profile_daemon_batch_consumes_distinct_driver_lease_per_child(
+    tmp_path, monkeypatch
+):
+    """Batch pre-admission must never hand one one-shot lease to two children."""
+    from lingtai.adapters.acp.driver_authority import (
+        DriverAuthorityTransportError,
+        DriverChildEndpointLease,
+        consume_posix_child_endpoint_lease,
+    )
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+    from tests._daemon_helpers import install_fake_detached_owner
+
+    class _GrantingPort:
+        def __init__(self):
+            self.calls = []
+            self.leases = []
+            self.peers = []
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            endpoint, peer = socket.socketpair()
+            self.peers.append(peer)
+            lease = DriverChildEndpointLease(endpoint)
+            self.leases.append(lease)
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "derived_launch_allowed_with_unique_lease",
+                audit_id=f"audit-unique-lease-{len(self.leases)}",
+                child_endpoint_lease=lease,
+            )
+
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    _enable_detached_fake_llm(agent, monkeypatch)
+    port = _GrantingPort()
+    agent._derived_launch_admission_port = port
+    records = install_fake_detached_owner(monkeypatch)
+    detached_owner = PosixDaemonSupervisorAdapter.spawn_detached
+    consumed = []
+
+    def _consume_then_record(adapter, request, *, capsule=None, authority_lease=None):
+        assert authority_lease is not None
+        consumed.append(authority_lease)
+        inherited_fd = consume_posix_child_endpoint_lease(authority_lease)
+        try:
+            assert os.get_inheritable(inherited_fd) is False
+        finally:
+            os.close(inherited_fd)
+        return detached_owner(adapter, request, capsule=capsule)
+
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter, "spawn_detached", _consume_then_record
+    )
+    input_path = agent._working_dir / "batch-input.txt"
+    input_path.write_text("batch task input\n", encoding="utf-8")
+    root = RootProviderAdmission("root-unique-batch-leases", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle({
+            "action": "emanate",
+            "tasks": [
+                {
+                    "task": "first",
+                    "tools": [],
+                    "task_files": [{"path": "batch-input.txt"}],
+                },
+                {"task": "second", "tools": []},
+            ],
+        })
+    finally:
+        clear_provider_admission(token)
+        for peer in port.peers:
+            peer.close()
+
+    assert result["status"] == "dispatched"
+    assert port.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
+    assert consumed == port.leases
+    assert consumed[0] is not consumed[1]
+    assert len(records) == 2
+    for lease in port.leases:
+        with pytest.raises(DriverAuthorityTransportError, match="already consumed"):
+            consume_posix_child_endpoint_lease(lease)
 
 
 @pytest.mark.parametrize("backend", ["lingtai", "codex"])

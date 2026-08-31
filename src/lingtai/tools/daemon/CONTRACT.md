@@ -320,6 +320,18 @@ leading underscore excludes it from every run-dir scan
 (`_looks_like_daemon_run_dir`), so `list`/recovery/`check` never surface it
 as a run.
 
+Before publishing that shared store, the daemon completes one derived-launch
+admission per task and retains each task-indexed decision for its matching
+child spawn. This makes a batch atomic with respect to durable task inputs:
+if any admission is denied or errors, all already-issued, unconsumed Driver
+child-endpoint leases are closed and no blob, manifest, dispatch, or run
+directory is written. On success, task `i` receives only decision/lease `i`;
+a lease is one-use and cannot be reused by a sibling. This atomicity currently
+holds all `N` batch leases before materialization, so its pre-launch FD peak is
+linear in batch size. The tool surface currently has no hard task-count limit;
+that bound is a separate policy decision, not an implicit consequence of
+`manager_pool_size`.
+
 LingTai-backend daemon LLM construction uses one effective context window:
 an explicit daemon preset's canonical `manifest.llm.context_limit` wins,
 otherwise an implicit/no-preset daemon inherits the parent service's valid
