@@ -76,9 +76,11 @@ fail-closed on missing/mismatched identity.
 
 One supervisor owns one run from birth through terminal state. It validates
 request/manifest/run-directory identity, records PID/start identity, reconstructs
-runtime inputs through the tools-layer execution host, enforces deadline/control,
-terminates only its exact execution group and any exact nested CLI group, writes
-terminal truth, and publishes one idempotent notification. Supported terminal
+runtime inputs through the tools-layer execution host, and starts deadline/control
+enforcement immediately after it spawns the execution child — including the
+bounded 15-second child-registration interval. It terminates only its exact
+execution group and any exact nested CLI group, writes terminal truth, and
+publishes one idempotent notification. Supported terminal
 CLI ask/resume creates one durable generation claim whose owner is identified
 by PID plus stable process-incarnation identity; a bounded pending-launch lease
 also blocks a successor until the exact generation/nonce promotes or the lease

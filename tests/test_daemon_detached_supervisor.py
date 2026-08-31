@@ -183,6 +183,10 @@ def test_supervisor_terminal_store_error_records_typed_retryable_evidence(tmp_pa
 
 def test_posix_adapter_spawns_real_detached_process(tmp_path):
     """The production Port/adapter actually launches a real OS process."""
+    from lingtai.tools.daemon import supervisor_runtime
+
+    assert supervisor_runtime._EXECUTION_REGISTRATION_TIMEOUT_S == 15.0
+
     run_dir = _make_run_dir(tmp_path, task="say hi", timeout_s=30.0)
     manifest = build_manifest(
         run_id=run_dir.run_id, backend="lingtai",
@@ -206,7 +210,7 @@ def test_posix_adapter_spawns_real_detached_process(tmp_path):
         pid = state.get("supervisor_pid")
         return pid if pid else None
 
-    pid = _poll_until(_pid_recorded, timeout=10.0)
+    pid = _poll_until(_pid_recorded, timeout=15.0)
     assert pid != os.getpid()
 
     # No fake-LLM env in this call — real provider construction should fail
@@ -216,8 +220,72 @@ def test_posix_adapter_spawns_real_detached_process(tmp_path):
         st = _disk_state(run_dir).get("state")
         return st if st in ("failed", "done", "cancelled", "timeout") else None
 
-    terminal_state = _poll_until(_terminal, timeout=10.0)
+    terminal_state = _poll_until(_terminal, timeout=15.0)
     assert terminal_state == "failed"
+
+
+@pytest.mark.parametrize(
+    ("timeout_s", "control_kind", "expected_state"),
+    [
+        (0.05, None, "timeout"),
+        (30.0, "reclaim", "cancelled"),
+    ],
+)
+def test_supervisor_enforces_deadline_and_reclaim_while_execution_child_registers(
+    tmp_path, monkeypatch, timeout_s, control_kind, expected_state
+):
+    """A slow child bootstrap cannot bypass either task control path."""
+    from lingtai.tools.daemon import supervisor_runtime
+    from lingtai.kernel.daemon_supervisor import control
+
+    class UnregisteredChild:
+        pid = os.getpid()
+        returncode = 0
+
+        def __init__(self):
+            self._terminated = False
+
+        def poll(self):
+            return self.returncode if self._terminated else None
+
+        def wait(self, timeout=None):
+            self._terminated = True
+            return self.returncode
+
+    run_dir = _make_run_dir(tmp_path, timeout_s=timeout_s)
+    child = UnregisteredChild()
+    adapter = type(
+        "UnregisteredExecutionAdapter",
+        (),
+        {"spawn_execution_child": lambda *_args, **_kwargs: child},
+    )()
+    terminated = []
+
+    def terminate(_run_dir, *, owned_procs=()):
+        terminated.extend(owned_procs)
+        child._terminated = True
+
+    if control_kind:
+        control.submit_request(run_dir.path, control_kind, {})
+    monkeypatch.setattr(supervisor_runtime, "_EXECUTION_REGISTRATION_TIMEOUT_S", 0.4)
+    monkeypatch.setattr(
+        supervisor_runtime,
+        "select_daemon_supervisor_adapter",
+        lambda: adapter,
+    )
+    monkeypatch.setattr(
+        supervisor_runtime,
+        "_terminate_exact_run_children",
+        terminate,
+    )
+
+    supervisor_runtime._run_one_emanation(
+        run_dir,
+        {"backend": "lingtai", "timeout_s": timeout_s, "run_dir": str(run_dir.path)},
+    )
+
+    assert run_dir.read_state_from_disk(run_dir.path)["state"] == expected_state
+    assert terminated == [child]
 
 
 def test_detached_lingtai_run_survives_agent_stop_shutdown_and_reaches_done(tmp_path):

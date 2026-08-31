@@ -40,6 +40,11 @@ _STARTUP_HEARTBEAT_FIELD = "supervisor_pid"
 # deadline while a lingtai-backend tool loop or a codex CLI child is running.
 _CONTROL_POLL_INTERVAL_S = 0.5
 
+# A fresh interpreter may need time to import the runtime and publish its
+# durable identity.  This is a startup allowance only: the run's deadline and
+# control spool stay live throughout it.
+_EXECUTION_REGISTRATION_TIMEOUT_S = 15.0
+
 
 _TEST_FAKE_LLM_ENV = "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM"
 
@@ -265,7 +270,19 @@ def _run_one_emanation(
             execution_pgid=_process_group_of(child.pid),
             execution_start_identity=_process_start_identity(child.pid),
         )
-    registration_deadline = time.monotonic() + 5.0
+
+    # The task deadline starts before spawn, so it must cover interpreter
+    # bootstrap too.  Starting this watcher after registration would let a
+    # slow child bypass timeout and reclaim semantics for the whole startup
+    # allowance.
+    watcher = threading.Thread(
+        target=_control_and_deadline_watcher,
+        args=(run_dir, cancel_event, timeout_event, deadline, (child,)),
+        daemon=True,
+    )
+    watcher.start()
+
+    registration_deadline = time.monotonic() + _EXECUTION_REGISTRATION_TIMEOUT_S
     while time.monotonic() < registration_deadline:
         state = run_dir.read_state_from_disk(run_dir.path)
         if state.get("execution_registration") == "registered":
@@ -276,17 +293,13 @@ def _run_one_emanation(
     state = run_dir.read_state_from_disk(run_dir.path)
     if state.get("execution_registration") != "registered":
         if state.get("state") not in {"done", "failed", "cancelled", "timeout"}:
-            run_dir.mark_failed(RuntimeError("execution child did not register within 5 seconds"))
-        _terminate_exact_run_children(run_dir, owned_procs=(child,))
+            run_dir.mark_failed(RuntimeError(
+                "execution child did not register within "
+                f"{_EXECUTION_REGISTRATION_TIMEOUT_S:g} seconds"
+            ))
+            _terminate_exact_run_children(run_dir, owned_procs=(child,))
         child.wait(timeout=3.0)
         return
-
-    watcher = threading.Thread(
-        target=_control_and_deadline_watcher,
-        args=(run_dir, cancel_event, timeout_event, deadline, (child,)),
-        daemon=True,
-    )
-    watcher.start()
 
     while child.poll() is None:
         time.sleep(0.05)
@@ -463,7 +476,10 @@ def _control_and_deadline_watcher(
                     )
             else:
                 control.mark_request_done(req_path, {"status": "error", "error": f"unknown kind {kind!r}"})
-        time.sleep(_CONTROL_POLL_INTERVAL_S)
+        # Do not let the control poll cadence extend an explicit task
+        # deadline: startup can legitimately be much shorter than the normal
+        # 0.5s control-poll interval.
+        time.sleep(min(_CONTROL_POLL_INTERVAL_S, max(0.0, deadline - time.monotonic())))
 
 
 # ---------------------------------------------------------------------
