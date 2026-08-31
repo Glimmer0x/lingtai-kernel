@@ -318,10 +318,13 @@ live descendant.
   Its presence is the authoritative restrictive state: every later
   `lingtai run <dir>` treats that directory as derived and requires authority
   before a nested daemon/avatar launch. Malformed or unexpected marker state
-  remains restrictive. This marker is not a credential, grant, parent identity,
-  or authorization boundary; in the same-OS-user trusted-host model it protects
-  against accidental launch-path/configuration loss, not a child that can edit
-  its own directory.
+  remains restrictive. For upgrade compatibility, the former
+  `system/derived_child.json` location is also restrictive when present; only
+  `FileNotFoundError` from both locations relaxes the state, while any other
+  read failure remains restrictive. This marker is not a credential, grant,
+  parent identity, or authorization boundary; in the same-OS-user trusted-host
+  model it protects against accidental launch-path/configuration loss, not a
+  child that can edit its own directory.
 - `AvatarManager` resolves the existing interpreter policy and submits the
   exact argv `[python, "-m", "lingtai", "run", <dir>]` plus
   `logs/spawn.stderr` to the avatar-local Port. Cwd is inherited. The

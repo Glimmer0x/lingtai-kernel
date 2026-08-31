@@ -56,8 +56,9 @@ independent life — its existence does not depend on yours.
   manual child, validation, preparation, boot policy, ledger, rules, schemas,
   and registrar setup. The core class is `AvatarManager`.
 - `avatar/_launcher.py` — immutable launch request/receipt, the avatar-local
-  opaque-handle Port, restrictive child-boot marker name, and its shared
-  present/absent/unknown marker probe.
+  opaque-handle Port, current restrictive child-boot marker name, read-only
+  legacy-marker compatibility path, and their shared present/absent/unknown
+  marker probe.
 - `cli.py:run()` — consumes that marker when an avatar process boots and makes
   a missing nested-derived authority fail closed; it does not receive authority
   through the environment.
@@ -166,9 +167,12 @@ avatar/__init__.py
 - **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or Port exit truth within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported. Port release after observation never kills a live slow avatar.
 - **Derived child requirement:** `_spawn()` atomically writes
   `.lingtai-derived-child.json` before launch, outside the child-managed
-  `system/` namespace. `cli.run()` reads that durable state on every boot and
-  turns it into the restrictive requirement that any nested daemon/avatar
-  launch has authority. The launcher also adds
+  `system/` namespace. The shared probe also treats a legacy
+  `system/derived_child.json` as restrictive so existing children retain their
+  requirement after upgrade; only both locations being missing is absence.
+  `cli.run()` reads that durable state on every boot and turns it into the
+  restrictive requirement that any nested daemon/avatar launch has authority.
+  The launcher also adds
   `LINGTAI_DERIVED_AVATAR_EXECUTION=1` as redundant immediate-launch defense.
   Neither form carries a parent, grant, or authority bearer.
 - **Deep copy scope guard:** `_prepare_deep()` asserts `dst.parent == src.parent` to prevent rmtree from reaching outside the network root.

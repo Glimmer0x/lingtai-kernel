@@ -9,6 +9,7 @@ from lingtai.tools.avatar._launcher import (
     AvatarLaunchRequest,
     DerivedAvatarState,
     derived_avatar_state_path,
+    legacy_derived_avatar_state_path,
     probe_derived_avatar_state,
 )
 from lingtai.adapters.posix.avatar_launcher import PosixAvatarLauncherAdapter
@@ -70,6 +71,44 @@ def test_derived_avatar_state_probe_keeps_io_failure_distinct_from_absence(
 
     monkeypatch.setattr(Path, "lstat", fail_for_marker)
     assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.UNKNOWN
+
+
+def test_legacy_derived_marker_keeps_both_boot_call_sites_restrictive(tmp_path):
+    """An upgrade preserves the restriction on an already-derived child."""
+    from lingtai import cli
+    from lingtai.adapters.tool_plugin_host import persistent_derived_tool_surface_open
+
+    legacy_marker = legacy_derived_avatar_state_path(tmp_path)
+    legacy_marker.parent.mkdir(parents=True)
+    legacy_marker.write_text("present", encoding="utf-8")
+
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.PRESENT
+    assert cli._derived_avatar_requires_admission(tmp_path) is True
+    assert persistent_derived_tool_surface_open(tmp_path) is True
+
+
+def test_unreadable_legacy_derived_marker_keeps_both_call_sites_restrictive(
+    tmp_path, monkeypatch,
+):
+    """A failed compatibility read cannot make an upgraded child unrestricted."""
+    from lingtai import cli
+    from lingtai.adapters.tool_plugin_host import persistent_derived_tool_surface_open
+
+    legacy_marker = legacy_derived_avatar_state_path(tmp_path)
+    legacy_marker.parent.mkdir(parents=True)
+    legacy_marker.write_text("present", encoding="utf-8")
+    real_lstat = Path.lstat
+
+    def fail_for_legacy_marker(path):
+        if path == legacy_marker:
+            raise PermissionError("simulated legacy marker read failure")
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_for_legacy_marker)
+
+    assert probe_derived_avatar_state(tmp_path) is DerivedAvatarState.UNKNOWN
+    assert cli._derived_avatar_requires_admission(tmp_path) is True
+    assert persistent_derived_tool_surface_open(tmp_path) is True
 
 
 def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):
