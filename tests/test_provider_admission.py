@@ -31,6 +31,57 @@ from lingtai.llm.base import _GatedSession
 from lingtai.tools.soul.consultation import _send_with_timeout as soul_send_with_timeout
 
 
+_CONCURRENCY_CONSTRUCTORS = {
+    "Thread",
+    "ThreadPoolExecutor",
+    "ProcessPoolExecutor",
+    "to_thread",
+    "run_in_executor",
+}
+
+
+def _concurrency_inventory_from_tree(
+    tree: ast.AST, relative_path: str
+) -> set[tuple[str, str, str]]:
+    """Return stable (path, enclosing function, constructor) creation keys."""
+
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    inventory = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            constructor = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            constructor = node.func.attr
+        else:
+            continue
+        if constructor not in _CONCURRENCY_CONSTRUCTORS:
+            continue
+        enclosing = []
+        current = node
+        while current in parents:
+            current = parents[current]
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                enclosing.append(current.name)
+        inventory.add((relative_path, ".".join(reversed(enclosing)) or "<module>", constructor))
+    return inventory
+
+
+def _concurrency_inventory(root: Path) -> set[tuple[str, str, str]]:
+    inventory = set()
+    for source in (root / "src" / "lingtai").rglob("*.py"):
+        inventory |= _concurrency_inventory_from_tree(
+            ast.parse(source.read_text(encoding="utf-8")),
+            str(source.relative_to(root)),
+        )
+    return inventory
+
+
 class _InnerSession:
     def __init__(self):
         self.calls = []
@@ -351,103 +402,93 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
     classification must fail review.
     """
     root = Path(__file__).resolve().parents[1]
-    constructors = {
-        "Thread",
-        "ThreadPoolExecutor",
-        "ProcessPoolExecutor",
-        "to_thread",
-        "run_in_executor",
-    }
-    inventory: set[tuple[str, int, str]] = set()
-    for source in (root / "src" / "lingtai").rglob("*.py"):
-        tree = ast.parse(source.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            if isinstance(node.func, ast.Name) and node.func.id in constructors:
-                constructor = node.func.id
-            elif (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr in constructors
-            ):
-                constructor = node.func.attr
-            else:
-                continue
-            inventory.add((str(source.relative_to(root)), node.lineno, constructor))
+    inventory = _concurrency_inventory(root)
 
     provider_context_propagation = {
-        ("src/lingtai/kernel/session.py", 289, "ThreadPoolExecutor"),
-        ("src/lingtai/tools/soul/consultation.py", 67, "Thread"),
+        ("src/lingtai/kernel/session.py", "SessionManager.__init__", "ThreadPoolExecutor"),
+        ("src/lingtai/tools/soul/consultation.py", "_send_with_timeout", "Thread"),
     }
     post_admission_provider_dispatch = {
-        ("src/lingtai/llm/api_gate.py", 44, "ThreadPoolExecutor"),
-        ("src/lingtai/llm/api_gate.py", 45, "Thread"),
+        ("src/lingtai/llm/api_gate.py", "APICallGate.__init__", "ThreadPoolExecutor"),
+        ("src/lingtai/llm/api_gate.py", "APICallGate.__init__", "Thread"),
     }
     outside_root_provider_dispatch = {
-        ("src/lingtai/adapters/acp/server.py", 277, "Thread"),
-        ("src/lingtai/adapters/acp/server.py", 304, "Thread"),
-        ("src/lingtai/adapters/acp/server.py", 726, "Thread"),
-        ("src/lingtai/adapters/browser_transport.py", 56, "Thread"),
-        ("src/lingtai/adapters/posix/daemon_manager.py", 283, "Thread"),
-        ("src/lingtai/adapters/posix/daemon_manager.py", 506, "Thread"),
-        ("src/lingtai/adapters/posix/mail.py", 287, "Thread"),
-        ("src/lingtai/kernel/base_agent/lifecycle.py", 449, "Thread"),
-        ("src/lingtai/kernel/base_agent/lifecycle.py", 628, "Thread"),
-        ("src/lingtai/kernel/base_agent/lifecycle.py", 804, "Thread"),
-        ("src/lingtai/kernel/llm_utils.py", 302, "ThreadPoolExecutor"),
-        ("src/lingtai/kernel/nudge/__init__.py", 230, "Thread"),
-        ("src/lingtai/kernel/nudge/kernel_version.py", 137, "Thread"),
-        ("src/lingtai/kernel/preset_connectivity.py", 211, "ThreadPoolExecutor"),
-        ("src/lingtai/kernel/session_stats/__init__.py", 461, "Thread"),
-        ("src/lingtai/kernel/tool_executor.py", 1626, "ThreadPoolExecutor"),
-        ("src/lingtai/llm/openai/codex_quota.py", 153, "Thread"),
-        ("src/lingtai/mcp_servers/cloud_mail/manager.py", 404, "Thread"),
-        ("src/lingtai/mcp_servers/cloud_mail/server.py", 182, "to_thread"),
-        ("src/lingtai/mcp_servers/feishu/account.py", 475, "Thread"),
-        ("src/lingtai/mcp_servers/feishu/server.py", 712, "to_thread"),
-        ("src/lingtai/mcp_servers/feishu/task_card.py", 323, "Thread"),
-        ("src/lingtai/mcp_servers/feishu/task_card.py", 404, "Thread"),
-        ("src/lingtai/mcp_servers/imap/account.py", 880, "Thread"),
-        ("src/lingtai/mcp_servers/imap/bridge.py", 62, "Thread"),
-        ("src/lingtai/mcp_servers/imap/server.py", 656, "to_thread"),
-        ("src/lingtai/mcp_servers/telegram/account.py", 285, "Thread"),
-        ("src/lingtai/mcp_servers/telegram/manager.py", 451, "Thread"),
-        ("src/lingtai/mcp_servers/telegram/manager.py", 2587, "Thread"),
-        ("src/lingtai/mcp_servers/telegram/manager.py", 3633, "Thread"),
-        ("src/lingtai/mcp_servers/telegram/manager.py", 3663, "Thread"),
-        ("src/lingtai/mcp_servers/telegram/server.py", 760, "to_thread"),
-        ("src/lingtai/mcp_servers/telegram/task_card/controller.py", 429, "Thread"),
-        ("src/lingtai/mcp_servers/wechat/manager.py", 225, "Thread"),
-        ("src/lingtai/mcp_servers/wechat/server.py", 938, "to_thread"),
-        ("src/lingtai/mcp_servers/whatsapp/client.py", 104, "Thread"),
-        ("src/lingtai/mcp_servers/whatsapp/client.py", 111, "Thread"),
-        ("src/lingtai/mcp_servers/whatsapp/server.py", 221, "to_thread"),
-        ("src/lingtai/services/mcp.py", 574, "Thread"),
-        ("src/lingtai/services/mcp.py", 967, "Thread"),
-        ("src/lingtai/services/mcp_inbox.py", 606, "Thread"),
-        ("src/lingtai/tools/bash/__init__.py", 1306, "Thread"),
-        ("src/lingtai/tools/bash/__init__.py", 1467, "Thread"),
-        ("src/lingtai/tools/bash/__init__.py", 1714, "Thread"),
-            ("src/lingtai/tools/daemon/__init__.py", 1790, "ThreadPoolExecutor"),
-            ("src/lingtai/tools/daemon/__init__.py", 6579, "Thread"),
-            ("src/lingtai/tools/daemon/__init__.py", 9183, "ThreadPoolExecutor"),
-        ("src/lingtai/tools/daemon/claude_interactive.py", 611, "Thread"),
-            ("src/lingtai/tools/daemon/execution_host.py", 687, "ThreadPoolExecutor"),
-        ("src/lingtai/tools/daemon/posix_process.py", 112, "Thread"),
-        ("src/lingtai/tools/daemon/runtime.py", 133, "Thread"),
-        ("src/lingtai/tools/daemon/runtime.py", 220, "Thread"),
-        ("src/lingtai/tools/daemon/supervisor_runtime.py", 284, "Thread"),
-        ("src/lingtai/tools/daemon/windows_process.py", 353, "Thread"),
-        ("src/lingtai/tools/email/manager.py", 325, "Thread"),
-        ("src/lingtai/tools/soul/__init__.py", 245, "Thread"),
-        ("src/lingtai/tools/soul/consultation.py", 594, "Thread"),
-        ("src/lingtai/tools/task_card/__init__.py", 652, "Thread"),
+        ("src/lingtai/adapters/acp/server.py", "AcpStdioServer.__init__", "Thread"),
+        ("src/lingtai/adapters/acp/server.py", "AcpStdioServer.serve", "Thread"),
+        ("src/lingtai/adapters/acp/server.py", "AcpStdioServer._prompt", "Thread"),
+        ("src/lingtai/adapters/browser_transport.py", "VettedHttpTransport.resolve", "Thread"),
+        ("src/lingtai/adapters/posix/daemon_manager.py", "_DaemonManagerProcess.start_capsule_server", "Thread"),
+        ("src/lingtai/adapters/posix/daemon_manager.py", "_DaemonManagerProcess._start_queued_jobs", "Thread"),
+        ("src/lingtai/adapters/posix/mail.py", "PosixFilesystemMailAdapter.listen", "Thread"),
+        ("src/lingtai/kernel/base_agent/lifecycle.py", "_start", "Thread"),
+        ("src/lingtai/kernel/base_agent/lifecycle.py", "_start_heartbeat", "Thread"),
+        ("src/lingtai/kernel/base_agent/lifecycle.py", "_heartbeat_loop", "Thread"),
+        ("src/lingtai/kernel/llm_utils.py", "execute_tools_batch", "ThreadPoolExecutor"),
+        ("src/lingtai/kernel/nudge/__init__.py", "NudgeObservationOwner.schedule", "Thread"),
+        ("src/lingtai/kernel/nudge/kernel_version.py", "_start_fetch", "Thread"),
+        ("src/lingtai/kernel/preset_connectivity.py", "check_many", "ThreadPoolExecutor"),
+        ("src/lingtai/kernel/session_stats/__init__.py", "RecentDaemonSnapshot.schedule", "Thread"),
+        ("src/lingtai/kernel/tool_executor.py", "ToolExecutor._execute_parallel", "ThreadPoolExecutor"),
+        ("src/lingtai/llm/openai/codex_quota.py", "_stdout_reader_thread", "Thread"),
+        ("src/lingtai/mcp_servers/cloud_mail/manager.py", "CloudMailManager.start", "Thread"),
+        ("src/lingtai/mcp_servers/cloud_mail/server.py", "build_server._call_tool", "to_thread"),
+        ("src/lingtai/mcp_servers/feishu/account.py", "FeishuAccount.start", "Thread"),
+        ("src/lingtai/mcp_servers/feishu/server.py", "build_server._call_tool", "to_thread"),
+        ("src/lingtai/mcp_servers/feishu/task_card.py", "FeishuTaskCardJournal.start", "Thread"),
+        ("src/lingtai/mcp_servers/feishu/task_card.py", "FeishuProgrammableTaskCardPoller.start", "Thread"),
+        ("src/lingtai/mcp_servers/imap/account.py", "IMAPAccount.start_listening", "Thread"),
+        ("src/lingtai/mcp_servers/imap/bridge.py", "FilesystemMailBridge.listen", "Thread"),
+        ("src/lingtai/mcp_servers/imap/server.py", "build_server._call_tool", "to_thread"),
+        ("src/lingtai/mcp_servers/telegram/account.py", "TelegramAccount.start", "Thread"),
+        ("src/lingtai/mcp_servers/telegram/manager.py", "TypingIndicatorManager.start_typing", "Thread"),
+        ("src/lingtai/mcp_servers/telegram/manager.py", "TelegramManager._start_pending_task_card_edit_worker", "Thread"),
+        ("src/lingtai/mcp_servers/telegram/manager.py", "TelegramManager._start_task_card_tail", "Thread"),
+        ("src/lingtai/mcp_servers/telegram/manager.py", "TelegramManager._start_programmable_task_card_poller", "Thread"),
+        ("src/lingtai/mcp_servers/telegram/server.py", "build_server._call_tool", "to_thread"),
+        ("src/lingtai/mcp_servers/telegram/task_card/controller.py", "TaskCardController._spawn", "Thread"),
+        ("src/lingtai/mcp_servers/wechat/manager.py", "WechatManager.start", "Thread"),
+        ("src/lingtai/mcp_servers/wechat/server.py", "build_server._call_tool", "to_thread"),
+        ("src/lingtai/mcp_servers/whatsapp/client.py", "WhatsAppBridge.start", "Thread"),
+        ("src/lingtai/mcp_servers/whatsapp/server.py", "build_server._call_tool", "to_thread"),
+        ("src/lingtai/services/mcp.py", "MCPClient.start", "Thread"),
+        ("src/lingtai/services/mcp.py", "HTTPMCPClient.start", "Thread"),
+        ("src/lingtai/services/mcp_inbox.py", "MCPInboxPoller.start", "Thread"),
+        ("src/lingtai/tools/bash/__init__.py", "ShellManager._run_async", "Thread"),
+        ("src/lingtai/tools/bash/__init__.py", "ShellManager._start_reminder_timer", "Thread"),
+        ("src/lingtai/tools/bash/__init__.py", "ShellManager._start_completion_watcher", "Thread"),
+        ("src/lingtai/tools/daemon/__init__.py", "DaemonManager.__init__", "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/__init__.py", "DaemonManager._run_ask_claude_interactive_stream", "Thread"),
+        ("src/lingtai/tools/daemon/__init__.py", "DaemonManager._shutdown_runtime_resources", "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/claude_interactive.py", "ClaudeInteractiveBridge.run", "Thread"),
+        ("src/lingtai/tools/daemon/execution_host.py", "DetachedDaemonExecutionHost.run_resume", "ThreadPoolExecutor"),
+        ("src/lingtai/tools/daemon/posix_process.py", "PosixDaemonProcessPort.drain_stderr", "Thread"),
+        ("src/lingtai/tools/daemon/runtime.py", "iter_stdout_with_deadline", "Thread"),
+        ("src/lingtai/tools/daemon/runtime.py", "spawn_stderr_drainer", "Thread"),
+        ("src/lingtai/tools/daemon/supervisor_runtime.py", "_run_one_emanation", "Thread"),
+        ("src/lingtai/tools/daemon/windows_process.py", "WindowsDaemonProcessPort.drain_stderr", "Thread"),
+        ("src/lingtai/tools/email/manager.py", "EmailManager._send", "Thread"),
+        ("src/lingtai/tools/soul/__init__.py", "_handle_flow", "Thread"),
+        ("src/lingtai/tools/soul/consultation.py", "_run_consultation_batch", "Thread"),
+        ("src/lingtai/tools/task_card/__init__.py", "TaskCardManager._spawn", "Thread"),
     }
     assert inventory == (
         provider_context_propagation
         | post_admission_provider_dispatch
         | outside_root_provider_dispatch
     )
+
+
+def test_concurrency_inventory_key_ignores_unrelated_line_movement():
+    source = """\
+class Runner:
+    def start(self):
+        Thread(target=lambda: None)
+"""
+    moved = "\n\n\n" + source
+    expected = {("example.py", "Runner.start", "Thread")}
+
+    assert _concurrency_inventory_from_tree(ast.parse(source), "example.py") == expected
+    assert _concurrency_inventory_from_tree(ast.parse(moved), "example.py") == expected
 
 
 def test_every_session_send_and_generate_crosses_the_same_admission_port():
