@@ -53,6 +53,7 @@ related_files:
   - scripts/verify_driver_executor_audit.py
   - scripts/verify_driver_nested_launch_audit.py
   - scripts/verify_driver_daemon_dispatch_audit.py
+  - scripts/verify_driver_supervisor_execution_e2e.py
   - scripts/generate_release_manifest.py
   - scripts/publish_release_assets.py
   - scripts/sync_gitee_mirror.py
@@ -227,7 +228,9 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   `verify_driver_nested_launch_audit.py` then check executor and rejected
   nested-launch audit boundaries; `verify_driver_daemon_dispatch_audit.py`
   proves real daemon dispatch reaches the Driver decision against source-only
-  Puffo input.
+  Puffo input; `verify_driver_supervisor_execution_e2e.py` exercises the
+  root-to-supervisor-to-execution-child provider lifecycle in that same
+  isolated environment.
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request
   templates. `workflows/wheels.yml` is the release build/verify/manifest
   pipeline; `kernel-windows-pr.yml` and `shell-windows-pr.yml` are the native
