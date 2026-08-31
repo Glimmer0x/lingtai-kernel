@@ -9,6 +9,11 @@ provider recorder unchanged.
 
 It verifies the admission seam itself.  LingTai's daemon/avatar production
 dispatch regressions live in the normal test suite and use the same typed seam.
+
+Before running, create the supported isolated interpreter with
+``scripts/setup_driver_supervisor_e2e_env.sh <venv-dir>``. Use
+``<venv-dir>/bin/python`` and pass both source roots with ``--lingtai-src``
+and ``--puffo-src``; do not install the Puffo runtime into that environment.
 """
 
 from __future__ import annotations
