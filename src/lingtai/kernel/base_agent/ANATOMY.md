@@ -28,6 +28,7 @@ related_files:
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
   - src/lingtai/kernel/provider_admission.py
+  - docs/references/provider-admission.md
   - src/lingtai/kernel/base_agent/worker_recovery.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -81,7 +82,9 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
   Port immediately before provider I/O. `turn.py` binds a root parent only
   after its final origin admission and resets it on turn/loop teardown.
   Adapters own authentication and transport; Core does not encode ACP, sockets,
-  paths, or a serializable bearer token here.
+  paths, or a serializable bearer token here. The operator procedure and
+  failure modes are in [`docs/references/provider-admission.md`](../../../../docs/references/provider-admission.md).
+  Guarded by [BA005](BEHAVIORS.md#behavior-ba005).
 - `BaseAgent._sleep_alarm_lock` / `_sleep_alarm_problem_signature` (`base_agent/__init__.py`) — narrow per-agent state shared only by `system.sleep(delay=...)` arming and lifecycle heartbeat expiry. It prevents expiry from consuming a later replacement alarm and bounds malformed-file diagnostics; it is not a scheduler or notification-store lock.
 - `BaseAgent._request_turn_cancel` / `_cancel_event` — the private, idempotent producer and process-global cooperative turn latch (`src/lingtai/kernel/base_agent/__init__.py:1231-1233`). Heartbeat signal-file producers route through it after consuming their files (`src/lingtai/kernel/base_agent/lifecycle.py:611-659`); successful refresh routes through it after watcher spawn and before shutdown (`src/lingtai/kernel/base_agent/lifecycle.py:1114-1129`); the official declared System host and retained direct compatibility adapter invoke it only after ASLEEP state/event publication (`src/lingtai/adapters/tool_plugin_host.py:1296-1299`, `src/lingtai/tools/system/karma.py:167-172`). Ownership and limits are normative in `CONTRACT.md` clause `agent-runtime.turn-cancel-latch.v1`.
 - `base_agent/identity.py` — Identity, manifest, and status (~315 lines). `_set_name` (`base_agent/identity.py:29`), `_set_nickname` (`base_agent/identity.py:42`), `_update_identity` (`base_agent/identity.py:48`), `_LLM_PUBLIC_KEYS` safelist constant (`base_agent/identity.py:73`), `_build_manifest` (`base_agent/identity.py:76`), `_safe_llm_from_service` (`base_agent/identity.py:117`) — surfaces a sanitized `llm` block (provider/model/base_url, safelisted) from the live `LLMService` instance for `.agent.json` and the identity prompt section (issue #78). Never reads from `init.json` (kernel stays preset-oblivious); preset metadata is added by the wrapper's `Agent._build_manifest` override. `_status` (`base_agent/identity.py:197`) reads `_lifecycle_clock.monotonic_seconds()` for uptime and `.wall_seconds()` for the no-progress/active-turn/heartbeat ages. `_safe_llm_from_service` is also reused (imported directly, not duplicated) by `kernel.session_stats.build_agent_record` for the Agent record's `model` block.

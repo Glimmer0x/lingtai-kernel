@@ -19,6 +19,7 @@ related_files:
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
   - src/lingtai/kernel/provider_admission.py
+  - docs/references/provider-admission.md
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/system/karma.py
@@ -79,7 +80,7 @@ maintenance: |
 Stable entry: `lingtai.kernel.agent-runtime.v1`.
 
 ## Purpose
-Guarded by: [BA001](BEHAVIORS.md#behavior-ba001), [BA002](BEHAVIORS.md#behavior-ba002)
+Guarded by: [BA001](BEHAVIORS.md#behavior-ba001), [BA002](BEHAVIORS.md#behavior-ba002), [BA005](BEHAVIORS.md#behavior-ba005)
 
 
 Agent runtime is the composed lifecycle promise of one LingTai agent process:
@@ -350,7 +351,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    tool id/name; absent brokerage passes through, while broker exceptions or
    invalid decisions deny. It still promises no hard provider abort or
    running-tool preemption.
-13. `agent-runtime.provider-admission.v1` — A composition that injects a
+13. `agent-runtime.provider-admission.v1` — Guarded by
+   [BA005](BEHAVIORS.md#behavior-ba005). A composition that injects a
    `ProviderCallAdmissionPort` turns the service boundary into the single
    structural provider-call gate. Core binds a `RootProviderAdmission` only
    after the final correlated-turn origin check, and service/session proxies
@@ -364,8 +366,88 @@ Clause IDs are stable; each rule composes the linked normative source.
    correlation ids, paths, registry digests, prompt content, and tool output
    are not credentials. A derived daemon/avatar call uses a typed parent with
    an internal non-serializable handle and crosses the Port again for each
-   actual provider call; it cannot reuse a root grant. A host that binds a
-   derived parent before its transport is connected receives explicit
+   actual provider call; it cannot reuse a root grant. v0 is explicitly
+   one-hop: only a `RootProviderAdmission` can mint a derived parent, and a
+   daemon/avatar child cannot mint another model-executing daemon/avatar.
+   Driver launch admission MUST reject the same nested request; adding recursive
+   derivation requires a new contract with per-hop authority and a recursive
+   production-boundary inventory. This is an authorization rule, not a tool
+   surface reduction: a full-tool child must be able to make its real
+   daemon/avatar request, which Core/Driver then reject before any provider
+   I/O. In particular, the historical daemon `EMANATION_BLACKLIST` currently
+   filters both capabilities before authorization. The transition is ordered:
+   (1) every production derived-launch constructor first routes through an
+   observable domain decision; (2a) while the filter remains, a production
+   launch-path test reaches that decision and records the principal, requested
+   capability, and reason code; (3) only after 2a passes may puffo-v0 remove
+   or bypass the `daemon` and `avatar` filters together; (2b) the change that
+   removes those filters cannot merge until a production child uses each real
+   tool path, receives the denial, and a recording transport proves zero
+   provider I/O. Thus 2a proves that the decision already applies on every
+   production launch path covered by the inventory before the old safeguard is
+   removed; it does not prove the inventory's explicit static blind spots.
+   Those require focused review and production-path E2E. 2b proves that the
+   opened tool surface reaches the intended refusal rather than empty-passing
+   at the old filter. The launch
+   inventory is a regression tripwire, not a one-time review: a new constructor
+   must fail until classified. Its static matcher must cover direct-name and
+   attribute calls, imported aliases, package re-exports, and direct simple
+   assignment aliases. It is not a
+   whole-program proof over dynamic dispatch (`getattr`, registry lookup, or
+   factory indirection) or subclasses/wrappers that override a launch entry;
+   those are explicit blind spots that require focused review and production
+   path E2E, not an inference from a green inventory. The Core `TypeError` is
+   merely a structural backstop and must not be the only rejection signal. The
+   derived-launch inventory uses `(file, enclosing qualified function,
+   constructor)` keys, so unrelated line movement does not turn that specific
+   tripwire into mechanical maintenance.
+   This adapter integration is not delivered by this Core type boundary alone.
+   The following are **constrained host-adapter requirements**, not current
+   Core-seam delivery claims:
+
+   1. `provision_ref` is a Driver-registry opaque lookup handle bound to the
+      requested `launch_id` and `parent_launch_id`; it is non-transferable and
+      is never an artifact bearer. Only the Driver resolves it. A child,
+      parent, manifest, capsule, or other artifact cannot provide or override
+      identity, workdir, or agent-dir.
+   2. The Driver holds and actually uses the workdir and agent-dir directory
+      handles for execution (`fd` inheritance, `SCM_RIGHTS`, or a platform
+      equivalent). A `dev+ino` value is only an additional check on that
+      handle, never permission to resolve a path and reopen it later. A backend
+      that cannot establish this non-replaceable binding is unsupported and
+      fails closed.
+   3. On a same-OS-user host without sandbox isolation, this mechanism protects
+      against accidental confusion: wrong ref, ref reuse, cross-child use, and
+      lineage mismatch. It does not claim to resist a malicious child that can
+      directly modify the Driver registry.
+   4. `admit_provider_call` accepts only `launch_id`, a single-use `call_id`,
+      and an exact capability (`provider` plus `daemon` or `avatar`). The
+      Driver derives principal, root-session, depth, binding revision, and
+      lineage from current registry state keyed by `launch_id`. A compatibility
+      interface that carries any of those derived facts MUST compare each one
+      against that state and deny a mismatch with a distinct attack-signal
+      reason code.
+   5. The Driver-side CAS request carries the provider and exact capability
+      that transport is about to execute. In the same atomic operation, the
+      Driver compares both values with the grant issued for `admission_id` and
+      performs `unused -> consumed_before_io`; a mismatch fails as the distinct
+      attack-signal denial from requirement 4. A local transport mark is not
+      consumption; an unsuccessful CAS prevents provider I/O.
+   6. A timeout or crash after that CAS and before a known provider result is
+      `consumed_outcome_unknown`: the grant remains consumed and is never
+      restored or reused, and this outcome is recorded in the auditable
+      admission record. A retry uses a new `call_id` and obtains a new grant.
+   7. Production E2E must assert the authorization seam's exact `reason_code`
+      and an audit record linkable by `audit_id` or `admission_id`; merely
+      observing a rejection is insufficient evidence that the seam ran.
+   8. In one run, one recording transport must observe a non-empty provider
+      call list for a legal root-to-one-hop path and `provider_calls == []` for
+      each refused nested daemon/avatar path. This proves the recorder is live
+      and rules out an empty assertion caused by a disconnected recorder.
+
+   Dynamic revoke freshness and propagation remain explicitly undelivered;
+   these requirements reserve no claim that they are already implemented. A host that
+   binds a derived parent before its transport is connected receives explicit
    `derived_admission_port_unconnected` indeterminacy and rejects before
    provider I/O. Historical daemon/avatar routes do not yet bind that parent,
    so they remain outside this gate until the separate driver-mediated adapter

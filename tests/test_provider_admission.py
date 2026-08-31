@@ -124,6 +124,154 @@ def test_raw_provider_service_construction_inventory_is_explicit():
     }
 
 
+def _direct_constructor_calls(source: str, targets: set[str]) -> set[tuple[str, str]]:
+    """Return statically visible direct request-constructor call sites.
+
+    The helper is intentionally not a resolver: dynamic factories, registry
+    lookup, and subclass/wrapper overrides are reviewed outside this narrow
+    source inventory.  It does cover the direct forms promised by the
+    Contract, including aliases introduced through imports, package re-exports,
+    and direct simple assignments.
+    """
+    tree = ast.parse(source)
+    aliases = set(targets)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for imported in node.names:
+            if imported.name in targets:
+                aliases.add(imported.asname or imported.name)
+
+    calls: set[tuple[str, str]] = set()
+
+    class _InventoryVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self._scope: list[str] = []
+            self._alias_scopes: list[set[str]] = [set(aliases)]
+
+        def _aliases(self) -> set[str]:
+            return set().union(*self._alias_scopes)
+
+        def _visit_scoped(self, node: ast.AST, name: str) -> None:
+            self._scope.append(name)
+            self._alias_scopes.append(set())
+            self.generic_visit(node)
+            self._alias_scopes.pop()
+            self._scope.pop()
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self._visit_scoped(node, node.name)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._visit_scoped(node, node.name)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._visit_scoped(node, node.name)
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            if isinstance(node.value, ast.Name) and node.value.id in self._aliases():
+                self._alias_scopes[-1].update(
+                    target.id for target in node.targets if isinstance(target, ast.Name)
+                )
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if (
+                isinstance(node.value, ast.Name)
+                and node.value.id in self._aliases()
+                and isinstance(node.target, ast.Name)
+            ):
+                self._alias_scopes[-1].add(node.target.id)
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Name) and node.func.id in self._aliases():
+                constructor = node.func.id
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in targets
+            ):
+                constructor = node.func.attr
+            else:
+                self.generic_visit(node)
+                return
+            calls.add((".".join(self._scope) or "<module>", constructor))
+            self.generic_visit(node)
+
+    _InventoryVisitor().visit(tree)
+    return calls
+
+
+def test_derived_launch_constructor_inventory_matches_promised_static_forms():
+    """Direct names, import/assignment aliases, and attributes remain covered."""
+    source = """\
+from package import DaemonSupervisorRequest as Request
+import package as pkg
+
+ModuleRequest = DaemonSupervisorRequest
+
+def direct():
+    DaemonSupervisorRequest()
+    Request()
+    ModuleRequest()
+    local = DaemonSupervisorRequest
+    local()
+
+class Launcher:
+    def by_attribute(self):
+        pkg.AvatarLaunchRequest()
+"""
+
+    assert _direct_constructor_calls(
+        source, {"DaemonSupervisorRequest", "AvatarLaunchRequest"}
+    ) == {
+        ("direct", "DaemonSupervisorRequest"),
+        ("direct", "Request"),
+        ("direct", "ModuleRequest"),
+        ("direct", "local"),
+        ("Launcher.by_attribute", "AvatarLaunchRequest"),
+    }
+
+
+def test_derived_launch_constructor_inventory_is_explicit():
+    """Every direct derived-launch request constructor needs classification.
+
+    This is step 1 of the v0 derived-admission transition.  It intentionally
+    inventories the request constructors, rather than claiming that a green
+    static scan proves every possible launch route: dynamic factories,
+    registry lookup, and subclass/wrapper overrides remain Contract-declared
+    blind spots for focused review and production-path E2E.
+
+    Direct names, ``from … import … as`` aliases (including package
+    re-exports), and attribute calls are all matched.  A new direct request
+    constructor must be explicitly classified before it can land.
+    """
+    root = Path(__file__).resolve().parents[1]
+    targets = {"DaemonSupervisorRequest", "AvatarLaunchRequest"}
+    inventory: set[tuple[str, str, str]] = set()
+
+    for source in (root / "src" / "lingtai").rglob("*.py"):
+        for scope, constructor in _direct_constructor_calls(
+            source.read_text(encoding="utf-8"), targets
+        ):
+            inventory.add((str(source.relative_to(root)), scope, constructor))
+
+    assert inventory == {
+        # Decode is not a launch, but it is the one wire re-construction point
+        # and therefore must stay visible beside the production constructors.
+        ("src/lingtai/kernel/daemon_supervisor/__init__.py", "decode_request",
+         "DaemonSupervisorRequest"),
+        # LingTai-backend daemon launch and external-CLI daemon launch.
+        ("src/lingtai/tools/daemon/__init__.py", "DaemonManager._spawn_detached_lingtai_run",
+         "DaemonSupervisorRequest"),
+        ("src/lingtai/tools/daemon/__init__.py", "DaemonManager._handle_emanate_cli",
+         "DaemonSupervisorRequest"),
+        # Avatar detached-child launch.
+        ("src/lingtai/tools/avatar/__init__.py", "AvatarManager._launch",
+         "AvatarLaunchRequest"),
+    }
+
+
 def test_provider_dispatch_concurrency_inventory_is_explicit():
     """Concurrency creation points must be classified before they can land.
 
@@ -490,6 +638,16 @@ def test_derived_call_class_is_not_inferred_from_user_controlled_text():
         clear_provider_admission(token)
 
     assert port.calls == [(derived, ProviderCallClass.DAEMON)]
+
+
+def test_v0_derived_admission_rejects_nested_derived_execution():
+    """v0 is deliberately one hop: a child cannot mint another parent."""
+
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    child = begin_derived_provider_admission(root, ProviderCallClass.DAEMON)
+
+    with pytest.raises(TypeError, match="derived admission requires a root admission"):
+        begin_derived_provider_admission(child, ProviderCallClass.AVATAR_CHILD)  # type: ignore[arg-type]
 
 
 def test_denied_provider_admission_never_reaches_the_inner_service():
