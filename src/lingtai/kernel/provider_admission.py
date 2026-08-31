@@ -355,6 +355,24 @@ def require_derived_launch_admission(
             "derived_launch_admission_port_error",
         )
     if (
+        isinstance(decision, DerivedLaunchDecision)
+        and isinstance(decision.state, ProviderAdmissionState)
+        and decision.state is not ProviderAdmissionState.INDETERMINATE
+        and (not isinstance(decision.audit_id, str) or not decision.audit_id)
+    ):
+        # A configured Driver's non-indeterminate response must be correlated,
+        # but a missing audit id must not erase the denial/grant it actually
+        # sent. Check this before the grant's endpoint-shape validation, so an
+        # auditless grant still preserves the Driver's original disposition.
+        _discard_child_endpoint_lease(decision.child_endpoint_lease)
+        decision = DerivedLaunchDecision(
+            ProviderAdmissionState.INDETERMINATE,
+            "malformed_derived_launch_admission_decision",
+            driver_state=decision.state,
+            driver_reason_code=decision.reason_code,
+            protocol_violation_reason="missing_derived_launch_admission_audit_id",
+        )
+    elif (
         not isinstance(decision, DerivedLaunchDecision)
         or not isinstance(decision.state, ProviderAdmissionState)
         or not isinstance(decision.reason_code, str)
@@ -380,21 +398,6 @@ def require_derived_launch_admission(
         decision = DerivedLaunchDecision(
             ProviderAdmissionState.INDETERMINATE,
             "malformed_derived_launch_admission_decision",
-        )
-    elif (
-        decision.state is not ProviderAdmissionState.INDETERMINATE
-        and (not isinstance(decision.audit_id, str) or not decision.audit_id)
-    ):
-        # A configured Driver's non-indeterminate response must be correlated,
-        # but a missing audit id must not erase the denial/grant it actually
-        # sent. Keep that evidence in the fail-closed projection.
-        _discard_child_endpoint_lease(decision.child_endpoint_lease)
-        decision = DerivedLaunchDecision(
-            ProviderAdmissionState.INDETERMINATE,
-            "malformed_derived_launch_admission_decision",
-            driver_state=decision.state,
-            driver_reason_code=decision.reason_code,
-            protocol_violation_reason="missing_derived_launch_admission_audit_id",
         )
     # A nested request must be presented to Driver first, so the Driver can
     # record its own denial.  Core remains a second, structural one-hop
