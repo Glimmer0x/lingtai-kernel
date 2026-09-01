@@ -1082,7 +1082,7 @@ def test_execution_child_argument_failure_closes_adopted_fd():
         peer.close()
 
 
-def test_derived_execution_child_skips_environment_authority_composition(
+def test_derived_execution_child_adopts_fd_before_authority_composition(
     tmp_path, monkeypatch
 ):
     from lingtai.adapters.acp import driver_authority
@@ -1101,34 +1101,49 @@ def test_derived_execution_child_skips_environment_authority_composition(
     write_manifest(run_dir.path, manifest)
     child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     adopted_fd = child_endpoint.detach()
+    host_init_complete = False
+    authority_observations: list[bool] = []
+    authority_code = driver_authority.authority_adapter_from_environment.__code__
+    host_type = execution_host.DetachedDaemonExecutionHost
+    original_init = host_type.__init__
 
-    def forbidden_environment_authority():
-        pytest.fail(
-            "derived execution child must not compose environment authority "
-            "before adopting its descriptor"
+    def observed_init(self, *args, **kwargs):
+        nonlocal host_init_complete
+        original_init(self, *args, **kwargs)
+        assert self._adopted_fd is not None
+        os.fstat(self._adopted_fd)
+        host_init_complete = True
+
+    def record_authority_order(frame, event, _arg):
+        if event != "call" or frame.f_code is not authority_code:
+            return
+        caller = frame.f_back
+        stack_has_valid_host_fd = False
+        while caller is not None:
+            candidate = caller.f_locals.get("self")
+            candidate_fd = getattr(candidate, "_adopted_fd", None)
+            if candidate_fd is not None:
+                try:
+                    os.fstat(candidate_fd)
+                except OSError:
+                    pass
+                else:
+                    stack_has_valid_host_fd = True
+                    break
+            caller = caller.f_back
+        authority_observations.append(
+            host_init_complete or stack_has_valid_host_fd
         )
 
-    class CapturingHost:
-        def __init__(self, *_args, adopted_fd, **_kwargs):
-            assert adopted_fd is not None
-            self.adopted_fd = adopted_fd
+    def run_with_events(self, *_args) -> None:
+        assert self._adopted_fd is not None
+        os.fstat(self._adopted_fd)
+        os.write(self._adopted_fd, b"adopted-before-composition")
 
-        def run_with_events(self, *_args) -> None:
-            os.write(self.adopted_fd, b"adopted-before-composition")
-
-        def close_adopted_fd(self) -> None:
-            os.close(self.adopted_fd)
-
-    monkeypatch.setattr(
-        driver_authority,
-        "authority_adapter_from_environment",
-        forbidden_environment_authority,
-    )
-    monkeypatch.setattr(
-        execution_host,
-        "DetachedDaemonExecutionHost",
-        CapturingHost,
-    )
+    monkeypatch.setattr(host_type, "__init__", observed_init)
+    monkeypatch.setattr(host_type, "run_with_events", run_with_events)
+    previous_profile = sys.getprofile()
+    sys.setprofile(record_authority_order)
 
     try:
         assert _run_execution_child(
@@ -1141,7 +1156,9 @@ def test_derived_execution_child_skips_environment_authority_composition(
             b"adopted-before-composition"
         )
         assert peer.recv(1) == b""
+        assert all(authority_observations)
     finally:
+        sys.setprofile(previous_profile)
         peer.close()
 
 
@@ -1184,7 +1201,137 @@ def test_capsule_rejects_and_closes_multiple_received_fds():
         second_peer.close()
 
 
-def test_execution_child_capsule_transfers_fd_once(tmp_path, monkeypatch):
+@pytest.mark.skipif(
+    not hasattr(socket, "MSG_CTRUNC"), reason="MSG_CTRUNC is unavailable",
+)
+def test_capsule_rejects_and_closes_truncated_received_fds():
+    sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    source_fds: list[int] = []
+    peers: list[socket.socket] = []
+    for _index in range(5):
+        source, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        source_fds.append(source.detach())
+        peers.append(peer)
+
+    try:
+        env = dict(os.environ)
+        env["LINGTAI_TEST_CAPSULE_SOCKET_FD"] = str(receiver.fileno())
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                textwrap.dedent(
+                    """
+                    import os
+                    import socket
+
+                    from lingtai.adapters.posix.daemon_capsule import receive_capsule
+
+                    capsule_socket = socket.socket(
+                        fileno=int(os.environ["LINGTAI_TEST_CAPSULE_SOCKET_FD"])
+                    )
+                    try:
+                        try:
+                            receive_capsule(capsule_socket)
+                        except ValueError as exc:
+                            if "descriptor data was truncated" not in str(exc):
+                                raise
+                        else:
+                            raise AssertionError("truncated descriptor data was accepted")
+                    finally:
+                        capsule_socket.close()
+                    """
+                ),
+            ],
+            env=env,
+            pass_fds=(receiver.fileno(),),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        receiver.close()
+        sender.sendmsg(
+            [b"{}"],
+            [(
+                socket.SOL_SOCKET,
+                socket.SCM_RIGHTS,
+                array.array("i", source_fds),
+            )],
+        )
+        sender.shutdown(socket.SHUT_WR)
+        for source_fd in source_fds:
+            os.close(source_fd)
+        source_fds.clear()
+        stdout, stderr = child.communicate(timeout=10)
+        assert child.returncode == 0, (stdout, stderr)
+        for peer in peers:
+            peer.settimeout(1)
+            assert peer.recv(1) == b""
+    finally:
+        for source_fd in source_fds:
+            os.close(source_fd)
+        sender.close()
+        try:
+            receiver.close()
+        except OSError:
+            pass
+        for peer in peers:
+            peer.close()
+
+
+def test_execution_child_transfers_adopted_fd_to_host_once(tmp_path, monkeypatch):
+    from lingtai.adapters.posix.daemon_execution_child_entrypoint import (
+        _run_execution_child,
+    )
+    from lingtai.tools.daemon import execution_host
+
+    run_dir = _make_run_dir(tmp_path, task="fd ownership transfer", timeout_s=30)
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="fd ownership transfer", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    write_manifest(run_dir.path, manifest)
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+    close_observations: list[int] = []
+
+    class VerifyingHost:
+        def __init__(self, *_args, adopted_fd, **_kwargs):
+            assert adopted_fd is not None
+            os.fstat(adopted_fd)
+            self.adopted_fd = adopted_fd
+
+        def run_with_events(self, *_args) -> None:
+            os.write(self.adopted_fd, b"host-owned")
+
+        def close_adopted_fd(self) -> None:
+            os.fstat(self.adopted_fd)
+            close_observations.append(self.adopted_fd)
+            os.close(self.adopted_fd)
+
+    monkeypatch.setattr(
+        execution_host,
+        "DetachedDaemonExecutionHost",
+        VerifyingHost,
+    )
+
+    try:
+        assert _run_execution_child(
+            [str(manifest_path_for(run_dir.path)), run_dir.run_id, "emanation"],
+            capsule={},
+            adopted_fd=adopted_fd,
+        ) == 0
+        assert close_observations == [adopted_fd]
+        peer.settimeout(1)
+        assert peer.recv(len(b"host-owned")) == b"host-owned"
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_capsule_process_transfers_fd_once(tmp_path, monkeypatch):
     module_path = tmp_path / "capture_daemon_capsule.py"
     result_path = tmp_path / "received.json"
     module_path.write_text(
