@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import re
+import socket
 import threading
 import time
 from pathlib import Path
@@ -1683,6 +1684,377 @@ def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
             },
         )
     ]
+
+
+def test_external_cli_default_manager_queues_in_legacy_admission_mode(
+    tmp_path, monkeypatch
+):
+    """The generic, non-profile path retains the default manager bound."""
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    class _GrantingPort:
+        def authorize_derived_launch(self, _parent, _capability):
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "derived_launch_allowed_by_test",
+                audit_id="audit-default-manager-grant",
+            )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._derived_launch_admission_port = _GrantingPort()
+    queued = []
+    direct_supervisor_calls = []
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
+        lambda **kwargs: queued.append(kwargs),
+    )
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: direct_supervisor_calls.append(True),
+    )
+
+    root = RootProviderAdmission("root-external-cli-default-manager", "test-policy")
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "backend": "codex",
+                "tasks": [{"task": "test", "tools": []}],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result["status"] == "dispatched"
+    assert len(queued) == 1
+    assert queued[0]["pool_size"] == 100
+    assert direct_supervisor_calls == []
+
+
+def test_external_cli_indeterminate_admission_never_queues_default_manager(
+    tmp_path, monkeypatch
+):
+    """A configured generic authority still fails closed before queueing."""
+
+    class _IndeterminatePort:
+        def authorize_derived_launch(self, _parent, _capability):
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.INDETERMINATE,
+                "driver_authority_unavailable",
+            )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._derived_launch_admission_port = _IndeterminatePort()
+    queued = []
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
+        lambda **kwargs: queued.append(kwargs),
+    )
+
+    root = RootProviderAdmission("root-external-cli-indeterminate", "test-policy")
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "backend": "codex",
+                "tasks": [{"task": "test", "tools": []}],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result == {
+        "status": "error",
+        "message": "derived launch was not admitted: driver_authority_unavailable",
+        "reason_code": "driver_authority_unavailable",
+        "audit_id": None,
+    }
+    assert queued == []
+    daemon_root = agent._working_dir / "daemons"
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
+
+
+def test_profile_external_cli_rejects_before_requesting_driver_admission(
+    tmp_path, monkeypatch
+):
+    """A constrained profile never asks Driver for an unusable CLI grant."""
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+
+    class _CountingPort:
+        def __init__(self):
+            self.calls = []
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "grant_must_not_be_requested_for_external_cli",
+                audit_id="audit-must-not-exist",
+            )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._requires_derived_launch_admission_port = True
+    port = _CountingPort()
+    agent._derived_launch_admission_port = port
+    queued = []
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
+        lambda **kwargs: queued.append(kwargs),
+    )
+    source = agent._working_dir / "external-cli-sensitive-input.txt"
+    source.write_text("sensitive external CLI task input\n", encoding="utf-8")
+
+    root = RootProviderAdmission(
+        "root-profile-external-cli", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "backend": "codex",
+                "tasks": [
+                    {
+                        "task": "test",
+                        "tools": [],
+                        "task_files": [
+                            {"path": "external-cli-sensitive-input.txt"}
+                        ],
+                    }
+                ],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result == {
+        "status": "error",
+        "message": "external CLI daemon backends are unavailable under Driver admission",
+        "reason_code": "driver_external_cli_backend_unsupported",
+        "audit_id": None,
+    }
+    assert port.calls == []
+    assert queued == []
+    daemon_root = agent._working_dir / "daemons"
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
+    assert not (daemon_root / "_task_files").exists()
+
+
+def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
+    tmp_path, monkeypatch
+):
+    """A valid Driver batch never queues while its leases lack an FD transport."""
+    from lingtai.adapters.acp.driver_authority import (
+        DriverChildEndpointLease,
+        DriverDerivedLaunchAdmissionAdapter,
+        DriverDerivedLaunchGrant,
+    )
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    class _GrantingAuthority:
+        def __init__(self, grants):
+            self.grants = list(grants)
+            self.calls = []
+
+        def request_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return self.grants.pop(0)
+
+    first_child, first_peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    second_child, second_peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    first_lease = DriverChildEndpointLease(first_child)
+    second_lease = DriverChildEndpointLease(second_child)
+    authority = _GrantingAuthority([
+        DriverDerivedLaunchGrant(
+            ProviderAdmissionState.GRANTED,
+            "first_driver_grant",
+            audit_id="audit-driver-first",
+            child_endpoint_lease=first_lease,
+        ),
+        DriverDerivedLaunchGrant(
+            ProviderAdmissionState.GRANTED,
+            "second_driver_grant",
+            audit_id="audit-driver-second",
+            child_endpoint_lease=second_lease,
+        ),
+    ])
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._requires_derived_launch_admission_port = True
+    agent._derived_launch_admission_port = DriverDerivedLaunchAdmissionAdapter(
+        authority
+    )
+    queued = []
+    supervisor_calls = []
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
+        lambda **kwargs: queued.append(kwargs),
+    )
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: supervisor_calls.append(True),
+    )
+    source = agent._working_dir / "driver-sensitive-input.txt"
+    source.write_text("sensitive driver task input\n", encoding="utf-8")
+
+    root = RootProviderAdmission("root-driver-batch", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "tasks": [
+                    {
+                        "task": "first",
+                        "tools": [],
+                        "task_files": [{"path": "driver-sensitive-input.txt"}],
+                    },
+                    {"task": "second", "tools": []},
+                ],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    try:
+        assert result == {
+            "status": "error",
+            "message": "Driver child-endpoint handoff is unavailable",
+            "reason_code": "driver_child_endpoint_handoff_unavailable",
+            "audit_id": None,
+        }
+        assert authority.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
+        assert queued == []
+        assert supervisor_calls == []
+        assert daemon_dispatch.read_dispatches(
+            agent._working_dir, full_history=True
+        ).records == ()
+        for peer in (first_peer, second_peer):
+            peer.settimeout(2)
+            assert peer.recv(1) == b""
+        daemon_root = agent._working_dir / "daemons"
+        assert not (daemon_root / "_task_files").exists()
+        assert not daemon_root.exists() or not any(
+            path.is_dir() and path.name.startswith("em-")
+            for path in daemon_root.iterdir()
+        )
+    finally:
+        first_lease.close()
+        second_lease.close()
+        first_peer.close()
+        second_peer.close()
+
+
+def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
+    tmp_path, monkeypatch
+):
+    """A later Driver denial releases earlier grants with no durable residue."""
+    from lingtai.adapters.acp.driver_authority import (
+        DriverChildEndpointLease,
+        DriverDerivedLaunchAdmissionAdapter,
+        DriverDerivedLaunchGrant,
+    )
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    class _SequencedAuthority:
+        def __init__(self, grants):
+            self.grants = list(grants)
+            self.calls = []
+
+        def request_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return self.grants.pop(0)
+
+    child, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    lease = DriverChildEndpointLease(child)
+    authority = _SequencedAuthority([
+        DriverDerivedLaunchGrant(
+            ProviderAdmissionState.GRANTED,
+            "first_driver_grant",
+            audit_id="audit-driver-first",
+            child_endpoint_lease=lease,
+        ),
+        DriverDerivedLaunchGrant(
+            ProviderAdmissionState.DENIED,
+            "second_driver_denied",
+            audit_id="audit-driver-second",
+        ),
+    ])
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._requires_derived_launch_admission_port = True
+    agent._derived_launch_admission_port = DriverDerivedLaunchAdmissionAdapter(
+        authority
+    )
+    queued = []
+    supervisor_calls = []
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
+        lambda **kwargs: queued.append(kwargs),
+    )
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: supervisor_calls.append(True),
+    )
+    source = agent._working_dir / "driver-denial-sensitive-input.txt"
+    source.write_text("sensitive denied driver task input\n", encoding="utf-8")
+
+    root = RootProviderAdmission("root-driver-denial", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "tasks": [
+                    {
+                        "task": "first",
+                        "tools": [],
+                        "task_files": [
+                            {"path": "driver-denial-sensitive-input.txt"}
+                        ],
+                    },
+                    {"task": "second", "tools": []},
+                ],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    try:
+        assert result == {
+            "status": "error",
+            "message": "derived launch was not admitted: second_driver_denied",
+            "reason_code": "second_driver_denied",
+            "audit_id": "audit-driver-second",
+        }
+        assert authority.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
+        assert queued == []
+        assert supervisor_calls == []
+        assert daemon_dispatch.read_dispatches(
+            agent._working_dir, full_history=True
+        ).records == ()
+        peer.settimeout(2)
+        assert peer.recv(1) == b""
+        daemon_root = agent._working_dir / "daemons"
+        assert not (daemon_root / "_task_files").exists()
+        assert not daemon_root.exists() or not any(
+            path.is_dir() and path.name.startswith("em-")
+            for path in daemon_root.iterdir()
+        )
+    finally:
+        lease.close()
+        peer.close()
 
 
 def test_task_skills_render_compact_catalog_from_dir_and_file(tmp_path):

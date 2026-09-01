@@ -319,6 +319,8 @@ or optional-dependencies section for this standard-library slice.
 admission protocol. Every hello and decision request carries a fresh `call_id`;
 a missing or mismatched response id closes the transport and fails closed.
 Granted derived-launch endpoints are opaque, one-use leases and remain within
-this adapter layer. This module does **not** compose ACP profiles or launch
+the typed in-memory launch decision only. `DriverDerivedLaunchAdmissionAdapter`
+performs that narrow projection; it does not serialize, consume, or otherwise
+hand off the lease. This module does **not** compose ACP profiles or launch
 daemons, avatars, supervisors, or managers; those consumers belong to separate
 layers.

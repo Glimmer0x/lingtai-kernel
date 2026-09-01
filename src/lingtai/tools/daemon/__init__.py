@@ -5408,6 +5408,9 @@ class DaemonManager:
             )
         except DerivedLaunchAdmissionError as error:
             return self._admission_error_result(error)
+        if self._has_unhandoffable_driver_leases(launch_decisions):
+            self._close_unconsumed_derived_launch_decisions(launch_decisions)
+            return self._driver_handoff_unavailable_result()
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
@@ -5655,6 +5658,22 @@ class DaemonManager:
         ):
             return {"status": "error", "message": f"Unknown CLI backend: {backend}"}
 
+        # A constrained Driver profile grants a one-use endpoint for a
+        # LingTai-owned child.  An external CLI has no contract for that
+        # endpoint.  Reject before asking the authority, materializing task
+        # files, creating a run directory, or queuing work: requesting a grant
+        # first would create a misleading Driver audit event for a backend that
+        # can never consume it.
+        if self._runtime.requires_derived_launch_admission:
+            return {
+                "status": "error",
+                "message": (
+                    "external CLI daemon backends are unavailable under Driver admission"
+                ),
+                "reason_code": "driver_external_cli_backend_unsupported",
+                "audit_id": None,
+            }
+
         # Pre-flight: validate per-task backend_options BEFORE creating any
         # run_dir or scheduling work, so a single bad spec refuses the whole
         # batch with a clear message instead of leaving half-spawned daemons.
@@ -5719,6 +5738,9 @@ class DaemonManager:
             )
         except DerivedLaunchAdmissionError as error:
             return self._admission_error_result(error)
+        if self._has_unhandoffable_driver_leases(launch_decisions):
+            self._close_unconsumed_derived_launch_decisions(launch_decisions)
+            return self._driver_handoff_unavailable_result()
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
@@ -9552,20 +9574,50 @@ class DaemonManager:
         }
 
     @staticmethod
-    def _close_unconsumed_derived_launch_decisions(decisions: list[object]) -> None:
+    def _close_unconsumed_derived_launch_decisions(
+        decisions: list["DerivedLaunchDecision"],
+    ) -> None:
         """Release pre-authorized decisions that have not reached a child yet.
 
-        This base layer has no resource-bearing decisions. The Driver adapter
-        layer supplies a child endpoint lease per decision and replaces this
-        hook with deterministic release before it can use batch pre-admission.
+        A later denial or unavailable handoff occurs before any child can
+        consume earlier Driver grants.  Close every known lease in that batch
+        before exposing the refusal; generic Core decisions carry ``None``.
         """
-        return None
+        for decision in decisions:
+            lease = decision.child_endpoint_lease
+            if lease is not None:
+                try:
+                    lease.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _has_unhandoffable_driver_leases(
+        decisions: list["DerivedLaunchDecision"],
+    ) -> bool:
+        """Detect Driver grants before their lease can reach durable state.
+
+        B5's central manager transports capsules as JSON, so it cannot carry a
+        live child endpoint.  B8 will add the SCM_RIGHTS transport and its
+        restart invalidation rule.  Until then, a valid Driver grant fails
+        closed rather than being queued without its authority endpoint.
+        """
+        return any(decision.child_endpoint_lease is not None for decision in decisions)
+
+    @staticmethod
+    def _driver_handoff_unavailable_result() -> dict[str, str | None]:
+        return {
+            "status": "error",
+            "message": "Driver child-endpoint handoff is unavailable",
+            "reason_code": "driver_child_endpoint_handoff_unavailable",
+            "audit_id": None,
+        }
 
     def _authorize_derived_launch_batch(
         self, capability_name: str, task_count: int
-    ) -> list[object]:
+    ) -> list["DerivedLaunchDecision"]:
         """Authorize every child in a batch before any durable batch write."""
-        decisions: list[object] = []
+        decisions = []
         try:
             for _ in range(task_count):
                 decisions.append(self._authorize_derived_launch(capability_name))
@@ -9574,11 +9626,14 @@ class DaemonManager:
             raise
         return decisions
 
-    def _authorize_derived_launch(self, capability_name: str) -> object:
+    def _authorize_derived_launch(
+        self, capability_name: str
+    ) -> "DerivedLaunchDecision":
         """Reach the host decision seam before a daemon launch side effect."""
         from lingtai.kernel.provider_admission import (
             DerivedLaunchAdmissionError,
             DerivedLaunchCapability,
+            DerivedLaunchDecision,
         )
 
         capability = DerivedLaunchCapability(capability_name)

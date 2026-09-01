@@ -983,6 +983,14 @@ This requirement flag is not a grant, parent identity, or bearer. A future
 Driver authority bridge must supply those separately before any legitimate
 derived launch can be allowed.
 
+Until the POSIX manager's child-endpoint transport is available, a root Driver
+batch that receives one or more child endpoint leases is also refused before
+task-file materialization, run-directory creation, durable enqueue, or spawn;
+every already-issued lease is closed. An external CLI backend is refused even
+earlier, before it asks Driver for a lease it cannot consume. These are
+deliberately fail-closed transition rules, not successful Driver daemon
+dispatch: the later supervisor/manager FD handoff owns that transition.
+
 ## Acceptance Gate
 
 Any new daemon backend, backend-family reuse, or contract-impacting daemon
