@@ -196,9 +196,22 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
     def from_inherited_fd(cls, fd: int, *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -> "DriverAuthorityClient":
         if not isinstance(fd, int) or isinstance(fd, bool) or fd < 0:
             raise DriverAuthorityTransportError("authority fd is invalid")
+        endpoint: socket.socket | None = None
         try:
-            return cls(socket.socket(fileno=fd), timeout=timeout)
-        except OSError as exc:
+            endpoint = socket.socket(fileno=fd)
+            return cls(endpoint, timeout=timeout)
+        except (OSError, OverflowError) as exc:
+            # ``fileno=`` can reject a live non-socket descriptor before a
+            # socket object owns it.  This is still an inherited authority
+            # locator, so consume it on every rejected path rather than
+            # leaving it open (or inheritable) for a later child.
+            try:
+                if endpoint is None:
+                    os.close(fd)
+                else:
+                    endpoint.close()
+            except (OSError, OverflowError):
+                pass
             raise DriverAuthorityTransportError("authority fd is unavailable") from exc
 
     @property
@@ -425,7 +438,7 @@ def authority_adapter_from_environment(
             authority.close()
             raise DriverAuthorityTransportError("ACP profile requires a root authority endpoint")
         return authority
-    except (TypeError, ValueError, DriverAuthorityTransportError):
+    except (TypeError, ValueError, OverflowError, DriverAuthorityTransportError):
         return UnavailableDriverAuthorityAdapter()
 
 

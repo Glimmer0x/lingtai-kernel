@@ -63,6 +63,15 @@ def _assert_peer_closed(peer):
     assert peer.recv(1) == b""
 
 
+def _assert_fd_closed(fd):
+    try:
+        os.fstat(fd)
+    except OSError as exc:
+        assert exc.errno == 9  # EBADF
+    else:
+        raise AssertionError("rejected inherited descriptor remained open")
+
+
 def _hello(sock, *, role="root", capability=None):
     request = _recv(sock)
     assert request["op"] == "hello"
@@ -117,6 +126,36 @@ def test_profile_authority_configuration_fails_closed_without_a_usable_root_endp
     )
     assert provider.state is ProviderAdmissionState.INDETERMINATE
     assert launch.state is ProviderAdmissionState.INDETERMINATE
+
+
+def test_profile_authority_configuration_closes_rejected_non_socket_descriptors(monkeypatch):
+    read_fd, write_fd = os.pipe()
+    file_fd = os.open(__file__, os.O_RDONLY)
+    try:
+        for fd in (read_fd, file_fd):
+            os.set_inheritable(fd, True)
+            monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(fd))
+
+            authority = authority_adapter_from_environment()
+
+            assert isinstance(authority, UnavailableDriverAuthorityAdapter)
+            assert "LINGTAI_DRIVER_AUTHORITY_FD" not in os.environ
+            _assert_fd_closed(fd)
+    finally:
+        for fd in (read_fd, write_fd, file_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def test_profile_authority_configuration_normalizes_an_out_of_range_fd(monkeypatch):
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(2**63))
+
+    authority = authority_adapter_from_environment()
+
+    assert isinstance(authority, UnavailableDriverAuthorityAdapter)
+    assert "LINGTAI_DRIVER_AUTHORITY_FD" not in os.environ
 
 
 def test_profile_authority_configuration_rejects_a_derived_endpoint(monkeypatch):
