@@ -6153,13 +6153,13 @@ class DaemonManager:
         limit_int: int,
     ) -> dict:
         """Build list from append-order ledger, never historical directories."""
-        # Filters/search are explicit queries and may stream the ledger.  The
-        # ordinary list reads an EOF tail only; created_at is never re-sorted.
-        full_history = bool(query or (wanted_status and wanted_status != "all") or not include_done)
+        # Every list/filter path reads one caller-selected bounded ledger window;
+        # filters never promote the default EOF tail into full-history hydration.
+        # created_at is never re-sorted.
         _ledger, rows, warnings = dispatch_ledger.read_recent_daemon_states(
             self._workdir.path,
             limit=limit_int,
-            full_history=full_history,
+            full_history=False,
         )
         entries: list[dict] = []
         known_run_ids: set[str] = set()
