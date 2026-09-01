@@ -388,6 +388,31 @@ def test_derived_endpoint_cannot_mint_a_second_child_even_with_a_socket():
     assert decision.source is ProviderAdmissionDecisionSource.LOCAL_POLICY
 
 
+def test_nested_derived_launch_denial_uses_source_not_reason_code_for_origin():
+    def handler(sock):
+        _hello(sock)
+        request = _recv(sock)
+        assert request["op"] == "authorize_derived_launch"
+        _send(sock, {
+            "version": 1,
+            "call_id": request["call_id"],
+            "state": "denied",
+            "reason_code": "nested_derived_launch_denied",
+        })
+
+    endpoint, thread, errors = _server(handler)
+    client = DriverAuthorityClient(endpoint)
+    decision = client.request_derived_launch(
+        RootProviderAdmission("turn", "v1"), DerivedLaunchCapability.DAEMON
+    )
+    client.close()
+    thread.join(2)
+    assert not errors
+    assert decision.state is ProviderAdmissionState.DENIED
+    assert decision.reason_code == "nested_derived_launch_denied"
+    assert decision.source is ProviderAdmissionDecisionSource.DRIVER
+
+
 def test_unknown_driver_reason_is_downgraded_without_becoming_a_local_transport_failure():
     def handler(sock):
         _hello(sock)
