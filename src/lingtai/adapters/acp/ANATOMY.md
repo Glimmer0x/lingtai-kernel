@@ -9,7 +9,6 @@ related_files:
   - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
-  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/cli_acp.py
   - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli.py
