@@ -21,6 +21,7 @@ from lingtai.kernel.provider_admission import (
     DerivedLaunchDecision,
     DerivedProviderAdmission,
     ProviderAdmissionParent,
+    ProviderAdmissionDecisionSource,
     ProviderAdmissionState,
     ProviderCallAdmissionPort,
     ProviderCallClass,
@@ -34,6 +35,15 @@ DRIVER_AUTHORITY_FD_ENV = "LINGTAI_DRIVER_AUTHORITY_FD"
 _PROTOCOL_VERSION = 1
 _MAX_FRAME_BYTES = 64 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 2.0
+_DRIVER_DECISION_STATES = {
+    "allowed": ProviderAdmissionState.GRANTED,
+    "endpoint_already_claimed": ProviderAdmissionState.DENIED,
+    "endpoint_binding_mismatch": ProviderAdmissionState.DENIED,
+    "nested_derived_launch_denied": ProviderAdmissionState.DENIED,
+    "malformed_request": ProviderAdmissionState.INDETERMINATE,
+    "unsupported_operation": ProviderAdmissionState.INDETERMINATE,
+}
+_UNKNOWN_DENIAL = "unknown_denial"
 
 
 class DriverAuthorityTransportError(RuntimeError):
@@ -103,6 +113,7 @@ class DriverDerivedLaunchGrant:
     reason_code: str
     audit_id: str | None = None
     child_endpoint_lease: DriverChildEndpointLease | None = None
+    source: ProviderAdmissionDecisionSource = ProviderAdmissionDecisionSource.LOCAL_POLICY
 
 
 class DriverDerivedLaunchAdmissionAdapter:
@@ -128,6 +139,7 @@ class DriverDerivedLaunchAdmissionAdapter:
             grant.state,
             grant.reason_code,
             audit_id=grant.audit_id,
+            source=grant.source,
             child_endpoint_lease=grant.child_endpoint_lease,
         )
 
@@ -151,6 +163,7 @@ class UnavailableDriverAuthorityAdapter:
         return ProviderCallDecision(
             ProviderAdmissionState.INDETERMINATE,
             "driver_authority_unavailable",
+            ProviderAdmissionDecisionSource.TRANSPORT,
         )
 
     def authorize_derived_launch(
@@ -161,6 +174,7 @@ class UnavailableDriverAuthorityAdapter:
         return DerivedLaunchDecision(
             ProviderAdmissionState.INDETERMINATE,
             "driver_authority_unavailable",
+            source=ProviderAdmissionDecisionSource.TRANSPORT,
         )
 
 
@@ -231,7 +245,11 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
 
     def authorize_provider_call(self, parent: ProviderAdmissionParent, call_class: ProviderCallClass) -> ProviderCallDecision:
         if not self._valid_provider_parent(parent, call_class):
-            return ProviderCallDecision(ProviderAdmissionState.DENIED, "provider_parent_endpoint_mismatch")
+            return ProviderCallDecision(
+                ProviderAdmissionState.DENIED,
+                "provider_parent_endpoint_mismatch",
+                ProviderAdmissionDecisionSource.LOCAL_POLICY,
+            )
         with self._lock:
             try:
                 response, received_fd = self._exchange({
@@ -242,16 +260,28 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
                     os.close(received_fd)
                     raise DriverAuthorityTransportError("provider decision must not return an endpoint")
                 state, reason, _audit = self._decision(response)
-                return ProviderCallDecision(state, reason)
+                return ProviderCallDecision(state, reason, ProviderAdmissionDecisionSource.DRIVER)
             except DriverAuthorityTransportError:
                 self._close_locked()
-                return ProviderCallDecision(ProviderAdmissionState.INDETERMINATE, "driver_authority_unavailable")
+                return ProviderCallDecision(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "driver_authority_unavailable",
+                    ProviderAdmissionDecisionSource.TRANSPORT,
+                )
 
     def request_derived_launch(self, parent: RootProviderAdmission, capability: DerivedLaunchCapability) -> DriverDerivedLaunchGrant:
         if not isinstance(parent, RootProviderAdmission) or self._identity.role != "root":
-            return DriverDerivedLaunchGrant(ProviderAdmissionState.DENIED, "nested_derived_launch_denied")
+            return DriverDerivedLaunchGrant(
+                ProviderAdmissionState.DENIED,
+                "nested_derived_launch_denied",
+                source=ProviderAdmissionDecisionSource.LOCAL_POLICY,
+            )
         if not isinstance(capability, DerivedLaunchCapability):
-            return DriverDerivedLaunchGrant(ProviderAdmissionState.INDETERMINATE, "driver_authority_unavailable")
+            return DriverDerivedLaunchGrant(
+                ProviderAdmissionState.INDETERMINATE,
+                "driver_authority_unavailable",
+                source=ProviderAdmissionDecisionSource.LOCAL_POLICY,
+            )
         with self._lock:
             received_fd: int | None = None
             try:
@@ -275,7 +305,12 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
                         # an endpoint on that frame violates framing. Retire
                         # the authority stream before any later request.
                         self._close_locked()
-                    return DriverDerivedLaunchGrant(state, reason, audit_id)
+                    return DriverDerivedLaunchGrant(
+                        state,
+                        reason,
+                        audit_id,
+                        source=ProviderAdmissionDecisionSource.DRIVER,
+                    )
                 if received_fd is None:
                     raise DriverAuthorityTransportError("granted launch omitted child endpoint")
                 # _checked_endpoint takes ownership of the descriptor, whether
@@ -283,7 +318,13 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
                 # so an error cannot close a recycled descriptor a second time.
                 endpoint_fd, received_fd = received_fd, None
                 endpoint = self._checked_endpoint(endpoint_fd)
-                return DriverDerivedLaunchGrant(state, reason, audit_id, DriverChildEndpointLease(endpoint))
+                return DriverDerivedLaunchGrant(
+                    state,
+                    reason,
+                    audit_id,
+                    DriverChildEndpointLease(endpoint),
+                    ProviderAdmissionDecisionSource.DRIVER,
+                )
             except DriverAuthorityTransportError:
                 if received_fd is not None:
                     try:
@@ -291,7 +332,11 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
                     except OSError:
                         pass
                 self._close_locked()
-                return DriverDerivedLaunchGrant(ProviderAdmissionState.INDETERMINATE, "driver_authority_unavailable")
+                return DriverDerivedLaunchGrant(
+                    ProviderAdmissionState.INDETERMINATE,
+                    "driver_authority_unavailable",
+                    source=ProviderAdmissionDecisionSource.TRANSPORT,
+                )
 
     def close(self) -> None:
         with self._lock:
@@ -384,6 +429,9 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
         reason, audit_id = response.get("reason_code"), response.get("audit_id")
         if not isinstance(reason, str) or not reason or (audit_id is not None and (not isinstance(audit_id, str) or not audit_id)):
             raise DriverAuthorityTransportError("authority decision fields are invalid")
+        expected_state = _DRIVER_DECISION_STATES.get(reason)
+        if expected_state is None or state is not expected_state:
+            return ProviderAdmissionState.INDETERMINATE, _UNKNOWN_DENIAL, audit_id
         return state, reason, audit_id
 
     @staticmethod

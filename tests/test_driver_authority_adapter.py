@@ -19,6 +19,7 @@ from lingtai.adapters.acp.driver_authority import (
 )
 from lingtai.kernel.provider_admission import (
     DerivedLaunchCapability,
+    ProviderAdmissionDecisionSource,
     ProviderAdmissionState,
     ProviderCallClass,
     RootProviderAdmission,
@@ -287,7 +288,7 @@ def test_denied_child_endpoint_is_closed_without_erasing_driver_reason():
         request = _recv(sock)
         _send(sock, {
             "version": 1, "call_id": request["call_id"], "state": "denied",
-            "reason_code": "policy_denied", "audit_id": "audit-1",
+            "reason_code": "endpoint_already_claimed", "audit_id": "audit-1",
         }, fd=driver_end.fileno())
         driver_end.close()
 
@@ -297,8 +298,9 @@ def test_denied_child_endpoint_is_closed_without_erasing_driver_reason():
     thread.join(2)
     assert not errors
     assert decision.state is ProviderAdmissionState.DENIED
-    assert decision.reason_code == "policy_denied"
+    assert decision.reason_code == "endpoint_already_claimed"
     assert decision.audit_id == "audit-1"
+    assert decision.source is ProviderAdmissionDecisionSource.DRIVER
     _assert_peer_closed(peer)
     peer.close()
 
@@ -347,6 +349,47 @@ def test_derived_endpoint_cannot_mint_a_second_child_even_with_a_socket():
     assert not errors
     assert decision.state is ProviderAdmissionState.DENIED
     assert decision.reason_code == "nested_derived_launch_denied"
+    assert decision.source is ProviderAdmissionDecisionSource.LOCAL_POLICY
+
+
+def test_unknown_driver_reason_is_downgraded_without_becoming_a_local_transport_failure():
+    def handler(sock):
+        _hello(sock)
+        request = _recv(sock)
+        _send(sock, {
+            "version": 1,
+            "call_id": request["call_id"],
+            "state": "denied",
+            "reason_code": "future_driver_policy_denial",
+        })
+
+    endpoint, thread, errors = _server(handler)
+    client = DriverAuthorityClient(endpoint)
+    decision = client.authorize_provider_call(
+        RootProviderAdmission("turn", "v1"), ProviderCallClass.ROOT
+    )
+    thread.join(2)
+    assert not errors
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert decision.reason_code == "unknown_denial"
+    assert decision.source is ProviderAdmissionDecisionSource.DRIVER
+
+
+def test_transport_failure_is_distinguished_from_a_driver_denial():
+    def handler(sock):
+        _hello(sock)
+        _recv(sock)
+
+    endpoint, thread, errors = _server(handler)
+    client = DriverAuthorityClient(endpoint)
+    decision = client.authorize_provider_call(
+        RootProviderAdmission("turn", "v1"), ProviderCallClass.ROOT
+    )
+    thread.join(2)
+    assert not errors
+    assert decision.state is ProviderAdmissionState.INDETERMINATE
+    assert decision.reason_code == "driver_authority_unavailable"
+    assert decision.source is ProviderAdmissionDecisionSource.TRANSPORT
 
 
 def test_local_child_mode_must_match_driver_endpoint_capability():
@@ -417,7 +460,7 @@ def test_denied_endpoint_reply_invalidates_authority_before_a_second_request():
         first = _recv(sock)
         _send(sock, {
             "version": 1, "call_id": first["call_id"], "state": "denied",
-            "reason_code": "policy_denied",
+            "reason_code": "endpoint_already_claimed",
         }, fd=denied_driver_end.fileno())
         denied_driver_end.close()
         try:
@@ -437,6 +480,7 @@ def test_denied_endpoint_reply_invalidates_authority_before_a_second_request():
     thread.join(2)
     assert not errors
     assert first.state is ProviderAdmissionState.DENIED
+    assert first.source is ProviderAdmissionDecisionSource.DRIVER
     assert second.state is ProviderAdmissionState.INDETERMINATE
     _assert_peer_closed(peer)
     peer.close()
