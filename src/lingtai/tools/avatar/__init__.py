@@ -972,12 +972,24 @@ class AvatarManager:
             DerivedLaunchCapability,
         )
 
+        decision: DerivedLaunchDecision | None = None
+        transferred = False
         try:
-            decision = self._host.avatar_parent.authorize_derived_launch(
-                DerivedLaunchCapability.AVATAR
-            )
-        except DerivedLaunchAdmissionError as exc:
-            decision = exc.decision
+            try:
+                decision = self._host.avatar_parent.authorize_derived_launch(
+                    DerivedLaunchCapability.AVATAR
+                )
+            except DerivedLaunchAdmissionError as exc:
+                decision = exc.decision
+                self._append_ledger(
+                    "avatar_admission_decision",
+                    peer_name,
+                    capability=DerivedLaunchCapability.AVATAR.value,
+                    state=decision.state.value,
+                    reason_code=decision.reason_code,
+                    audit_id=decision.audit_id,
+                )
+                raise
             self._append_ledger(
                 "avatar_admission_decision",
                 peer_name,
@@ -986,18 +998,13 @@ class AvatarManager:
                 reason_code=decision.reason_code,
                 audit_id=decision.audit_id,
             )
-            raise
-        self._append_ledger(
-            "avatar_admission_decision",
-            peer_name,
-            capability=DerivedLaunchCapability.AVATAR.value,
-            state=decision.state.value,
-            reason_code=decision.reason_code,
-            audit_id=decision.audit_id,
-        )
-        if not decision.allowed:
-            raise DerivedLaunchAdmissionError(decision)
-        return decision
+            if not decision.allowed:
+                raise DerivedLaunchAdmissionError(decision)
+            transferred = True
+            return decision
+        finally:
+            if decision is not None and not transferred:
+                self._close_unconsumed_launch_lease(decision)
 
     # ------------------------------------------------------------------
     # Ledger reading

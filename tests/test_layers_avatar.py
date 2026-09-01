@@ -213,6 +213,13 @@ class TestAvatarManager:
         )
         from lingtai.agent import Agent
 
+        class _Lease:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
         class _DenyingPort:
             def __init__(self):
                 self.calls = []
@@ -223,8 +230,10 @@ class TestAvatarManager:
                     ProviderAdmissionState.DENIED,
                     "derived_launch_denied_by_test",
                     audit_id="audit-avatar-2a",
+                    child_endpoint_lease=lease,
                 )
 
+        lease = _Lease()
         parent = Agent(
             service=make_mock_service(),
             agent_name="parent",
@@ -244,6 +253,7 @@ class TestAvatarManager:
             clear_provider_admission(token)
 
         assert "derived_launch_denied_by_test" in result["error"]
+        assert lease.closed is True
         assert port.calls == [(root, DerivedLaunchCapability.AVATAR)]
         assert not (parent._working_dir.parent / "child").exists()
         records = [
@@ -263,6 +273,109 @@ class TestAvatarManager:
                 "audit_id": "audit-avatar-2a",
             }
         ]
+
+    def test_profile_avatar_admission_error_closes_untransferred_lease(self, tmp_path):
+        """A port-raised rejection releases the lease before Avatar returns."""
+        from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchAdmissionError,
+            DerivedLaunchDecision,
+            ProviderAdmissionState,
+            RootProviderAdmission,
+            bind_provider_admission,
+            clear_provider_admission,
+        )
+        from lingtai.agent import Agent
+
+        class _Lease:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        lease = _Lease()
+
+        class _RaisingPort:
+            def authorize_derived_launch(self, _parent, _capability):
+                raise DerivedLaunchAdmissionError(
+                    DerivedLaunchDecision(
+                        ProviderAdmissionState.INDETERMINATE,
+                        "driver_unavailable",
+                        child_endpoint_lease=lease,
+                    )
+                )
+
+        parent = Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=tmp_path / "parent",
+            capabilities=["avatar"],
+            _turn_origin_policy=RUNTIME_POLICY,
+            derived_launch_admission_port=_RaisingPort(),
+        )
+        token = bind_provider_admission(
+            RootProviderAdmission("root-avatar-raised-lease", RUNTIME_POLICY.policy_version)
+        )
+        try:
+            result = parent.get_capability("avatar").handle(
+                {"action": "spawn", "input": {"name": "child", "confirm": True}}
+            )
+        finally:
+            clear_provider_admission(token)
+
+        assert "driver_unavailable" in result["error"]
+        assert lease.closed is True
+
+    def test_profile_avatar_ledger_failure_closes_untransferred_lease(self, tmp_path, monkeypatch):
+        """Ledger I/O cannot strand a grant before spawn owns its lease."""
+        from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchDecision,
+            ProviderAdmissionState,
+            RootProviderAdmission,
+            bind_provider_admission,
+            clear_provider_admission,
+        )
+        from lingtai.agent import Agent
+
+        class _Lease:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        lease = _Lease()
+
+        class _GrantingPort:
+            def authorize_derived_launch(self, _parent, _capability):
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.GRANTED,
+                    "allowed",
+                    child_endpoint_lease=lease,
+                )
+
+        parent = Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=tmp_path / "parent",
+            capabilities=["avatar"],
+            _turn_origin_policy=RUNTIME_POLICY,
+            derived_launch_admission_port=_GrantingPort(),
+        )
+        manager = parent.get_capability("avatar")
+        monkeypatch.setattr(manager, "_append_ledger", MagicMock(side_effect=OSError("disk full")))
+        token = bind_provider_admission(
+            RootProviderAdmission("root-avatar-ledger-lease", RUNTIME_POLICY.policy_version)
+        )
+        try:
+            with pytest.raises(OSError, match="disk full"):
+                manager._authorize_derived_launch("child")
+        finally:
+            clear_provider_admission(token)
+
+        assert lease.closed is True
 
     def test_profile_avatar_grant_reaches_the_same_launch_recorder(
         self, tmp_path, monkeypatch
