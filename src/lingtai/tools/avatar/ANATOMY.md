@@ -40,8 +40,8 @@ maintenance: |
 Avatar capability — spawn independent peer agents (分身) as fully detached
 processes. Two modes:
 
-- **Shallow (初生):** Copy `init.json`, write restrictive
-  `.lingtai-derived-child.json` to a new working dir, strip identity, launch.
+- **Shallow (初生):** Copy `init.json`, strip identity, launch. A Driver
+  lease additionally writes restrictive `.lingtai-derived-child.json`.
   The avatar gets the same LLM config + capabilities but no history.
 - **Deep (二重身):** Copy identity and durable knowledge (`system/`, `knowledge/`, `exports/`)
   plus `init.json`, strip name + history. The avatar is a doppelgänger — same
@@ -165,16 +165,18 @@ avatar/__init__.py
 - **Relative path re-rooting:** Preset paths (`default`, `active`, `allowed`) that are relative are re-rooted against the parent's working dir so they remain valid from the avatar's different directory.
 - **Liveness check:** Before spawning, existing ledger entries are observed through a target-bound `PosixAgentPresenceStoreAdapter` and Core `observe_alive()` policy. If a live avatar with the same name exists, the spawn is refused with `already_active`.
 - **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or Port exit truth within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported. Port release after observation never kills a live slow avatar.
-- **Derived child requirement:** `_spawn()` atomically writes
-  `.lingtai-derived-child.json` before launch, outside the child-managed
-  `system/` namespace. The shared probe also treats a legacy
+- **Derived child requirement:** only a Driver-granted child-endpoint lease
+  makes `_spawn()` atomically write `.lingtai-derived-child.json` before
+  launch, outside the child-managed `system/` namespace. The shared probe also treats a legacy
   `system/derived_child.json` as restrictive so existing children retain their
   requirement after upgrade; only both locations being missing is absence.
   `cli.run()` reads that durable state on every boot and turns it into the
   restrictive requirement that any nested daemon/avatar launch has authority.
   The launcher also adds
   `LINGTAI_DERIVED_AVATAR_EXECUTION=1` as redundant immediate-launch defense.
-  Neither form carries a parent, grant, or authority bearer.
+  Neither marker nor environment form carries a parent, grant, or authority
+  bearer; the opaque lease is handed only to the POSIX launcher, or closed if
+  launch does not reach that Port.
 - **Deep copy scope guard:** `_prepare_deep()` asserts `dst.parent == src.parent` to prevent rmtree from reaching outside the network root.
 - **Mission-quality gate (issue #33):** Before any filesystem mutation, `_spawn` runs `_mission_looks_unsafe(reasoning)` — empty / sub-20-char / debug-placeholder missions return `{"status": "confirmation_needed", ...}` unless `confirm=true`. The dry-run path is exempt (its purpose is preview without commitment).
 - **Dry-run (issue #33):** `dry_run=true` short-circuits after parent `init.json` is loaded and before any working dir is created or process launched, returning `{"status": "dry_run", "preview": {...}}`. The preview includes whether the mission would have tripped the quality gate.
@@ -203,6 +205,7 @@ avatar/__init__.py
   capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules
   mutation from emanations.
 
-Platform process mechanics are in `adapters/avatar_launcher.py` and the
-POSIX reference adapter. Unsupported Windows selection fails loudly; a future
-Windows adapter and native acceptance remain outside this re-cut.
+Platform process mechanics are in `adapters/avatar_launcher.py` plus the POSIX
+and Windows adapters. A Driver child-endpoint handoff is POSIX-only: the POSIX
+adapter inherits exactly the one-shot endpoint, while the Windows adapter
+closes and rejects that lease rather than dropping it.

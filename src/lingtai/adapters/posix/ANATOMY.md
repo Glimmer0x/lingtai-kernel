@@ -174,7 +174,10 @@ co-located owning ANATOMY.md files.
 - `PosixAvatarLauncherAdapter` implements the avatar-local launcher Port with
   inherited cwd/environment, disconnected stdio, binary-write stderr,
   `start_new_session`, exact `poll()` truth, one-process TERM/KILL, and
-  non-killing release (`src/lingtai/adapters/posix/avatar_launcher.py`).
+  non-killing release. For a Driver-approved avatar only, it consumes the
+  opaque one-shot AF_UNIX child endpoint, passes exactly that descriptor with
+  `close_fds=True`, then closes its parent copy
+  (`src/lingtai/adapters/posix/avatar_launcher.py`).
 
 ## Connections
 

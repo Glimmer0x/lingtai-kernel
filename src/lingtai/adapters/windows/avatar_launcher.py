@@ -7,6 +7,10 @@ plus the opaque ``Popen`` handle. Detachment uses
 ``creationflags=_win32.DETACHED_CREATIONFLAGS`` (new process group + no window)
 and ``close_fds=True`` instead of the POSIX ``start_new_session=True``.
 
+The Driver's avatar child-endpoint wire is currently POSIX-only. A request that
+carries that opaque one-shot lease closes it and fails before process creation
+on Windows, instead of silently dropping its endpoint.
+
 Honest termination tier (owner decision U7): on Windows both
 ``subprocess.Popen.terminate()`` and ``.kill()`` call ``TerminateProcess`` —
 there is no graceful signal to send. This adapter therefore does **not** pretend
@@ -25,6 +29,19 @@ from lingtai.tools.avatar._launcher import AvatarLaunchReceipt, AvatarLaunchRequ
 
 class WindowsAvatarLauncherAdapter:
     def launch(self, request: AvatarLaunchRequest) -> AvatarLaunchReceipt:
+        if request.authority_lease is not None:
+            # The Driver child endpoint is an AF_UNIX descriptor handoff.
+            # Windows has no corresponding avatar-launch boundary yet, so
+            # never start a child that silently lost its approved endpoint.
+            close = getattr(request.authority_lease, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except OSError:
+                    pass
+            raise RuntimeError(
+                "Driver avatar child endpoint handoff is only supported on POSIX"
+            )
         request.stderr_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_fh = request.stderr_path.open("wb")
         try:

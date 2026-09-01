@@ -83,6 +83,27 @@ def test_windows_launch_propagates_explicit_derived_child_requirement(tmp_path):
     assert popen.call_args.kwargs["env"]["LINGTAI_DERIVED_AVATAR_EXECUTION"] == "1"
 
 
+def test_windows_rejects_and_closes_posix_driver_child_endpoint(tmp_path):
+    """A Windows launch must not discard the Driver's one-shot endpoint."""
+    class Lease:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    lease = Lease()
+    request = AvatarLaunchRequest(
+        ("python", "-m", "lingtai", "run", "/avatar"),
+        tmp_path / "logs" / "spawn.stderr",
+        authority_lease=lease,
+    )
+    with patch("lingtai.adapters.windows.avatar_launcher.subprocess.Popen") as popen:
+        with pytest.raises(RuntimeError, match="only supported on POSIX"):
+            WindowsAvatarLauncherAdapter().launch(request)
+    assert lease.closed is True
+    popen.assert_not_called()
+
+
 def test_windows_terminate_and_force_terminate_both_forceful():
     """Owner decision U7: both map to the handle's forceful kill/terminate;
     the adapter never pretends a graceful tier exists."""

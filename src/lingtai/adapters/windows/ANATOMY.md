@@ -89,7 +89,9 @@ only method execution requires Windows.
   (`src/lingtai/adapters/windows/process_scan.py`).
 - `WindowsAvatarLauncherAdapter` — avatar spawn with the shared creation
   flags; `terminate`/`force_terminate` are both documented-forceful
-  `TerminateProcess` (`src/lingtai/adapters/windows/avatar_launcher.py`).
+  `TerminateProcess`. The Driver avatar child-endpoint handoff is POSIX-only;
+  Windows closes and rejects such a lease rather than launching a child
+  without it (`src/lingtai/adapters/windows/avatar_launcher.py`).
 - `WindowsDaemonSupervisorAdapter` — detached daemon supervisor spawn with the
   inherited-handle one-shot capsule wire (`handle_list` +
   `LINGTAI_DAEMON_CAPSULE_HANDLE`), plus execution-child and resume-owner

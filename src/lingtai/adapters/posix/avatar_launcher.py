@@ -12,17 +12,34 @@ class PosixAvatarLauncherAdapter:
     def launch(self, request: AvatarLaunchRequest) -> AvatarLaunchReceipt:
         request.stderr_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_fh = request.stderr_path.open("wb")
+        authority_fd = None
         try:
             kwargs = {
                 "stdin": subprocess.DEVNULL,
                 "stdout": subprocess.DEVNULL,
                 "stderr": stderr_fh,
                 "start_new_session": True,
+                "close_fds": True,
             }
-            if request.environment is not None:
-                kwargs["env"] = {**os.environ, **request.environment}
+            environment = dict(request.environment or {})
+            if request.authority_lease is not None:
+                from lingtai.adapters.acp.driver_authority import (
+                    DRIVER_AUTHORITY_FD_ENV,
+                    consume_posix_child_endpoint_lease,
+                )
+
+                authority_fd = consume_posix_child_endpoint_lease(request.authority_lease)
+                environment[DRIVER_AUTHORITY_FD_ENV] = str(authority_fd)
+                kwargs["pass_fds"] = (authority_fd,)
+            if environment:
+                kwargs["env"] = {**os.environ, **environment}
             process = subprocess.Popen(list(request.argv), **kwargs)
         finally:
+            if authority_fd is not None:
+                try:
+                    os.close(authority_fd)
+                except OSError:
+                    pass
             stderr_fh.close()
         return AvatarLaunchReceipt(process.pid, process)
 
