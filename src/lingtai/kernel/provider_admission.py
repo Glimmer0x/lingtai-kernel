@@ -295,6 +295,11 @@ def require_derived_launch_admission(
         )
     try:
         decision = port.authorize_derived_launch(parent, capability)
+    except DerivedLaunchAdmissionError:
+        # A structured adapter denial can carry an opaque child-endpoint
+        # lease.  Preserve it for the concrete launch consumer, which owns
+        # releasing that lease before surfacing the failure.
+        raise
     except Exception:
         decision = DerivedLaunchDecision(
             ProviderAdmissionState.INDETERMINATE,

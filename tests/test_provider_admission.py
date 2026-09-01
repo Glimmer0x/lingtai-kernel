@@ -710,6 +710,37 @@ def test_derived_launch_port_is_fail_closed_when_unconnected_or_indeterminate():
     assert raised.value.decision.state is ProviderAdmissionState.INDETERMINATE
 
 
+def test_derived_launch_port_preserves_a_structured_adapter_error_decision():
+    """The launch consumer must receive the original opaque lease decision."""
+
+    class _Lease:
+        def close(self):
+            pass
+
+    lease = _Lease()
+    decision = DerivedLaunchDecision(
+        ProviderAdmissionState.INDETERMINATE,
+        "driver_unavailable",
+        child_endpoint_lease=lease,
+    )
+
+    class _Port:
+        def authorize_derived_launch(self, _parent, _capability):
+            raise DerivedLaunchAdmissionError(decision)
+
+    root = RootProviderAdmission("turn-a", RUNTIME_POLICY.policy_version)
+    token = bind_provider_admission(root)
+    try:
+        with pytest.raises(DerivedLaunchAdmissionError) as raised:
+            require_derived_launch_admission(_Port(), DerivedLaunchCapability.AVATAR)
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.decision is decision
+    assert raised.value.decision.reason_code == "driver_unavailable"
+    assert raised.value.decision.child_endpoint_lease is lease
+
+
 def test_required_derived_launch_port_cannot_fall_back_to_legacy_default():
     """A constrained composition must expose a missing Driver seam."""
 
