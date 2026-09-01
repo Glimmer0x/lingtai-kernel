@@ -14,6 +14,8 @@ from unittest.mock import patch
 from lingtai.adapters.acp.driver_authority import (
     DriverAuthorityClient,
     DriverAuthorityTransportError,
+    UnavailableDriverAuthorityAdapter,
+    authority_adapter_from_environment,
 )
 from lingtai.kernel.provider_admission import (
     DerivedLaunchCapability,
@@ -81,6 +83,55 @@ def test_hello_and_provider_request_are_correlated():
     thread.join(2)
     assert not errors
     assert decision.state is ProviderAdmissionState.GRANTED
+
+
+def test_profile_authority_configuration_consumes_a_root_endpoint(monkeypatch):
+    def handler(sock):
+        _hello(sock)
+
+    endpoint, thread, errors = _server(handler)
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(endpoint.detach()))
+
+    authority = authority_adapter_from_environment()
+
+    thread.join(2)
+    assert not errors
+    assert isinstance(authority, DriverAuthorityClient)
+    assert authority.identity.role == "root"
+    assert "LINGTAI_DRIVER_AUTHORITY_FD" not in os.environ
+    authority.close()
+
+
+def test_profile_authority_configuration_fails_closed_without_a_usable_root_endpoint(monkeypatch):
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", "not-a-fd")
+
+    authority = authority_adapter_from_environment()
+
+    assert isinstance(authority, UnavailableDriverAuthorityAdapter)
+    assert "LINGTAI_DRIVER_AUTHORITY_FD" not in os.environ
+    provider = authority.authorize_provider_call(
+        RootProviderAdmission("turn", "v1"), ProviderCallClass.ROOT
+    )
+    launch = authority.authorize_derived_launch(
+        RootProviderAdmission("turn", "v1"), DerivedLaunchCapability.DAEMON
+    )
+    assert provider.state is ProviderAdmissionState.INDETERMINATE
+    assert launch.state is ProviderAdmissionState.INDETERMINATE
+
+
+def test_profile_authority_configuration_rejects_a_derived_endpoint(monkeypatch):
+    def handler(sock):
+        _hello(sock, role="derived", capability="daemon")
+        assert sock.recv(1) == b""
+
+    endpoint, thread, errors = _server(handler)
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(endpoint.detach()))
+
+    authority = authority_adapter_from_environment()
+
+    thread.join(2)
+    assert not errors
+    assert isinstance(authority, UnavailableDriverAuthorityAdapter)
 
 
 def test_mismatched_call_id_closes_received_endpoint_and_fails_closed():

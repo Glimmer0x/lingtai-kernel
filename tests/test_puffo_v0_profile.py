@@ -400,6 +400,7 @@ def test_profile_session_rejects_remote_workspace_and_mcp_inputs(tmp_path):
 
 def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp_path):
     import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp.driver_authority import UnavailableDriverAuthorityAdapter
     from lingtai.adapters.acp.puffo_v0 import DirectoryBinding, PuffoV0Runtime
 
     agent_dir = tmp_path / "identity"
@@ -415,6 +416,10 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     monkeypatch.setattr(cli_acp, "resolve_runtime", lambda _id: runtime, raising=False)
     # The handler imports from the profile module after parser validation.
     monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id: runtime)
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
+        UnavailableDriverAuthorityAdapter,
+    )
     monkeypatch.setattr(cli_acp, "run_acp", lambda directory, **kwargs: observed.update(directory=directory, **kwargs))
 
     cli_acp.handle_acp_command(SimpleNamespace(profile="puffo-v0", runtime_id="runtime-1", agent_dir=None))
@@ -424,10 +429,43 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
     assert observed.get("forced_disable") is None
     assert observed["turn_origin_policy"] is RUNTIME_POLICY
     assert observed["requires_turn_origin_policy"] is True
-    assert observed["provider_call_admission_port"] is RUNTIME_POLICY
-    assert observed["derived_launch_admission_port"] is RUNTIME_POLICY
+    assert isinstance(observed["provider_call_admission_port"], UnavailableDriverAuthorityAdapter)
+    assert observed["derived_launch_admission_port"] is observed["provider_call_admission_port"]
     assert observed["requires_derived_launch_admission_port"] is True
     assert observed["puffo_runtime"] == runtime
+
+
+def test_profile_cli_composes_a_root_driver_for_both_admission_boundaries(monkeypatch, tmp_path):
+    import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp.driver_authority import (
+        DriverAuthorityClient,
+        DriverDerivedLaunchAdmissionAdapter,
+    )
+    from lingtai.adapters.acp.puffo_v0 import DirectoryBinding, PuffoV0Runtime
+
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    binding = DirectoryBinding(device=1, inode=2, owner=3, group=4)
+    runtime = PuffoV0Runtime(
+        "runtime-1", agent_dir, workspace, "digest", binding, binding,
+        RUNTIME_POLICY.policy_version,
+    )
+    authority = object.__new__(DriverAuthorityClient)
+    observed = {}
+    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id: runtime)
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
+        lambda: authority,
+    )
+    monkeypatch.setattr(cli_acp, "run_acp", lambda directory, **kwargs: observed.update(directory=directory, **kwargs))
+
+    cli_acp.handle_acp_command(SimpleNamespace(profile="puffo-v0", runtime_id="runtime-1", agent_dir=None))
+
+    assert observed["provider_call_admission_port"] is authority
+    assert isinstance(observed["derived_launch_admission_port"], DriverDerivedLaunchAdmissionAdapter)
+    assert observed["derived_launch_admission_port"]._authority is authority
 
 
 def test_constrained_acp_refuses_to_start_without_its_derived_launch_port(tmp_path):

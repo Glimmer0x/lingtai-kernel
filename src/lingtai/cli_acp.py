@@ -228,6 +228,11 @@ def handle_acp_command(args) -> None:
         RUNTIME_POLICY,
         resolve_runtime,
     )
+    from lingtai.adapters.acp.driver_authority import (
+        DriverAuthorityClient,
+        DriverDerivedLaunchAdmissionAdapter,
+        authority_adapter_from_environment,
+    )
     from lingtai.kernel.execution_workspace import ExecutionWorkspace
 
     try:
@@ -235,14 +240,20 @@ def handle_acp_command(args) -> None:
     except PuffoV0RegistryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
+    authority = authority_adapter_from_environment()
+    derived_launch_port = (
+        DriverDerivedLaunchAdmissionAdapter(authority)
+        if isinstance(authority, DriverAuthorityClient)
+        else authority
+    )
     run_acp(
         runtime.agent_dir,
         fixed_execution_workspace=ExecutionWorkspace(runtime.workspace),
         puffo_runtime=runtime,
         turn_origin_policy=RUNTIME_POLICY,
         requires_turn_origin_policy=True,
-        provider_call_admission_port=RUNTIME_POLICY,
-        derived_launch_admission_port=RUNTIME_POLICY,
+        provider_call_admission_port=authority,
+        derived_launch_admission_port=derived_launch_port,
         requires_derived_launch_admission_port=True,
     )
 

@@ -1,17 +1,19 @@
 ---
 name: acp-local-stdio
-contract_version: 2
+contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
+  - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
   - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
@@ -25,6 +27,7 @@ related_files:
   - pyproject.toml
   - tests/test_acp_stdio.py
   - tests/test_puffo_v0_profile.py
+  - tests/test_driver_authority_adapter.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
@@ -235,17 +238,17 @@ argv, environment, or MCP command from the remote caller.
     `mcpServers: []`; it never starts a client-supplied process. This is an
     identity/workspace-bound **full-tool** profile: operator-managed LingTai
     capabilities remain available, including after refresh. Its capability
-    boundary is provider-turn initiation: the current PR2 Core slice enforces
-    direct authenticated ACP root prompts at the actual root provider request,
-    while inbox, task-card, alarm, mail/MCP wake, and other independent root
-    events are denied before provider dispatch. Daemon and avatar still use
-    their historical independent execution routes and remain outside this
-    root-only gate. A future route that binds a derived parent before its host
-    transport is connected will receive explicit
-    `derived_admission_port_unconnected` and reject before provider I/O. The
-    separate driver-mediated derived-admission transport must wire those
-    historical routes before this profile can claim all provider/model turns
-    are covered. This controls who may start a root
+    boundary is provider-turn initiation: the profile consumes one
+    launcher-injected `LINGTAI_DRIVER_AUTHORITY_FD` root endpoint before Agent
+    construction and uses its Driver-backed Port for each root provider request
+    and derived-launch decision. The locator is removed immediately and is not
+    forwarded to a child process. Missing, malformed, unusable, or derived-role
+    endpoints install a typed fail-closed Port pair, so no generic profile
+    policy can accidentally authorize provider I/O or a launch. Inbox,
+    task-card, alarm, mail/MCP wake, and other independent root events remain
+    denied before provider dispatch. This slice configures only the root ACP
+    process; daemon/avatar child endpoint adoption and supervisor lifecycle are
+    separate layers. This controls who may start a root
     turn, not what state a later admitted turn may read: non-ACP sources may
     still write state. The profile adds no `external_send` approval
     boundary and does not promise workspace-only writes, process containment,
@@ -290,7 +293,9 @@ and CLI Python-stdout quarantine/hard-exit ownership.
 `tests/test_puffo_v0_profile.py` pins opaque-id provisioning/resolution,
 tamper/revocation rejection, full-tool composition, fixed-workspace and
 empty-session-MCP rejection, authenticated-adapter admission, and profile CLI
-composition. `tests/test_correlated_turns.py` independently proves an
+composition. `tests/test_driver_authority_adapter.py` pins the inherited root
+endpoint configuration and its fail-closed missing/malformed/derived-role
+outcomes. `tests/test_correlated_turns.py` independently proves an
 untrusted inbox event cannot reach provider dispatch under this profile policy.
 `tests/test_provider_admission.py` independently proves a missing, denied, or
 indeterminate provider admission cannot reach the underlying provider service;
@@ -316,7 +321,11 @@ or optional-dependencies section for this standard-library slice.
 ## Driver authority client
 
 `driver_authority.py` is an isolated AF_UNIX client for the Puffo Driver
-admission protocol. Every hello and decision request carries a fresh `call_id`;
+admission protocol. `puffo-v0` composition may consume exactly one
+`LINGTAI_DRIVER_AUTHORITY_FD` locator and must install a fail-closed Port pair
+when it is absent, invalid, or not a root endpoint; this does not give the
+protocol client ownership of profile composition. Every hello and decision
+request carries a fresh `call_id`;
 a missing or mismatched response id closes the transport and fails closed.
 Granted derived-launch endpoints are opaque, one-use leases and remain within
 the typed in-memory launch decision only. `DriverDerivedLaunchAdmissionAdapter`

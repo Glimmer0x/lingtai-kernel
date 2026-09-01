@@ -3,7 +3,7 @@ name: environment-variable-registry
 description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
-version: 1.8.1
+version: 1.9.0
 last_changed_at: "2026-09-01"
 related_files:
 - ANATOMY.md
@@ -12,8 +12,11 @@ related_files:
 - src/lingtai/ANATOMY.md
 - src/lingtai/CONTRACT.md
 - src/lingtai/adapters/posix/ANATOMY.md
-- src/lingtai/adapters/acp/ANATOMY.md
 - src/lingtai/adapters/windows/ANATOMY.md
+- src/lingtai/adapters/acp/ANATOMY.md
+- src/lingtai/adapters/acp/CONTRACT.md
+- src/lingtai/adapters/acp/driver_authority.py
+- src/lingtai/cli_acp.py
 - src/lingtai/auth/ANATOMY.md
 - src/lingtai/intrinsic_skills/ANATOMY.md
 - src/lingtai/kernel/ANATOMY.md
@@ -87,6 +90,7 @@ reports, prompts, or this registry.
 | `LINGTAI_CONTEXT_LIMIT` | unset; valid v2 `settings/system.json` `context_limit`, else the service's conservative window / `AgentConfig.context_limit = None` | Positive integer string of context tokens; one agent/process | Highest-precedence source for the effective context window given to `LLMService` and `AgentConfig.context_limit` | Resolved once per CLI boot (before the first service is built) and once per `_setup_from_init` refresh; an `env_file` edit needs refresh | Missing, blank, non-integer, zero, or negative values fall through to the System file, then the fixed default | `src/lingtai/tools/system/settings.py` via `resolve_runtime_policy`, applied by `src/lingtai/cli.py` and `src/lingtai/agent.py` | Sizing only; the kernel-fixed 0.85/1.0/3-round/0.75 context-pressure thresholds are never configurable through it |
 | `LINGTAI_MAX_RPM` | unset; valid v2 `settings/system.json` `max_rpm`, else `60` | Non-negative integer string; `0` disables API-rate gating | Highest-precedence source for the provider requests-per-minute cap threaded into provider defaults and `AgentConfig.max_rpm` | Same boot/refresh resolution as `LINGTAI_CONTEXT_LIMIT`; a changed value rebuilds the LLM service on refresh | Missing, blank, non-integer, or negative values fall through to the System file, then `60` | `src/lingtai/tools/system/settings.py`, `src/lingtai/cli.py`, `src/lingtai/agent.py` | Rate tuning only; it grants no capability |
 | `LINGTAI_STREAMING` | unset; valid v2 `settings/system.json` `streaming`, else `false` | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` (case-insensitive) | Highest-precedence source for the session's streaming send path | Resolved at boot and installed on the `SessionManager` on every `_setup_from_init` refresh; the next request uses the new path | Unrecognized values fall through to the System file, then `false` | `src/lingtai/tools/system/settings.py`, `src/lingtai/cli.py`, `src/lingtai/agent.py`, `src/lingtai/kernel/session.py` | Transport mode only; not an authorization boundary |
+| `LINGTAI_DRIVER_AUTHORITY_FD` | unset; launcher-injected only | Non-negative inherited POSIX AF_UNIX stream descriptor number | One `lingtai-agent acp --profile puffo-v0` process | Consumed and removed from the environment during constrained ACP composition, before Agent construction; never reloaded | Missing, malformed, unusable, or derived-role endpoint installs a fail-closed provider/derived-launch Port pair | `src/lingtai/adapters/acp/driver_authority.py`, `src/lingtai/cli_acp.py` | One-time local descriptor locator, never a serialized credential; do not forward it to child processes or expose its number |
 | `LINGTAI_AED_TIMEOUT` | unset; valid v2 `settings/system.json` `aed_timeout`, else `360` seconds | Finite positive number of seconds | Highest-precedence source for `AgentConfig.aed_timeout` (max seconds in STUCK before ASLEEP) | Boot and every `_setup_from_init` refresh; a live STUCK turn observes the new value on its next heartbeat | Missing, blank, non-numeric, non-finite, zero, or negative values fall through to the System file, then `360` | `src/lingtai/tools/system/settings.py`, `src/lingtai/agent.py` | Availability tuning only; it grants no capability |
 | `LINGTAI_MAX_AED_ATTEMPTS` | unset; valid v2 `settings/system.json` `max_aed_attempts`, else `3` | Integer string `>= 1` | Highest-precedence source for `AgentConfig.max_aed_attempts` | Boot and every `_setup_from_init` refresh | Missing, blank, non-integer, or `< 1` values fall through to the System file, then `3`; the `AgentConfig` clamp to `>= 1` is retained | `src/lingtai/tools/system/settings.py`, `src/lingtai/agent.py` | Recovery tuning only; it grants no capability |
 | `LINGTAI_SNAPSHOT_INTERVAL` | unset; valid v2 `settings/system.json` `snapshot_interval`, else off | Finite positive number of seconds, or `off` (case-insensitive) to disable | Highest-precedence source for `AgentConfig.snapshot_interval` (git Time Machine cadence) | Boot and every `_setup_from_init` refresh; enabling on a started agent initializes the snapshot port before the new cadence becomes visible to the heartbeat, and an initialization failure keeps snapshots off with a `snapshot_initialize_failed` log | Missing, blank, non-numeric, non-finite, zero, or negative values fall through to the System file, then off | `src/lingtai/tools/system/settings.py`, `src/lingtai/agent.py`, `src/lingtai/kernel/base_agent/lifecycle.py` | Local snapshot cadence only; it grants no capability |

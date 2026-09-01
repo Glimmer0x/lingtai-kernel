@@ -3,10 +3,12 @@ related_files:
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/BEHAVIORS.md
+  - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
   - src/lingtai/cli_puffo_v0.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
@@ -195,6 +197,17 @@ The Puffo OpenCode driver is explicitly outside this trust path. It must not
 launch a `puffo-v0` bound identity or be presented as an alternative identity
 binding entrypoint; only the ACP driver participates in this profile.
 
+For each `puffo-v0` process, that ACP driver also passes exactly one already
+open root Driver-authority AF_UNIX stream descriptor through
+`LINGTAI_DRIVER_AUTHORITY_FD`. LingTai consumes and removes this descriptor
+locator before constructing the Agent. A usable root endpoint becomes the
+profile's provider-call Port and is projected to its derived-launch Port.
+Missing, malformed, unavailable, or derived-role endpoints instead install the
+typed `driver_authority_unavailable` fail-closed pair; the profile never falls
+back to generic runtime policy for either boundary. This B7 configuration step
+does not supervise a process or transfer a derived child endpoint: B8 owns
+supervisor and child-FD lifetime.
+
 ## Wire sequence
 
 A minimal client sequence is:
@@ -321,8 +334,12 @@ one.
 
 ## Driver authority protocol client
 
-This repository's client accepts an already-open AF_UNIX descriptor from a
-future composition layer. It has no environment/profile wiring in this slice.
+The `puffo-v0` ACP composition consumes one launcher-injected
+`LINGTAI_DRIVER_AUTHORITY_FD` descriptor before Agent construction. It removes
+that locator from the environment immediately; the descriptor is never a
+serializable credential. A missing, malformed, unusable, or derived-role
+endpoint installs a fail-closed admission Port instead of falling back to the
+generic profile policy. Other composition layers do not read this variable.
 The peer must reply to hello and every request with the exact request `call_id`.
 Any timeout, malformed frame, unexpected descriptor, or correlation mismatch
 invalidates the stream; recreate the client rather than retrying it. A derived
