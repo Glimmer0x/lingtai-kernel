@@ -1849,6 +1849,7 @@ def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
         DriverDerivedLaunchGrant,
     )
     from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
 
     class _GrantingAuthority:
         def __init__(self, grants):
@@ -1883,9 +1884,15 @@ def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
         authority
     )
     queued = []
+    supervisor_calls = []
     monkeypatch.setattr(
         "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
         lambda **kwargs: queued.append(kwargs),
+    )
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: supervisor_calls.append(True),
     )
     source = agent._working_dir / "driver-sensitive-input.txt"
     source.write_text("sensitive driver task input\n", encoding="utf-8")
@@ -1918,6 +1925,10 @@ def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
         }
         assert authority.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
         assert queued == []
+        assert supervisor_calls == []
+        assert daemon_dispatch.read_dispatches(
+            agent._working_dir, full_history=True
+        ).records == ()
         for peer in (first_peer, second_peer):
             peer.settimeout(2)
             assert peer.recv(1) == b""
@@ -1944,6 +1955,7 @@ def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
         DriverDerivedLaunchGrant,
     )
     from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
 
     class _SequencedAuthority:
         def __init__(self, grants):
@@ -1975,9 +1987,15 @@ def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
         authority
     )
     queued = []
+    supervisor_calls = []
     monkeypatch.setattr(
         "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
         lambda **kwargs: queued.append(kwargs),
+    )
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: supervisor_calls.append(True),
     )
 
     root = RootProviderAdmission("root-driver-denial", RUNTIME_POLICY.policy_version)
@@ -2004,6 +2022,10 @@ def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
         }
         assert authority.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
         assert queued == []
+        assert supervisor_calls == []
+        assert daemon_dispatch.read_dispatches(
+            agent._working_dir, full_history=True
+        ).records == ()
         peer.settimeout(2)
         assert peer.recv(1) == b""
         daemon_root = agent._working_dir / "daemons"
