@@ -14,6 +14,7 @@ from unittest.mock import patch
 from lingtai.adapters.acp.driver_authority import (
     DriverAuthorityClient,
     DriverAuthorityTransportError,
+    RejectedDriverAuthorityAdapter,
     UnavailableDriverAuthorityAdapter,
     authority_adapter_from_environment,
 )
@@ -127,6 +128,41 @@ def test_profile_authority_configuration_fails_closed_without_a_usable_root_endp
     )
     assert provider.state is ProviderAdmissionState.INDETERMINATE
     assert launch.state is ProviderAdmissionState.INDETERMINATE
+
+
+def test_profile_hello_rejection_preserves_the_driver_decision_source(monkeypatch):
+    def handler(sock):
+        request = _recv(sock)
+        assert request["op"] == "hello"
+        _send(sock, {
+            "version": 1,
+            "call_id": request["call_id"],
+            "state": "denied",
+            "reason_code": "endpoint_already_claimed",
+            "audit_id": "audit-hello-1",
+        })
+
+    endpoint, thread, errors = _server(handler)
+    monkeypatch.setenv("LINGTAI_DRIVER_AUTHORITY_FD", str(endpoint.detach()))
+
+    authority = authority_adapter_from_environment()
+
+    thread.join(2)
+    assert not errors
+    assert isinstance(authority, RejectedDriverAuthorityAdapter)
+    provider = authority.authorize_provider_call(
+        RootProviderAdmission("turn", "v1"), ProviderCallClass.ROOT
+    )
+    launch = authority.authorize_derived_launch(
+        RootProviderAdmission("turn", "v1"), DerivedLaunchCapability.DAEMON
+    )
+    assert provider.state is ProviderAdmissionState.DENIED
+    assert provider.reason_code == "endpoint_already_claimed"
+    assert provider.source is ProviderAdmissionDecisionSource.DRIVER
+    assert launch.state is ProviderAdmissionState.DENIED
+    assert launch.reason_code == "endpoint_already_claimed"
+    assert launch.audit_id == "audit-hello-1"
+    assert launch.source is ProviderAdmissionDecisionSource.DRIVER
 
 
 def test_profile_authority_configuration_closes_rejected_non_socket_descriptors(monkeypatch):

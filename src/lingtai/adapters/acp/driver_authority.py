@@ -54,6 +54,21 @@ class DriverAuthorityEndpointBindingMismatch(DriverAuthorityTransportError):
     """The Driver endpoint role cannot serve the local execution mode."""
 
 
+class DriverAuthorityHelloRejected(RuntimeError):
+    """The Driver rejected the endpoint before it could identify its role."""
+
+    def __init__(
+        self,
+        state: ProviderAdmissionState,
+        reason_code: str,
+        audit_id: str | None,
+    ) -> None:
+        self.state = state
+        self.reason_code = reason_code
+        self.audit_id = audit_id
+        super().__init__(f"driver authority hello was rejected: {reason_code}")
+
+
 @dataclass(frozen=True, slots=True)
 class DriverAuthorityIdentity:
     role: str
@@ -178,6 +193,51 @@ class UnavailableDriverAuthorityAdapter:
         )
 
 
+class RejectedDriverAuthorityAdapter:
+    """Fail-closed Port pair preserving a Driver hello rejection.
+
+    A Driver can reject an inherited endpoint before returning its identity
+    (for example, because that endpoint was already claimed).  There is no
+    usable stream to retain in that case, but the policy response must remain
+    distinguishable from an unavailable transport at both Core boundaries.
+    """
+
+    __slots__ = ("_state", "_reason_code", "_audit_id")
+
+    def __init__(
+        self,
+        state: ProviderAdmissionState,
+        reason_code: str,
+        audit_id: str | None,
+    ) -> None:
+        self._state = state
+        self._reason_code = reason_code
+        self._audit_id = audit_id
+
+    def authorize_provider_call(
+        self,
+        _parent: ProviderAdmissionParent,
+        _call_class: ProviderCallClass,
+    ) -> ProviderCallDecision:
+        return ProviderCallDecision(
+            self._state,
+            self._reason_code,
+            ProviderAdmissionDecisionSource.DRIVER,
+        )
+
+    def authorize_derived_launch(
+        self,
+        _parent: RootProviderAdmission,
+        _capability: DerivedLaunchCapability,
+    ) -> DerivedLaunchDecision:
+        return DerivedLaunchDecision(
+            self._state,
+            self._reason_code,
+            audit_id=self._audit_id,
+            source=ProviderAdmissionDecisionSource.DRIVER,
+        )
+
+
 class DriverAuthorityClient(ProviderCallAdmissionPort):
     """Authenticated request/response client; no lifecycle integration."""
 
@@ -201,6 +261,11 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
             if received_fd is not None:
                 os.close(received_fd)
                 raise DriverAuthorityTransportError("hello must not receive a child endpoint")
+            if "state" in response or "reason_code" in response:
+                state, reason_code, audit_id = self._decision(response)
+                if state is ProviderAdmissionState.GRANTED:
+                    raise DriverAuthorityTransportError("granted hello must identify an authority endpoint")
+                raise DriverAuthorityHelloRejected(state, reason_code, audit_id)
             self._identity = self._parse_identity(response)
         except Exception:
             self._close_locked()
@@ -467,7 +532,7 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
 
 def authority_adapter_from_environment(
     *, timeout: float = _DEFAULT_TIMEOUT_SECONDS
-) -> DriverAuthorityClient | UnavailableDriverAuthorityAdapter:
+) -> DriverAuthorityClient | RejectedDriverAuthorityAdapter | UnavailableDriverAuthorityAdapter:
     """Consume the one inherited Driver FD for constrained ACP composition.
 
     The environment value is merely a one-time local descriptor locator.  It
@@ -486,6 +551,8 @@ def authority_adapter_from_environment(
             authority.close()
             raise DriverAuthorityTransportError("ACP profile requires a root authority endpoint")
         return authority
+    except DriverAuthorityHelloRejected as exc:
+        return RejectedDriverAuthorityAdapter(exc.state, exc.reason_code, exc.audit_id)
     except (TypeError, ValueError, OverflowError, DriverAuthorityTransportError):
         return UnavailableDriverAuthorityAdapter()
 
@@ -494,12 +561,14 @@ __all__ = [
     "DRIVER_AUTHORITY_FD_ENV",
     "DriverAuthorityClient",
     "DriverAuthorityEndpointBindingMismatch",
+    "DriverAuthorityHelloRejected",
     "DriverAuthorityIdentity",
     "DriverAuthorityTransportError",
     "DriverChildEndpointLease",
     "consume_posix_child_endpoint_lease",
     "DriverDerivedLaunchAdmissionAdapter",
     "DriverDerivedLaunchGrant",
+    "RejectedDriverAuthorityAdapter",
     "UnavailableDriverAuthorityAdapter",
     "authority_adapter_from_environment",
 ]
