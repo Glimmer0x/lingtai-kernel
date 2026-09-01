@@ -190,12 +190,18 @@ def _ack_code(value: object) -> bool:
 # Only fixed diagnostic field names can enter telemetry. Arbitrary provider
 # keys and opaque values are never copied, traversed, or serialized.
 _SAFE_ACK_DIAGNOSTIC_KEYS = ("ret", "errcode")
+_SAFE_ACK_INT_MIN = -(1 << 63)
+_SAFE_ACK_INT_MAX = (1 << 63) - 1
 
 
 def _safe_ack_diagnostic(value: object) -> object:
     """Return bounded metadata for one fixed acknowledgement diagnostic."""
-    if value is None or _ack_code(value):
-        return value
+    if value is None:
+        return None
+    if _ack_code(value):
+        if _SAFE_ACK_INT_MIN <= value <= _SAFE_ACK_INT_MAX:
+            return value
+        return f"<int:{value.bit_length()}bits>"
     if isinstance(value, str):
         return f"<str:{len(value)}>"
     return f"<{type(value).__name__}>"
@@ -251,7 +257,9 @@ def _parse_send_acknowledgement(resp: "httpx.Response") -> dict[str, int]:
     if "errcode" in body:
         errcode = body.get("errcode")
         if not _ack_code(errcode) or errcode != 0:
-            detail = errcode if _ack_code(errcode) else "<invalid>"
+            detail = (
+                _safe_ack_diagnostic(errcode) if _ack_code(errcode) else "<invalid>"
+            )
             _log_ack_warning(
                 "iLink send_message returned non-zero/invalid errcode;", body
             )
@@ -278,11 +286,12 @@ def _parse_send_acknowledgement(resp: "httpx.Response") -> dict[str, int]:
         )
 
     if ret != 0:
+        detail = _safe_ack_diagnostic(ret)
         _log_ack_warning(
             "iLink send_message returned non-zero ret;", body
         )
         raise RuntimeError(
-            f"iLink send_message returned invalid acknowledgement: ret={ret}"
+            f"iLink send_message returned invalid acknowledgement: ret={detail}"
         )
 
     ack: dict[str, int] = {"ret": 0}

@@ -181,13 +181,51 @@ def test_send_ack_skips_shape_when_warning_disabled(monkeypatch) -> None:
 def test_send_ack_invalid_diagnostic_values_redacted(caplog, body, secret) -> None:
     """Even malformed ret/errcode values are reduced to structural telemetry."""
     import logging
-    with caplog.at_level(logging.WARNING):
-        with pytest.raises(RuntimeError, match="invalid acknowledgement"):
-            api._parse_send_acknowledgement(
-                _send_response(json.dumps(body).encode("utf-8"))
-            )
+    with caplog.at_level(logging.WARNING), pytest.raises(
+        RuntimeError, match="invalid acknowledgement"
+    ):
+        api._parse_send_acknowledgement(
+            _send_response(json.dumps(body).encode("utf-8"))
+        )
     assert secret not in caplog.text
     assert "<str:" in caplog.text
+
+
+def test_safe_ack_diagnostic_keeps_only_signed_64bit_ints() -> None:
+    assert api._safe_ack_diagnostic(-(1 << 63)) == -(1 << 63)
+    assert api._safe_ack_diagnostic((1 << 63) - 1) == (1 << 63) - 1
+    assert api._safe_ack_diagnostic(-(1 << 63) - 1) == "<int:64bits>"
+    assert api._safe_ack_diagnostic(1 << 63) == "<int:64bits>"
+
+
+@pytest.mark.parametrize(("field", "sign"), [
+    ("ret", 1),
+    ("ret", -1),
+    ("errcode", 1),
+    ("errcode", -1),
+])
+def test_send_ack_huge_integer_diagnostics_are_bounded(
+    caplog, field: str, sign: int
+) -> None:
+    """Huge provider integers never escape raw through warnings or errors."""
+    import logging
+    digits = "9" * 4000
+    raw = digits if sign > 0 else f"-{digits}"
+    value = int(raw)
+    body = {"ret": value} if field == "ret" else {"ret": None, "errcode": value}
+
+    with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError) as exc_info:
+        api._parse_send_acknowledgement(
+            _send_response(json.dumps(body).encode("utf-8"))
+        )
+
+    error_text = str(exc_info.value)
+    assert raw not in caplog.text
+    assert raw not in error_text
+    assert "<int:" in caplog.text
+    assert "<int:" in error_text
+    assert len(caplog.text) < 1000
+    assert len(error_text) < 300
 
 
 def test_public_send_result_is_acceptance_not_delivery(monkeypatch, tmp_path: Path) -> None:
