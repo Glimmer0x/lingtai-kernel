@@ -14,6 +14,7 @@ import pytest
 
 from lingtai.kernel.config import AgentConfig
 from lingtai.kernel.provider_admission import (
+    DerivedLaunchAdmissionError,
     DerivedLaunchCapability,
     DerivedLaunchDecision,
     ProviderAdmissionState,
@@ -1606,6 +1607,66 @@ def test_profile_daemon_later_batch_denial_leaves_no_task_file_store_or_run(
         path.is_dir() and path.name.startswith("em-")
         for path in daemon_root.iterdir()
     )
+
+
+@pytest.mark.parametrize("rejection_origin", ["returned", "raised"])
+def test_profile_daemon_closes_current_rejection_lease(
+    tmp_path, rejection_origin,
+):
+    """Every current rejection closes its lease before Daemon surfaces it."""
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+
+    class _Lease:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    prior_lease = _Lease()
+    rejected_lease = _Lease()
+    rejected_decision = DerivedLaunchDecision(
+        ProviderAdmissionState.DENIED,
+        f"{rejection_origin}_child_denied",
+        child_endpoint_lease=rejected_lease,
+    )
+
+    class _RejectingPort:
+        def __init__(self):
+            self.calls = 0
+
+        def authorize_derived_launch(self, _parent, _capability):
+            self.calls += 1
+            if self.calls == 1:
+                return DerivedLaunchDecision(
+                    ProviderAdmissionState.GRANTED,
+                    "first_child_allowed",
+                    child_endpoint_lease=prior_lease,
+                )
+            if rejection_origin == "raised":
+                raise DerivedLaunchAdmissionError(rejected_decision)
+            return rejected_decision
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    port = _RejectingPort()
+    agent._derived_launch_admission_port = port
+    token = bind_provider_admission(
+        RootProviderAdmission("root-daemon-lease", RUNTIME_POLICY.policy_version)
+    )
+    try:
+        result = agent.get_capability("daemon").handle({
+            "action": "emanate",
+            "tasks": [
+                {"task": "first", "tools": []},
+                {"task": "second", "tools": []},
+            ],
+        })
+    finally:
+        clear_provider_admission(token)
+
+    assert result["reason_code"] == f"{rejection_origin}_child_denied"
+    assert rejected_lease.closed is True
+    assert prior_lease.closed is True
 
 
 def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(

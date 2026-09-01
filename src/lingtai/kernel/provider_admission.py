@@ -44,6 +44,12 @@ class ProviderAdmissionState(str, Enum):
     INDETERMINATE = "indeterminate"
 
 
+class DerivedLaunchEndpointLease(Protocol):
+    """Opaque one-use child handoff with exactly one required cleanup action."""
+
+    def close(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RootProviderAdmission:
     """Core-private context for one admitted root turn.
@@ -149,7 +155,7 @@ class DerivedLaunchDecision:
     # An adapter-owned, non-serializable, one-use child handoff.  Core neither
     # inspects nor reconstructs it; a consumer must either hand it to the
     # exact supported process boundary or release it before returning.
-    child_endpoint_lease: object | None = field(
+    child_endpoint_lease: DerivedLaunchEndpointLease | None = field(
         default=None, repr=False, compare=False
     )
 
@@ -209,6 +215,28 @@ class DerivedLaunchAdmissionError(PermissionError):
     def __init__(self, decision: DerivedLaunchDecision):
         self.decision = decision
         super().__init__(f"derived launch was not admitted: {decision.reason_code}")
+
+
+def _discard_derived_launch_decision(
+    decision: object,
+    *,
+    reason_code: str,
+) -> DerivedLaunchDecision:
+    """Replace an untrusted Port decision without stranding its lease.
+
+    Core does not inspect or reconstruct the opaque child endpoint.  It does,
+    however, own the last reference when it rejects an adapter decision before
+    a concrete launch consumer can receive it.
+    """
+
+    if isinstance(decision, DerivedLaunchDecision):
+        lease = decision.child_endpoint_lease
+        if lease is not None:
+            try:
+                lease.close()
+            except OSError:
+                pass
+    return DerivedLaunchDecision(ProviderAdmissionState.INDETERMINATE, reason_code)
 
 
 _current_parent: ContextVar[ProviderAdmissionParent | None] = ContextVar(
@@ -295,6 +323,11 @@ def require_derived_launch_admission(
         )
     try:
         decision = port.authorize_derived_launch(parent, capability)
+    except DerivedLaunchAdmissionError:
+        # A structured adapter denial can carry an opaque child-endpoint
+        # lease.  Preserve it for the concrete launch consumer, which owns
+        # releasing that lease before surfacing the failure.
+        raise
     except Exception:
         decision = DerivedLaunchDecision(
             ProviderAdmissionState.INDETERMINATE,
@@ -310,9 +343,9 @@ def require_derived_launch_admission(
             and (not isinstance(decision.audit_id, str) or not decision.audit_id)
         )
     ):
-        decision = DerivedLaunchDecision(
-            ProviderAdmissionState.INDETERMINATE,
-            "malformed_derived_launch_admission_decision",
+        decision = _discard_derived_launch_decision(
+            decision,
+            reason_code="malformed_derived_launch_admission_decision",
         )
     if not decision.allowed:
         raise DerivedLaunchAdmissionError(decision)
@@ -444,6 +477,7 @@ __all__ = [
     "DerivedLaunchAdmissionPort",
     "DerivedLaunchCapability",
     "DerivedLaunchDecision",
+    "DerivedLaunchEndpointLease",
     "ProviderAdmissionError",
     "ProviderAdmissionParent",
     "ProviderAdmissionState",

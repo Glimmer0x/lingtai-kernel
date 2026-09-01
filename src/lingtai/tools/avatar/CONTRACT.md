@@ -1,7 +1,7 @@
 ---
 name: avatar-contract
 tool: avatar
-contract_version: 6
+contract_version: 7
 related_files:
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
@@ -80,9 +80,9 @@ per-action `input` object, and the model-facing root is exactly `action`,
   root `summarize` boolean it advertises is honored by the single central
   summarizer rather than silently ignored.
 
-**contract_version 6**: each spawned avatar persists a restrictive
-`.lingtai-derived-child.json` marker before it is launched, outside the
-child-managed `system/` namespace. This makes the
+**contract_version 7**: only an avatar spawn approved with a Driver child
+endpoint lease persists a restrictive `.lingtai-derived-child.json` marker
+before it is launched, outside the child-managed `system/` namespace. This makes the
 requirement for nested derived-launch authority survive a direct restart of the
 same child directory; the launch environment marker is redundant only. It does
 not carry, create, or validate authority, and it does not claim to withstand a
@@ -297,7 +297,7 @@ the network root (`<parent>/..`):
   .rules                          # distributed rules signal
   logs/spawn.stderr               # captured child stderr for boot diagnosis
   logs/agent.log                  # rotating stdlib logging (boot + runtime warnings)
-  .lingtai-derived-child.json     # durable restrictive derived-child state
+  .lingtai-derived-child.json     # Driver-derived child state only
   knowledge/ exports/ combo.json  # deep mode only (system/ also has deep state)
 ```
 
@@ -314,8 +314,9 @@ live descendant.
 
 ## Cross-platform launcher contract
 
-- `AvatarManager` writes `.lingtai-derived-child.json` before process launch.
-  Its presence is the authoritative restrictive state: every later
+- `AvatarManager` writes `.lingtai-derived-child.json` before process launch
+  only for a Driver-approved decision that carries a child endpoint lease. Its
+  presence is the authoritative restrictive state: every later
   `lingtai run <dir>` treats that directory as derived and requires authority
   before a nested daemon/avatar launch. Malformed or unexpected marker state
   remains restrictive. For upgrade compatibility, the former
@@ -330,7 +331,9 @@ live descendant.
   `logs/spawn.stderr` to the avatar-local Port. Cwd is inherited. The
   `LINGTAI_DERIVED_AVATAR_EXECUTION=1` environment override is redundant
   immediate-launch defense only; it is non-secret and never carries an
-  authority bearer.
+  authority bearer. The opaque one-use lease travels with that same Driver
+  decision to the POSIX launcher, which alone consumes it into the child's
+  `pass_fds`; any early return or setup failure closes the unconsumed lease.
 - The Port returns a positive PID and an opaque adapter handle. `poll()` is
   nonblocking and returns the exact integer child return code or `None`.
 - Production adapters disconnect stdin/stdout and own a binary-write stderr
@@ -351,7 +354,9 @@ live descendant.
   `TerminateProcess` — there is no graceful signal. The Windows adapter does not
   pretend a graceful tier exists: `terminate()` and `force_terminate()` are
   **both** forceful, immediate termination of exactly the owned process, never a
-  tree kill.
+  tree kill. The Driver child-endpoint handoff is currently POSIX-only: Windows
+  closes and rejects a supplied lease rather than launching a child without its
+  approved endpoint.
 - The selector `select_avatar_launcher()` returns the Windows adapter when
   `os.name == "nt"` (lazy import) and the POSIX adapter when `os.name ==
   "posix"`, both via lazy imports so each mechanism module loads only on its

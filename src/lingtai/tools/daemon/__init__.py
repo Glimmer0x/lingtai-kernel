@@ -9588,7 +9588,7 @@ class DaemonManager:
             if lease is not None:
                 try:
                     lease.close()
-                except Exception:
+                except OSError:
                     pass
 
     @staticmethod
@@ -9637,10 +9637,21 @@ class DaemonManager:
         )
 
         capability = DerivedLaunchCapability(capability_name)
+        decision: DerivedLaunchDecision | None = None
+        transferred = False
         try:
-            decision = self._runtime.authorize_derived_launch(capability)
-        except DerivedLaunchAdmissionError as exc:
-            decision = exc.decision
+            try:
+                decision = self._runtime.authorize_derived_launch(capability)
+            except DerivedLaunchAdmissionError as exc:
+                decision = exc.decision
+                self._log(
+                    "derived_launch_admission_decision",
+                    capability=capability.value,
+                    state=decision.state.value,
+                    reason_code=decision.reason_code,
+                    audit_id=decision.audit_id,
+                )
+                raise
             self._log(
                 "derived_launch_admission_decision",
                 capability=capability.value,
@@ -9648,17 +9659,13 @@ class DaemonManager:
                 reason_code=decision.reason_code,
                 audit_id=decision.audit_id,
             )
-            raise
-        self._log(
-            "derived_launch_admission_decision",
-            capability=capability.value,
-            state=decision.state.value,
-            reason_code=decision.reason_code,
-            audit_id=decision.audit_id,
-        )
-        if not decision.allowed:
-            raise DerivedLaunchAdmissionError(decision)
-        return decision
+            if not decision.allowed:
+                raise DerivedLaunchAdmissionError(decision)
+            transferred = True
+            return decision
+        finally:
+            if decision is not None and not transferred:
+                self._close_unconsumed_derived_launch_decisions([decision])
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s

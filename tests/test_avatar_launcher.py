@@ -1,7 +1,11 @@
 """Focused Contract tests for the avatar-local launcher boundary."""
+import os
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from lingtai.tools.avatar import AvatarManager
 from lingtai.tools.avatar._launcher import (
@@ -107,8 +111,20 @@ def test_unreadable_legacy_derived_marker_keeps_cli_boot_restrictive(
     assert cli._derived_avatar_requires_admission(tmp_path) is True
 
 
-def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):
-    """The production avatar launch request carries no authority bearer."""
+def test_manager_marks_driver_derived_avatar_child_as_requiring_authority(tmp_path):
+    """A Driver-derived avatar launch carries only a restrictive boot hint."""
+    launcher = MagicMock()
+    launcher.launch.return_value = AvatarLaunchReceipt(419, object())
+    manager = AvatarManager(SimpleNamespace(), launcher=launcher)
+    with patch("lingtai.venv_resolve.resolve_venv", return_value=tmp_path), patch(
+        "lingtai.venv_resolve.venv_python", return_value=tmp_path / "python"
+    ):
+        manager._launch(tmp_path, derived_child=True)
+    request = launcher.launch.call_args.args[0]
+    assert request.environment == {"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"}
+
+
+def test_manager_keeps_generic_avatar_launch_free_of_driver_hints(tmp_path):
     launcher = MagicMock()
     launcher.launch.return_value = AvatarLaunchReceipt(419, object())
     manager = AvatarManager(SimpleNamespace(), launcher=launcher)
@@ -117,7 +133,59 @@ def test_manager_marks_avatar_child_as_requiring_derived_authority(tmp_path):
     ):
         manager._launch(tmp_path)
     request = launcher.launch.call_args.args[0]
-    assert request.environment == {"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"}
+    assert request.environment is None
+    assert request.authority_lease is None
+
+
+def test_posix_launch_passes_only_the_one_shot_driver_child_endpoint(tmp_path):
+    """The child receives a lease endpoint, never a root authority descriptor."""
+    from lingtai.adapters.acp.driver_authority import DriverChildEndpointLease
+
+    process = MagicMock(pid=419, poll=MagicMock(return_value=None))
+    client, driver = socket.socketpair()
+    request = AvatarLaunchRequest(
+        ("python", "-m", "lingtai", "run", "/avatar"),
+        tmp_path / "logs" / "spawn.stderr",
+        authority_lease=DriverChildEndpointLease(client),
+    )
+    try:
+        with patch(
+            "lingtai.adapters.posix.avatar_launcher.subprocess.Popen",
+            return_value=process,
+        ) as popen:
+            PosixAvatarLauncherAdapter().launch(request)
+        kwargs = popen.call_args.kwargs
+        child_fd = kwargs["pass_fds"]
+        assert len(child_fd) == 1
+        assert kwargs["env"]["LINGTAI_DRIVER_AUTHORITY_FD"] == str(child_fd[0])
+        assert kwargs["close_fds"] is True
+        with pytest.raises(OSError):
+            os.fstat(child_fd[0])
+    finally:
+        driver.close()
+
+
+def test_posix_launch_closes_driver_endpoint_when_popen_fails(tmp_path):
+    """A consumed endpoint is still released if process creation aborts."""
+    from lingtai.adapters.acp.driver_authority import DriverChildEndpointLease
+
+    client, driver = socket.socketpair()
+    driver.settimeout(1)
+    request = AvatarLaunchRequest(
+        ("python", "-m", "lingtai", "run", "/avatar"),
+        tmp_path / "logs" / "spawn.stderr",
+        authority_lease=DriverChildEndpointLease(client),
+    )
+    try:
+        with patch(
+            "lingtai.adapters.posix.avatar_launcher.subprocess.Popen",
+            side_effect=OSError("launch failed"),
+        ):
+            with pytest.raises(OSError, match="launch failed"):
+                PosixAvatarLauncherAdapter().launch(request)
+        assert driver.recv(1) == b""
+    finally:
+        driver.close()
 
 
 def test_manager_boot_policy_uses_opaque_port_and_preserves_precedence(tmp_path):

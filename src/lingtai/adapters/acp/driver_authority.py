@@ -83,6 +83,18 @@ class DriverChildEndpointLease:
         self.close()
 
 
+def consume_posix_child_endpoint_lease(lease: object) -> int:
+    """Transfer the one Driver child endpoint into the POSIX spawn adapter.
+
+    The opaque Core field may only be interpreted at this concrete adapter
+    boundary.  Rejecting another object here keeps the Driver handoff format
+    out of Avatar/Core while preserving the lease's one-use semantics.
+    """
+    if not isinstance(lease, DriverChildEndpointLease):
+        raise TypeError("expected a DriverChildEndpointLease for POSIX spawn")
+    return lease.consume_for_posix_spawn()
+
+
 @dataclass(frozen=True, slots=True)
 class DriverDerivedLaunchGrant:
     """A Driver result kept private until a later Kernel consumer owns it."""
@@ -367,6 +379,7 @@ __all__ = [
     "DriverAuthorityIdentity",
     "DriverAuthorityTransportError",
     "DriverChildEndpointLease",
+    "consume_posix_child_endpoint_lease",
     "DriverDerivedLaunchAdmissionAdapter",
     "DriverDerivedLaunchGrant",
 ]

@@ -6,6 +6,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Mapping, Protocol
 
+from lingtai.kernel.provider_admission import DerivedLaunchEndpointLease
+
 
 # This is deliberately a restrictive boot marker, never an authority bearer:
 # a child that forges it can only make its own nested derived launch fail closed.
@@ -71,11 +73,17 @@ def probe_derived_avatar_state(working_dir: Path) -> DerivedAvatarState:
 
 @dataclass(frozen=True)
 class AvatarLaunchRequest:
-    """The complete launch input; cwd is inherited and env overrides are explicit."""
+    """The complete launch input; cwd is inherited and env overrides are explicit.
+
+    ``authority_lease`` is opaque adapter-owned state.  Avatar Core carries it
+    from one approved derived-launch decision to its launcher Port, but never
+    inspects it as an FD or treats it as authority itself.
+    """
 
     argv: tuple[str, ...]
     stderr_path: Path
     environment: Mapping[str, str] | None = None
+    authority_lease: DerivedLaunchEndpointLease | None = None
 
 
 @dataclass(frozen=True)

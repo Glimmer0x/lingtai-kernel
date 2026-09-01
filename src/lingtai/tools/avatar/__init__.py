@@ -115,6 +115,7 @@ def _mission_looks_unsafe(mission: str) -> tuple[bool, str]:
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.provider_admission import DerivedLaunchEndpointLease
     from lingtai.kernel.tool_plugin import ToolPluginHost
 
 PROVIDERS = {"providers": [], "default": "builtin"}
@@ -542,100 +543,103 @@ class AvatarManager:
                 "message": "Dry run — no process spawned, no files written.",
             }
 
-        self._authorize_derived_launch(peer_name)
+        launch_decision = self._authorize_derived_launch(peer_name)
+        lease_handed_to_launcher = False
+        try:
 
         # Working dir: sibling of parent, named after the avatar. Defense-in-depth
         # scope check — resolve and assert the target's parent equals the network
         # root, so even if peer_name validation is ever loosened, this still
         # prevents writing outside .lingtai/<siblings>/.
-        avatar_working_dir = parent_working_dir.parent / peer_name
-        network_root = parent_working_dir.parent.resolve()
-        try:
-            resolved = avatar_working_dir.resolve(strict=False)
-        except (OSError, RuntimeError) as e:
-            return {"error": f"Cannot resolve avatar path: {e}"}
-        if resolved.parent != network_root:
-            return {
-                "error": (
-                    f"Avatar path '{avatar_working_dir}' escapes the network root "
-                    f"'{network_root}' — rejected."
-                )
-            }
-        if avatar_working_dir.exists():
-            return {"error": f"Directory '{peer_name}' already exists. Choose another name."}
+            avatar_working_dir = parent_working_dir.parent / peer_name
+            network_root = parent_working_dir.parent.resolve()
+            try:
+                resolved = avatar_working_dir.resolve(strict=False)
+            except (OSError, RuntimeError) as e:
+                return {"error": f"Cannot resolve avatar path: {e}"}
+            if resolved.parent != network_root:
+                return {
+                    "error": (
+                        f"Avatar path '{avatar_working_dir}' escapes the network root "
+                        f"'{network_root}' — rejected."
+                    )
+                }
+            if avatar_working_dir.exists():
+                return {"error": f"Directory '{peer_name}' already exists. Choose another name."}
 
         # Prepare the avatar's working directory
-        parent_name = self._host.avatar_parent.parent_name or parent_working_dir.name
+            parent_name = self._host.avatar_parent.parent_name or parent_working_dir.name
 
         # Copy init.json and launch lingtai
-        if avatar_type == "deep":
-            self._prepare_deep(parent_working_dir, avatar_working_dir)
-        else:
-            avatar_working_dir.mkdir(parents=True, exist_ok=True)
+            if avatar_type == "deep":
+                self._prepare_deep(parent_working_dir, avatar_working_dir)
+            else:
+                avatar_working_dir.mkdir(parents=True, exist_ok=True)
 
         # Resolve relative file paths to absolute so avatar can find them.
         # Only active prompt-contract file fields are re-rooted: env_file plus
         # the externally changeable prompt surfaces (covenant / base_prompt /
         # comment). Retired override file fields (principle_file / substrate_file
         # / brief_file / procedures_file) are not inherited as live paths.
-        for key in ("env_file", "covenant_file",
-                    "base_prompt_file", "comment_file"):
-            val = parent_init.get(key)
-            if val and not os.path.isabs(val):
-                resolved = parent_working_dir / val
-                if resolved.is_file():
-                    parent_init[key] = str(resolved)
+            for key in ("env_file", "covenant_file",
+                        "base_prompt_file", "comment_file"):
+                val = parent_init.get(key)
+                if val and not os.path.isabs(val):
+                    resolved = parent_working_dir / val
+                    if resolved.is_file():
+                        parent_init[key] = str(resolved)
 
         # Inherit the parent runtime location through Avatar's narrow host port.
-        venv_path = self._host.avatar_parent.venv_path
-        if venv_path:
-            parent_init["venv_path"] = venv_path
+            venv_path = self._host.avatar_parent.venv_path
+            if venv_path:
+                parent_init["venv_path"] = venv_path
 
         # Clean stale signal files before launch
-        for sig in (".suspend", ".sleep", ".interrupt"):
-            sig_file = avatar_working_dir / sig
-            if sig_file.is_file():
-                sig_file.unlink(missing_ok=True)
+            for sig in (".suspend", ".sleep", ".interrupt"):
+                sig_file = avatar_working_dir / sig
+                if sig_file.is_file():
+                    sig_file.unlink(missing_ok=True)
 
         # Seed the avatar's first turn with a parent-identity prompt + the
         # caller's reasoning (task brief). Written to the avatar's `.prompt`
         # file — picked up by the kernel's signal-file watcher on first poll
         # and delivered as a one-shot system message (consumed-once via unlink).
-        parent_address = parent_working_dir.name
-        avatar_lang = parent_init.get("manifest", {}).get("language", "en")
-        parent_prompt = t(
-            avatar_lang, "avatar.parent_prompt",
-            parent_name=parent_name,
-            parent_address=parent_address,
-        )
-        first_prompt = parent_prompt
-        if reasoning and reasoning.strip():
-            first_prompt = f"{parent_prompt}\n\n{reasoning.strip()}"
+            parent_address = parent_working_dir.name
+            avatar_lang = parent_init.get("manifest", {}).get("language", "en")
+            parent_prompt = t(
+                avatar_lang, "avatar.parent_prompt",
+                parent_name=parent_name,
+                parent_address=parent_address,
+            )
+            first_prompt = parent_prompt
+            if reasoning and reasoning.strip():
+                first_prompt = f"{parent_prompt}\n\n{reasoning.strip()}"
 
         # Write avatar's init.json (modified copy of parent's).
-        avatar_comment = args.get("comment", SPAWN_COMMENT_DEFAULT)
-        avatar_init = self._make_avatar_init(
-            parent_init, peer_name, comment=avatar_comment,
-            parent_working_dir=parent_working_dir,
-        )
-        (avatar_working_dir / "init.json").write_text(
-            json.dumps(avatar_init, indent=2, ensure_ascii=False),
-            encoding="utf-8"
-        )
+            avatar_comment = args.get("comment", SPAWN_COMMENT_DEFAULT)
+            avatar_init = self._make_avatar_init(
+                parent_init, peer_name, comment=avatar_comment,
+                parent_working_dir=parent_working_dir,
+            )
+            (avatar_working_dir / "init.json").write_text(
+                json.dumps(avatar_init, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
 
-        # Derived status belongs to the child directory, not this particular
-        # process invocation.  A later ``lingtai run <dir>`` therefore keeps
-        # the restrictive nested-launch requirement even if a wrapper drops
-        # the redundant environment marker.
-        atomic_write_json(
-            derived_avatar_state_path(avatar_working_dir),
-            DERIVED_AVATAR_STATE,
-            sort_keys=True,
-        )
+            # Only a Driver-granted child endpoint makes this avatar derived.
+            # Generic LingTai's historical grant contains no endpoint lease and
+            # therefore keeps its existing boot behavior.
+            derived_child = launch_decision.child_endpoint_lease is not None
+            if derived_child:
+                atomic_write_json(
+                    derived_avatar_state_path(avatar_working_dir),
+                    DERIVED_AVATAR_STATE,
+                    sort_keys=True,
+                )
 
         # Drop the spawn prompt as a `.prompt` signal file — the avatar's
         # kernel watcher consumes it on first poll and delivers it once.
-        (avatar_working_dir / ".prompt").write_text(first_prompt, encoding="utf-8")
+            (avatar_working_dir / ".prompt").write_text(first_prompt, encoding="utf-8")
 
         # Launch as detached process and wait briefly for the child to either
         # write its handshake (.agent.heartbeat) or exit. If the child exits
@@ -644,66 +648,74 @@ class AvatarManager:
         # avatar capability returns "ok" the instant a child forks, even if the
         # child crashes 50ms later (e.g. invalid init.json), and the parent's
         # LLM has no idea anything went wrong.
-        proc, stderr_path = self._launch(avatar_working_dir)
-        pid = proc.pid
-
-        try:
-            boot_status, boot_error = self._wait_for_boot(
-                avatar_working_dir, proc, stderr_path,
+            proc, stderr_path = self._launch(
+                avatar_working_dir,
+                authority_lease=launch_decision.child_endpoint_lease,
+                derived_child=derived_child,
             )
-        finally:
-            self._launcher.release(proc.handle)
+            lease_handed_to_launcher = True
+            pid = proc.pid
+
+            try:
+                boot_status, boot_error = self._wait_for_boot(
+                    avatar_working_dir, proc, stderr_path,
+                )
+            finally:
+                self._launcher.release(proc.handle)
 
         # Record in ledger — include boot status so post-mortem can distinguish
         # successful spawns from failed ones without re-checking the filesystem.
-        ledger_extra = {"boot_status": boot_status}
-        if boot_error:
-            ledger_extra["boot_error"] = boot_error
-        self._append_ledger(
-            "avatar", peer_name,
-            working_dir=avatar_working_dir.name,
-            mission=reasoning or "",
-            type=avatar_type,
-            pid=pid,
-            **ledger_extra,
-        )
+            ledger_extra = {"boot_status": boot_status}
+            if boot_error:
+                ledger_extra["boot_error"] = boot_error
+            self._append_ledger(
+                "avatar", peer_name,
+                working_dir=avatar_working_dir.name,
+                mission=reasoning or "",
+                type=avatar_type,
+                pid=pid,
+                **ledger_extra,
+            )
 
-        if boot_status == "failed":
-            return {
-                "error": (
-                    f"avatar {peer_name!r} failed to boot: {boot_error}. "
-                    f"See {stderr_path} for details."
-                ),
-                "address": avatar_working_dir.name,
-                "agent_name": peer_name,
-                "pid": pid,
-            }
+            if boot_status == "failed":
+                return {
+                    "error": (
+                        f"avatar {peer_name!r} failed to boot: {boot_error}. "
+                        f"See {stderr_path} for details."
+                    ),
+                    "address": avatar_working_dir.name,
+                    "agent_name": peer_name,
+                    "pid": pid,
+                }
 
         # Auto-distribute rules to all descendants (including newborn) — read from canonical system/rules.md
-        parent_rules_md = parent_working_dir / "system" / "rules.md"
-        if parent_rules_md.is_file():
-            try:
-                rules_content = parent_rules_md.read_text(encoding="utf-8")
-            except OSError:
-                rules_content = ""
-            if rules_content.strip():
-                self._distribute_rules_to_descendants(rules_content, parent_working_dir)
+            parent_rules_md = parent_working_dir / "system" / "rules.md"
+            if parent_rules_md.is_file():
+                try:
+                    rules_content = parent_rules_md.read_text(encoding="utf-8")
+                except OSError:
+                    rules_content = ""
+                if rules_content.strip():
+                    self._distribute_rules_to_descendants(rules_content, parent_working_dir)
 
-        result = {
-            "status": "ok",
-            "address": avatar_working_dir.name,
-            "agent_name": peer_name,
-            "type": avatar_type,
-            "pid": pid,
-        }
-        if boot_status == "slow":
-            # Process is still alive but didn't finish handshaking in the
-            # window — surface a warning so the caller knows to monitor it.
-            result["warning"] = (
-                f"avatar still booting after {self._BOOT_WAIT_SECS}s — "
-                f"check .agent.heartbeat freshness before relying on it"
-            )
-        return result
+            result = {
+                "status": "ok",
+                "address": avatar_working_dir.name,
+                "agent_name": peer_name,
+                "type": avatar_type,
+                "pid": pid,
+            }
+            if boot_status == "slow":
+                # Process is still alive but didn't finish handshaking in the
+                # window — surface a warning so the caller knows to monitor it.
+                result["warning"] = (
+                    f"avatar still booting after {self._BOOT_WAIT_SECS}s — "
+                    f"check .agent.heartbeat freshness before relying on it"
+                )
+            return result
+        finally:
+            if not lease_handed_to_launcher:
+                self._close_unconsumed_launch_lease(launch_decision)
 
     def _wait_for_boot(
         self, working_dir: Path, proc: AvatarLaunchReceipt, stderr_path: Path,
@@ -897,7 +909,13 @@ class AvatarManager:
     _BOOT_WAIT_SECS = BOOT_WAIT_SECONDS
     _BOOT_POLL_INTERVAL = BOOT_POLL_INTERVAL_SECONDS
 
-    def _launch(self, working_dir: Path) -> tuple[AvatarLaunchReceipt, Path]:
+    def _launch(
+        self,
+        working_dir: Path,
+        *,
+        authority_lease: "DerivedLaunchEndpointLease | None" = None,
+        derived_child: bool = False,
+    ) -> tuple[AvatarLaunchReceipt, Path]:
         """Launch `lingtai-agent run <dir>` as a fully detached process.
 
         Captures stderr to ``logs/spawn.stderr`` so a child that exits before
@@ -928,27 +946,51 @@ class AvatarManager:
             AvatarLaunchRequest(
                 argv=cmd,
                 stderr_path=stderr_path,
-                # Redundant boot signal only. The durable child state written
-                # during _spawn is authoritative for subsequent/restarted
-                # launches and never carries a grant or authority bearer.
-                environment={DERIVED_AVATAR_EXECUTION_ENV: "1"},
+                # Redundant immediate-launch signal only. The durable child
+                # state is authoritative for restarts and carries no bearer.
+                environment=(
+                    {DERIVED_AVATAR_EXECUTION_ENV: "1"} if derived_child else None
+                ),
+                authority_lease=authority_lease,
             )
         )
         return receipt, stderr_path
 
-    def _authorize_derived_launch(self, peer_name: str) -> None:
+    @staticmethod
+    def _close_unconsumed_launch_lease(decision: "DerivedLaunchDecision") -> None:
+        """Close a Driver endpoint unless ownership reached the launcher Port."""
+        lease = decision.child_endpoint_lease
+        if lease is not None:
+            try:
+                lease.close()
+            except OSError:
+                pass
+
+    def _authorize_derived_launch(self, peer_name: str) -> "DerivedLaunchDecision":
         """Reach the host decision seam before avatar filesystem/process effects."""
         from lingtai.kernel.provider_admission import (
             DerivedLaunchAdmissionError,
             DerivedLaunchCapability,
         )
 
+        decision: DerivedLaunchDecision | None = None
+        transferred = False
         try:
-            decision = self._host.avatar_parent.authorize_derived_launch(
-                DerivedLaunchCapability.AVATAR
-            )
-        except DerivedLaunchAdmissionError as exc:
-            decision = exc.decision
+            try:
+                decision = self._host.avatar_parent.authorize_derived_launch(
+                    DerivedLaunchCapability.AVATAR
+                )
+            except DerivedLaunchAdmissionError as exc:
+                decision = exc.decision
+                self._append_ledger(
+                    "avatar_admission_decision",
+                    peer_name,
+                    capability=DerivedLaunchCapability.AVATAR.value,
+                    state=decision.state.value,
+                    reason_code=decision.reason_code,
+                    audit_id=decision.audit_id,
+                )
+                raise
             self._append_ledger(
                 "avatar_admission_decision",
                 peer_name,
@@ -957,17 +999,13 @@ class AvatarManager:
                 reason_code=decision.reason_code,
                 audit_id=decision.audit_id,
             )
-            raise
-        self._append_ledger(
-            "avatar_admission_decision",
-            peer_name,
-            capability=DerivedLaunchCapability.AVATAR.value,
-            state=decision.state.value,
-            reason_code=decision.reason_code,
-            audit_id=decision.audit_id,
-        )
-        if not decision.allowed:
-            raise DerivedLaunchAdmissionError(decision)
+            if not decision.allowed:
+                raise DerivedLaunchAdmissionError(decision)
+            transferred = True
+            return decision
+        finally:
+            if decision is not None and not transferred:
+                self._close_unconsumed_launch_lease(decision)
 
     # ------------------------------------------------------------------
     # Ledger reading
