@@ -146,6 +146,12 @@ class DerivedLaunchDecision:
     state: ProviderAdmissionState
     reason_code: str
     audit_id: str | None = None
+    # An adapter-owned, non-serializable, one-use child handoff.  Core neither
+    # inspects nor reconstructs it; a consumer must either hand it to the
+    # exact supported process boundary or release it before returning.
+    child_endpoint_lease: object | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @property
     def allowed(self) -> bool:

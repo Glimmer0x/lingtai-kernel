@@ -18,6 +18,7 @@ from typing import Any
 
 from lingtai.kernel.provider_admission import (
     DerivedLaunchCapability,
+    DerivedLaunchDecision,
     DerivedProviderAdmission,
     ProviderAdmissionParent,
     ProviderAdmissionState,
@@ -90,6 +91,33 @@ class DriverDerivedLaunchGrant:
     reason_code: str
     audit_id: str | None = None
     child_endpoint_lease: DriverChildEndpointLease | None = None
+
+
+class DriverDerivedLaunchAdmissionAdapter:
+    """Project one Driver grant into Core's derived-launch decision port.
+
+    This adapter owns no daemon, manager, supervisor, or child startup.  It
+    only preserves the Driver's opaque one-use lease alongside the typed Core
+    decision until a later consumer can either hand it off or close it.
+    """
+
+    __slots__ = ("_authority",)
+
+    def __init__(self, authority: "DriverAuthorityClient") -> None:
+        self._authority = authority
+
+    def authorize_derived_launch(
+        self,
+        parent: RootProviderAdmission,
+        capability: DerivedLaunchCapability,
+    ) -> DerivedLaunchDecision:
+        grant = self._authority.request_derived_launch(parent, capability)
+        return DerivedLaunchDecision(
+            grant.state,
+            grant.reason_code,
+            audit_id=grant.audit_id,
+            child_endpoint_lease=grant.child_endpoint_lease,
+        )
 
 
 class DriverAuthorityClient(ProviderCallAdmissionPort):
@@ -330,3 +358,15 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
         endpoint_capability = DerivedLaunchCapability(self._identity.capability)
         endpoint_call_class = ProviderCallClass.DAEMON if endpoint_capability is DerivedLaunchCapability.DAEMON else ProviderCallClass.AVATAR_CHILD
         return call_class is endpoint_call_class
+
+
+__all__ = [
+    "DRIVER_AUTHORITY_FD_ENV",
+    "DriverAuthorityClient",
+    "DriverAuthorityEndpointBindingMismatch",
+    "DriverAuthorityIdentity",
+    "DriverAuthorityTransportError",
+    "DriverChildEndpointLease",
+    "DriverDerivedLaunchAdmissionAdapter",
+    "DriverDerivedLaunchGrant",
+]
