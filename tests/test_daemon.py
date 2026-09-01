@@ -1685,6 +1685,107 @@ def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
     ]
 
 
+def test_profile_external_cli_default_manager_queues_only_after_granted_admission(
+    tmp_path, monkeypatch
+):
+    """The default POSIX manager retains its 100-worker cap after admission."""
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    class _GrantingPort:
+        def authorize_derived_launch(self, _parent, _capability):
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "derived_launch_allowed_by_test",
+                audit_id="audit-default-manager-grant",
+            )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._derived_launch_admission_port = _GrantingPort()
+    queued = []
+    direct_supervisor_calls = []
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
+        lambda **kwargs: queued.append(kwargs),
+    )
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda *_args, **_kwargs: direct_supervisor_calls.append(True),
+    )
+
+    root = RootProviderAdmission(
+        "root-external-cli-default-manager", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "backend": "codex",
+                "tasks": [{"task": "test", "tools": []}],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result["status"] == "dispatched"
+    assert len(queued) == 1
+    assert queued[0]["pool_size"] == 100
+    assert direct_supervisor_calls == []
+
+
+def test_profile_external_cli_indeterminate_admission_never_queues_default_manager(
+    tmp_path, monkeypatch
+):
+    """An unavailable external-CLI authority leaves no queue or run artifact."""
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+
+    class _IndeterminatePort:
+        def authorize_derived_launch(self, _parent, _capability):
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.INDETERMINATE,
+                "driver_authority_unavailable",
+            )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._derived_launch_admission_port = _IndeterminatePort()
+    queued = []
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
+        lambda **kwargs: queued.append(kwargs),
+    )
+
+    root = RootProviderAdmission(
+        "root-external-cli-indeterminate", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "backend": "codex",
+                "tasks": [{"task": "test", "tools": []}],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result == {
+        "status": "error",
+        "message": "derived launch was not admitted: driver_authority_unavailable",
+        "reason_code": "driver_authority_unavailable",
+        "audit_id": None,
+    }
+    assert queued == []
+    daemon_root = agent._working_dir / "daemons"
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
+    assert not (daemon_root / "_task_files").exists()
+
+
 def test_task_skills_render_compact_catalog_from_dir_and_file(tmp_path):
     """Task skills accept either a skill directory or a direct SKILL.md path."""
     agent = _make_agent(tmp_path, ["daemon"])
