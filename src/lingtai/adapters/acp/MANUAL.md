@@ -318,3 +318,13 @@ objects. This keeps wire/session policy outside Core and makes cancellation and
 terminal settlement reusable by later driving adapters. Broader ACP capabilities
 should be added as separately accepted vertical slices, not guessed inside this
 one.
+
+## Driver authority protocol client
+
+This repository's client accepts an already-open AF_UNIX descriptor from a
+future composition layer. It has no environment/profile wiring in this slice.
+The peer must reply to hello and every request with the exact request `call_id`.
+Any timeout, malformed frame, unexpected descriptor, or correlation mismatch
+invalidates the stream; recreate the client rather than retrying it. A derived
+grant's endpoint is a one-use opaque lease, not an identifier that may be
+serialized or reopened.

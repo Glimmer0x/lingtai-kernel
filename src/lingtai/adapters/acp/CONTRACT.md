@@ -312,3 +312,13 @@ Follow the frontmatter maintenance block and the
 specification before changing any method or wire shape; record deliberate scope
 limits rather than advertising omitted capabilities. Do not introduce an ACP SDK
 or optional-dependencies section for this standard-library slice.
+
+## Driver authority client
+
+`driver_authority.py` is an isolated AF_UNIX client for the Puffo Driver
+admission protocol. Every hello and decision request carries a fresh `call_id`;
+a missing or mismatched response id closes the transport and fails closed.
+Granted derived-launch endpoints are opaque, one-use leases and remain within
+this adapter layer. This module does **not** compose ACP profiles or launch
+daemons, avatars, supervisors, or managers; those consumers belong to separate
+layers.
