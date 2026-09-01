@@ -610,8 +610,13 @@ class _DaemonManagerProcess:
             try:
                 job_path.unlink()
             except OSError:
+                restored = False
                 with self.lock:
-                    self.capsules[request.run_id] = pending
+                    if request.run_id not in self.capsules:
+                        self.capsules[request.run_id] = pending
+                        restored = True
+                if not restored:
+                    pending.close()
                 continue
             self._journal(request.run_id, "active", request, pending.value)
             thread = threading.Thread(
@@ -833,7 +838,13 @@ def _send_capsule(
                 sock.settimeout(0.5)
                 sock.connect(str(socket_path))
                 send_capsule(sock, payload, adopted_fd=adopted_fd)
-                if sock.recv(2) == b"OK":
+                ack = bytearray()
+                while len(ack) < 2:
+                    chunk = sock.recv(2 - len(ack))
+                    if not chunk:
+                        break
+                    ack.extend(chunk)
+                if ack == b"OK":
                     return
                 raise RuntimeError("daemon manager rejected runtime capsule")
         except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError) as exc:

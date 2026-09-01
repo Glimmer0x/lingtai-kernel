@@ -309,6 +309,40 @@ def test_manager_socket_transfers_fd_into_pending_capsule(tmp_path):
         peer.close()
 
 
+def test_manager_sender_accepts_fragmented_ack(tmp_path, monkeypatch):
+    class FragmentedAckSocket:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.ack_chunks = iter((b"O", b"K"))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def connect(self, _path: str) -> None:
+            return None
+
+        def sendmsg(self, buffers, _ancillary) -> int:
+            return len(buffers[0])
+
+        def sendall(self, _payload: bytes) -> None:
+            return None
+
+        def shutdown(self, _how: int) -> None:
+            return None
+
+        def recv(self, _size: int) -> bytes:
+            return next(self.ack_chunks)
+
+    monkeypatch.setattr(daemon_manager.socket, "socket", FragmentedAckSocket)
+
+    daemon_manager._send_capsule(tmp_path, "em-fragmented-ack", {"task": "test"})
+
+
 def test_manager_transfer_does_not_close_reused_descriptor(tmp_path, monkeypatch):
     run_dir, request = _make_run(tmp_path, "em-transfer-once")
     queue_dir = tmp_path / "manager" / "queue"
@@ -424,6 +458,56 @@ def test_manager_replacement_discards_previous_fd(tmp_path, monkeypatch):
     finally:
         first_peer.close()
         second_peer.close()
+
+
+def test_manager_unlink_rollback_preserves_concurrent_replacement(
+    tmp_path, monkeypatch
+):
+    run_dir, request = _make_run(tmp_path, "em-unlink-replacement")
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    _write_job(queue_dir, request)
+    job_path = queue_dir / f"{request.run_id}.json"
+    old_wire, old_peer = _received_fd_capsule(request.run_id)
+    replacement_wire, replacement_peer = _received_fd_capsule(request.run_id)
+    old_pending = ReceivedDaemonCapsule(
+        value=old_wire.value["capsule"],
+        adopted_fd=old_wire.take_fd(),
+    )
+    replacement = ReceivedDaemonCapsule(
+        value=replacement_wire.value["capsule"],
+        adopted_fd=replacement_wire.take_fd(),
+    )
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.capsules[request.run_id] = old_pending
+
+    def replace_then_fail_unlink(path: Path) -> None:
+        assert path == job_path
+        with manager.lock:
+            manager.capsules[request.run_id] = replacement
+        raise OSError("simulated unlink failure")
+
+    monkeypatch.setattr(Path, "unlink", replace_then_fail_unlink)
+
+    try:
+        manager._start_queued_jobs()
+        assert manager.capsules[request.run_id] is replacement
+        old_peer.settimeout(1)
+        assert old_peer.recv(1) == b""
+        replacement_peer.settimeout(0.05)
+        with pytest.raises(TimeoutError):
+            replacement_peer.recv(1)
+        manager.capsules.pop(request.run_id).close()
+        replacement_peer.settimeout(1)
+        assert replacement_peer.recv(1) == b""
+        assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "running"
+    finally:
+        old_wire.close()
+        replacement_wire.close()
+        old_pending.close()
+        replacement.close()
+        old_peer.close()
+        replacement_peer.close()
 
 
 def test_manager_malformed_job_discards_pending_fd(tmp_path):
