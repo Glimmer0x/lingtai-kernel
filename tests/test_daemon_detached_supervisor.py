@@ -1082,6 +1082,69 @@ def test_execution_child_argument_failure_closes_adopted_fd():
         peer.close()
 
 
+def test_derived_execution_child_skips_environment_authority_composition(
+    tmp_path, monkeypatch
+):
+    from lingtai.adapters.acp import driver_authority
+    from lingtai.adapters.posix.daemon_execution_child_entrypoint import (
+        _run_execution_child,
+    )
+    from lingtai.tools.daemon import execution_host
+
+    run_dir = _make_run_dir(tmp_path, task="derived fd adoption", timeout_s=30)
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="derived fd adoption", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    write_manifest(run_dir.path, manifest)
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+
+    def forbidden_environment_authority():
+        pytest.fail(
+            "derived execution child must not compose environment authority "
+            "before adopting its descriptor"
+        )
+
+    class CapturingHost:
+        def __init__(self, *_args, adopted_fd, **_kwargs):
+            assert adopted_fd is not None
+            self.adopted_fd = adopted_fd
+
+        def run_with_events(self, *_args) -> None:
+            os.write(self.adopted_fd, b"adopted-before-composition")
+
+        def close_adopted_fd(self) -> None:
+            os.close(self.adopted_fd)
+
+    monkeypatch.setattr(
+        driver_authority,
+        "authority_adapter_from_environment",
+        forbidden_environment_authority,
+    )
+    monkeypatch.setattr(
+        execution_host,
+        "DetachedDaemonExecutionHost",
+        CapturingHost,
+    )
+
+    try:
+        assert _run_execution_child(
+            [str(manifest_path_for(run_dir.path)), run_dir.run_id, "emanation"],
+            capsule={},
+            adopted_fd=adopted_fd,
+        ) == 0
+        peer.settimeout(1)
+        assert peer.recv(len(b"adopted-before-composition")) == (
+            b"adopted-before-composition"
+        )
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
 def test_capsule_rejects_and_closes_multiple_received_fds():
     from lingtai.adapters.posix.daemon_capsule import receive_capsule
 
