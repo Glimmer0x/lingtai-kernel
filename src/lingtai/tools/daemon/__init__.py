@@ -5655,6 +5655,22 @@ class DaemonManager:
         ):
             return {"status": "error", "message": f"Unknown CLI backend: {backend}"}
 
+        # A constrained Driver profile grants a one-use endpoint for a
+        # LingTai-owned child.  An external CLI has no contract for that
+        # endpoint.  Reject before asking the authority, materializing task
+        # files, creating a run directory, or queuing work: requesting a grant
+        # first would create a misleading Driver audit event for a backend that
+        # can never consume it.
+        if self._runtime.requires_derived_launch_admission:
+            return {
+                "status": "error",
+                "message": (
+                    "external CLI daemon backends are unavailable under Driver admission"
+                ),
+                "reason_code": "driver_external_cli_backend_unsupported",
+                "audit_id": None,
+            }
+
         # Pre-flight: validate per-task backend_options BEFORE creating any
         # run_dir or scheduling work, so a single bad spec refuses the whole
         # batch with a clear message instead of leaving half-spawned daemons.

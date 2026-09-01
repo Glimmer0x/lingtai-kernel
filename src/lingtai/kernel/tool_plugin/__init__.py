@@ -392,6 +392,15 @@ class DaemonRuntimePort(Protocol):
     def manager_options(self) -> Mapping[str, Any]:
         """Resolved construction options for this daemon manager binding."""
 
+    @property
+    def requires_derived_launch_admission(self) -> bool:
+        """Whether this binding must fail closed for derived launches.
+
+        This is policy state, not an authority decision or a grant.  Daemon
+        uses it to reject external CLI execution before it can ask Driver for
+        an endpoint that this backend cannot consume.
+        """
+
     def authorize_derived_launch(self, capability: Any) -> Any:
         """Decide one daemon-derived process launch before side effects."""
 

@@ -672,6 +672,7 @@ class AgentDaemonRuntimeAdapter:
         "_read_language",
         "_read_max_aed_attempts",
         "_read_tool_call_guard",
+        "_requires_derived_launch_admission",
         "_authorize_derived_launch",
         "_manager_options",
         "_setup_preset_capability",
@@ -694,6 +695,7 @@ class AgentDaemonRuntimeAdapter:
         read_language: Callable[[], str],
         read_max_aed_attempts: Callable[[], int],
         read_tool_call_guard: Callable[[], Any],
+        requires_derived_launch_admission: Callable[[], bool],
         authorize_derived_launch: Callable[[Any], Any],
         manager_options: Mapping[str, Any],
         setup_preset_capability: Callable[[str, Mapping[str, Any]], tuple[dict[str, Any], dict[str, Callable[[dict], dict]]]],
@@ -711,6 +713,7 @@ class AgentDaemonRuntimeAdapter:
         self._read_language = read_language
         self._read_max_aed_attempts = read_max_aed_attempts
         self._read_tool_call_guard = read_tool_call_guard
+        self._requires_derived_launch_admission = requires_derived_launch_admission
         self._authorize_derived_launch = authorize_derived_launch
         self._manager_options = dict(manager_options)
         self._setup_preset_capability = setup_preset_capability
@@ -749,6 +752,10 @@ class AgentDaemonRuntimeAdapter:
     @property
     def tool_call_guard(self) -> Any:
         return self._read_tool_call_guard()
+
+    @property
+    def requires_derived_launch_admission(self) -> bool:
+        return self._requires_derived_launch_admission()
 
     def authorize_derived_launch(self, capability: Any) -> Any:
         return self._authorize_derived_launch(capability)
@@ -911,6 +918,9 @@ def daemon_runtime_for_agent(
         read_language=_read_language,
         read_max_aed_attempts=_read_max_aed_attempts,
         read_tool_call_guard=lambda: getattr(agent, "_tool_call_guard", None),
+        requires_derived_launch_admission=lambda: bool(
+            getattr(agent, "_requires_derived_launch_admission_port", False)
+        ),
         authorize_derived_launch=_authorize_derived_launch,
         manager_options=manager_options,
         setup_preset_capability=_setup_preset_capability,

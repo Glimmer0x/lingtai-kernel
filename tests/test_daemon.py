@@ -1685,11 +1685,10 @@ def test_profile_external_cli_daemon_launch_reaches_admission_before_supervisor(
     ]
 
 
-def test_profile_external_cli_default_manager_queues_only_after_granted_admission(
+def test_external_cli_default_manager_queues_in_legacy_admission_mode(
     tmp_path, monkeypatch
 ):
-    """The default POSIX manager retains its 100-worker cap after admission."""
-    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    """The generic, non-profile path retains the default manager bound."""
     from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
 
     class _GrantingPort:
@@ -1714,9 +1713,7 @@ def test_profile_external_cli_default_manager_queues_only_after_granted_admissio
         lambda *_args, **_kwargs: direct_supervisor_calls.append(True),
     )
 
-    root = RootProviderAdmission(
-        "root-external-cli-default-manager", RUNTIME_POLICY.policy_version
-    )
+    root = RootProviderAdmission("root-external-cli-default-manager", "test-policy")
     token = bind_provider_admission(root)
     try:
         result = agent.get_capability("daemon").handle(
@@ -1735,11 +1732,10 @@ def test_profile_external_cli_default_manager_queues_only_after_granted_admissio
     assert direct_supervisor_calls == []
 
 
-def test_profile_external_cli_indeterminate_admission_never_queues_default_manager(
+def test_external_cli_indeterminate_admission_never_queues_default_manager(
     tmp_path, monkeypatch
 ):
-    """An unavailable external-CLI authority leaves no queue or run artifact."""
-    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+    """A configured generic authority still fails closed before queueing."""
 
     class _IndeterminatePort:
         def authorize_derived_launch(self, _parent, _capability):
@@ -1756,9 +1752,7 @@ def test_profile_external_cli_indeterminate_admission_never_queues_default_manag
         lambda **kwargs: queued.append(kwargs),
     )
 
-    root = RootProviderAdmission(
-        "root-external-cli-indeterminate", RUNTIME_POLICY.policy_version
-    )
+    root = RootProviderAdmission("root-external-cli-indeterminate", "test-policy")
     token = bind_provider_admission(root)
     try:
         result = agent.get_capability("daemon").handle(
@@ -1777,6 +1771,64 @@ def test_profile_external_cli_indeterminate_admission_never_queues_default_manag
         "reason_code": "driver_authority_unavailable",
         "audit_id": None,
     }
+    assert queued == []
+    daemon_root = agent._working_dir / "daemons"
+    assert not daemon_root.exists() or not any(
+        path.is_dir() and path.name.startswith("em-")
+        for path in daemon_root.iterdir()
+    )
+
+
+def test_profile_external_cli_rejects_before_requesting_driver_admission(
+    tmp_path, monkeypatch
+):
+    """A constrained profile never asks Driver for an unusable CLI grant."""
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+
+    class _CountingPort:
+        def __init__(self):
+            self.calls = []
+
+        def authorize_derived_launch(self, parent, capability):
+            self.calls.append((parent, capability))
+            return DerivedLaunchDecision(
+                ProviderAdmissionState.GRANTED,
+                "grant_must_not_be_requested_for_external_cli",
+                audit_id="audit-must-not-exist",
+            )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._requires_derived_launch_admission_port = True
+    port = _CountingPort()
+    agent._derived_launch_admission_port = port
+    queued = []
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
+        lambda **kwargs: queued.append(kwargs),
+    )
+
+    root = RootProviderAdmission(
+        "root-profile-external-cli", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "backend": "codex",
+                "tasks": [{"task": "test", "tools": []}],
+            }
+        )
+    finally:
+        clear_provider_admission(token)
+
+    assert result == {
+        "status": "error",
+        "message": "external CLI daemon backends are unavailable under Driver admission",
+        "reason_code": "driver_external_cli_backend_unsupported",
+        "audit_id": None,
+    }
+    assert port.calls == []
     assert queued == []
     daemon_root = agent._working_dir / "daemons"
     assert not daemon_root.exists() or not any(
