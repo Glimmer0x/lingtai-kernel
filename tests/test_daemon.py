@@ -1910,10 +1910,10 @@ def test_profile_external_cli_rejects_before_requesting_driver_admission(
     assert not (daemon_root / "_task_files").exists()
 
 
-def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
+def test_profile_driver_grant_batch_hands_each_lease_to_the_supervisor(
     tmp_path, monkeypatch
 ):
-    """A valid Driver batch never queues while its leases lack an FD transport."""
+    """Each admitted launch sends its one endpoint only through B8a's wire."""
     from lingtai.adapters.acp.driver_authority import (
         DriverChildEndpointLease,
         DriverDerivedLaunchAdmissionAdapter,
@@ -1963,7 +1963,7 @@ def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
     monkeypatch.setattr(
         PosixDaemonSupervisorAdapter,
         "spawn_detached",
-        lambda *_args, **_kwargs: supervisor_calls.append(True),
+        lambda *_args, **kwargs: supervisor_calls.append(kwargs),
     )
     source = agent._working_dir / "driver-sensitive-input.txt"
     source.write_text("sensitive driver task input\n", encoding="utf-8")
@@ -1988,27 +1988,20 @@ def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
         clear_provider_admission(token)
 
     try:
-        assert result == {
-            "status": "error",
-            "message": "Driver child-endpoint handoff is unavailable",
-            "reason_code": "driver_child_endpoint_handoff_unavailable",
-            "audit_id": None,
-        }
+        assert result["status"] == "dispatched"
+        assert result["count"] == 2
         assert authority.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
-        assert queued == []
         assert supervisor_calls == []
-        assert daemon_dispatch.read_dispatches(
-            agent._working_dir, full_history=True
-        ).records == ()
+        assert len(queued) == 2
+        for call in queued:
+            assert call["capsule"]["driver_authority_required"] is True
+            adopted_fd = call["adopted_fd"]
+            os.fstat(adopted_fd)
+            assert os.get_inheritable(adopted_fd) is False
+            os.close(adopted_fd)
         for peer in (first_peer, second_peer):
             peer.settimeout(2)
             assert peer.recv(1) == b""
-        daemon_root = agent._working_dir / "daemons"
-        assert not (daemon_root / "_task_files").exists()
-        assert not daemon_root.exists() or not any(
-            path.is_dir() and path.name.startswith("em-")
-            for path in daemon_root.iterdir()
-        )
     finally:
         first_lease.close()
         second_lease.close()

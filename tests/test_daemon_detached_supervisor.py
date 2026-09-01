@@ -21,6 +21,7 @@ import json
 import os
 import signal
 import socket
+import struct
 import subprocess
 import textwrap
 import threading
@@ -1510,6 +1511,66 @@ def test_detached_execution_composes_inherited_process_and_terminal_ports(tmp_pa
     assert isinstance(host._interactive_terminal_port, PosixInteractiveTerminalAdapter)
     assert host._process_port._start_new_session is False
     assert host._interactive_terminal_port._start_new_session is False
+
+
+def test_detached_host_adopts_a_derived_driver_endpoint_from_the_fd_capsule(
+    tmp_path, monkeypatch,
+):
+    """The derived endpoint never goes through profile environment composition."""
+    from lingtai.adapters.acp import driver_authority
+    from lingtai.kernel.provider_admission import ProviderCallClass
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+
+    run_dir = _make_run_dir(tmp_path, task="derived endpoint composition")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="derived endpoint composition", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake", "api_key": None,
+                             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+    endpoint, driver = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    errors = []
+
+    def serve_hello():
+        try:
+            size = struct.unpack("!I", driver.recv(4))[0]
+            request = json.loads(driver.recv(size).decode("utf-8"))
+            assert request["op"] == "hello"
+            response = json.dumps({
+                "version": 1,
+                "call_id": request["call_id"],
+                "role": "derived",
+                "launch_id": "derived-launch",
+                "capability": "daemon",
+            }, separators=(",", ":")).encode("utf-8")
+            driver.sendall(struct.pack("!I", len(response)) + response)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            driver.close()
+
+    thread = threading.Thread(target=serve_hello)
+    thread.start()
+    monkeypatch.setattr(
+        driver_authority,
+        "authority_adapter_from_environment",
+        lambda: (_ for _ in ()).throw(AssertionError("derived child read profile environment")),
+    )
+    try:
+        host = DetachedDaemonExecutionHost(
+            run_dir, manifest, threading.Event(), threading.Event(),
+            capsule={"driver_authority_required": True}, adopted_fd=adopted_fd,
+        )
+        assert host._adopted_fd is None
+        assert host._driver_authority.identity.role == "derived"
+        assert host._provider_admission_parent.call_class is ProviderCallClass.DAEMON
+        host.close_adopted_fd()
+        thread.join(2)
+        assert not errors
+    finally:
+        driver.close()
 
 
 def test_detached_daemon_child_requires_derived_authority_before_nested_launch(tmp_path):
