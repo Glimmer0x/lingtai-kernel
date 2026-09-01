@@ -1807,6 +1807,8 @@ def test_profile_external_cli_rejects_before_requesting_driver_admission(
         "lingtai.adapters.posix.daemon_manager.enqueue_manager_run",
         lambda **kwargs: queued.append(kwargs),
     )
+    source = agent._working_dir / "external-cli-sensitive-input.txt"
+    source.write_text("sensitive external CLI task input\n", encoding="utf-8")
 
     root = RootProviderAdmission(
         "root-profile-external-cli", RUNTIME_POLICY.policy_version
@@ -1817,7 +1819,15 @@ def test_profile_external_cli_rejects_before_requesting_driver_admission(
             {
                 "action": "emanate",
                 "backend": "codex",
-                "tasks": [{"task": "test", "tools": []}],
+                "tasks": [
+                    {
+                        "task": "test",
+                        "tools": [],
+                        "task_files": [
+                            {"path": "external-cli-sensitive-input.txt"}
+                        ],
+                    }
+                ],
             }
         )
     finally:
@@ -1997,6 +2007,8 @@ def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
         "spawn_detached",
         lambda *_args, **_kwargs: supervisor_calls.append(True),
     )
+    source = agent._working_dir / "driver-denial-sensitive-input.txt"
+    source.write_text("sensitive denied driver task input\n", encoding="utf-8")
 
     root = RootProviderAdmission("root-driver-denial", RUNTIME_POLICY.policy_version)
     token = bind_provider_admission(root)
@@ -2005,7 +2017,13 @@ def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
             {
                 "action": "emanate",
                 "tasks": [
-                    {"task": "first", "tools": []},
+                    {
+                        "task": "first",
+                        "tools": [],
+                        "task_files": [
+                            {"path": "driver-denial-sensitive-input.txt"}
+                        ],
+                    },
                     {"task": "second", "tools": []},
                 ],
             }
