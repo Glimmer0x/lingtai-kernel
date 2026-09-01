@@ -56,6 +56,11 @@ def _server(handler):
     return client, thread, errors
 
 
+def _assert_peer_closed(peer):
+    peer.settimeout(2)
+    assert peer.recv(1) == b""
+
+
 def _hello(sock, *, role="root", capability=None):
     request = _recv(sock)
     assert request["op"] == "hello"
@@ -91,7 +96,7 @@ def test_mismatched_call_id_closes_received_endpoint_and_fails_closed():
     thread.join(2)
     assert not errors
     assert decision.state is ProviderAdmissionState.INDETERMINATE
-    assert peer.recv(1) == b""
+    _assert_peer_closed(peer)
     peer.close()
 
 
@@ -113,7 +118,7 @@ def test_malformed_derived_decision_closes_received_endpoint_and_fails_closed():
     thread.join(2)
     assert not errors
     assert decision.state is ProviderAdmissionState.INDETERMINATE
-    assert peer.recv(1) == b""
+    _assert_peer_closed(peer)
     peer.close()
 
 
@@ -158,7 +163,7 @@ def test_detach_failure_leaves_lease_closable():
     lease.close()
     ready, _, _ = select.select([peer], [], [], 0.2)
     assert ready == [peer]
-    assert peer.recv(1) == b""
+    _assert_peer_closed(peer)
     peer.close()
 
 
@@ -204,7 +209,7 @@ def test_denied_child_endpoint_is_closed_without_erasing_driver_reason():
     assert decision.state is ProviderAdmissionState.DENIED
     assert decision.reason_code == "policy_denied"
     assert decision.audit_id == "audit-1"
-    assert peer.recv(1) == b""
+    _assert_peer_closed(peer)
     peer.close()
 
 
@@ -236,7 +241,7 @@ def test_grant_parser_closes_its_socket_wrapper_after_descriptor_adoption():
             pass
         else:
             raise AssertionError("invalid adopted endpoint became a grant")
-    assert peer.recv(1) == b""
+    _assert_peer_closed(peer)
     peer.close()
 
 
@@ -343,7 +348,7 @@ def test_denied_endpoint_reply_invalidates_authority_before_a_second_request():
     assert not errors
     assert first.state is ProviderAdmissionState.DENIED
     assert second.state is ProviderAdmissionState.INDETERMINATE
-    assert peer.recv(1) == b""
+    _assert_peer_closed(peer)
     peer.close()
     granted_peer.close()
 
@@ -397,7 +402,7 @@ def test_provider_reply_with_an_endpoint_fails_closed_and_closes_it():
     thread.join(2)
     assert not errors
     assert decision.state is ProviderAdmissionState.INDETERMINATE
-    assert peer.recv(1) == b""
+    _assert_peer_closed(peer)
     peer.close()
 
 
