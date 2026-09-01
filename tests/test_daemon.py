@@ -2864,11 +2864,24 @@ def test_handle_list_defaults_to_newest_1000_and_materializes_only_ledger_page(t
     assert default_listing["emanations"][0]["run_id"] == "em-history-1004"
     assert default_listing["emanations"][-1]["run_id"] == "em-history-0005"
 
+    # An explicit last=N grows the bounded window to N, even with a filter.
     materialized.clear()
-    expanded_listing = mgr._handle_list(limit=total)
+    expanded_listing = mgr._handle_list(contains="history", limit=total)
     assert expanded_listing["showing"] == total
     assert len(materialized) == total
     assert expanded_listing["emanations"][0]["run_id"] == "em-history-1004"
+
+    # Query, status, and include_done filters must not silently turn the default
+    # newest-1000 window into a full-history ledger/state hydration pass.
+    for kwargs, expected_showing in (
+        ({"contains": "history"}, 1000),
+        ({"status_filter": "done"}, 1000),
+        ({"include_done": False}, 0),
+    ):
+        materialized.clear()
+        filtered_listing = mgr._handle_list(**kwargs)
+        assert filtered_listing["showing"] == expected_showing
+        assert len(materialized) == 1000
 
 
 def test_handle_list_uses_only_ledger_history_and_explicit_filters(tmp_path):
