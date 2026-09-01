@@ -25,6 +25,7 @@ related_files:
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_acp_stdio.py
   - tests/test_puffo_v0_profile.py
+  - tests/test_driver_authority_adapter.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
@@ -78,6 +79,8 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   quarantines Python application stdout to stderr before Agent construction,
   composes the existing Agent, consumes the typed bounded stop proof, and hard-
   exits on incomplete quiescence so no later Python state write can race teardown.
+  For `puffo-v0`, it consumes the one launcher-injected Driver authority
+  descriptor and composes either its root Port pair or a fail-closed pair.
   Shared poisoned-worker exit logging is lease-aware: retained ownership may log,
   while a successful `STOPPED` release skips every later workdir append and still
   reaches the unconditional process exit.
@@ -110,7 +113,10 @@ adapter origin to provider dispatch. This controls turn initiation, not what
 state the eventual turn can read. The composition root re-resolves a profile
 runtime immediately before Agent composition so a normal resolve-to-start drift
 fails closed; host-principal filesystem replacement after that check remains
-outside this profile's trust boundary. Outbound: the Adapter calls only the
+outside this profile's trust boundary. The same composition root consumes and
+removes `LINGTAI_DRIVER_AUTHORITY_FD`; only a valid root endpoint becomes the
+profile's provider and derived-launch Port pair, while every other outcome is
+typed fail-closed. Outbound: the Adapter calls only the
 protocol-neutral `BaseAgent.submit_turn`/`TurnHandle` boundary with an optional
 turn-scoped tool observer. The CLI root
 reuses `cli.load_init`, `cli.build_agent`, venv resolution, logging, lifecycle,
@@ -135,7 +141,9 @@ through physical terminal-batch completion, close invalidation, or fatal abort.
 ACP session/correlation identifiers are not persisted. `puffo-v0` additionally
 reads an operator-managed local registry at spawn time; it neither creates a
 durable ACP session nor changes the Agent's own durable identity state. Durable
-agent state remains owned by the existing Agent/workdir lifecycle. Closing requests active cancellation
+agent state remains owned by the existing Agent/workdir lifecycle. The one-time
+Driver authority environment locator is removed at composition and is not
+retained as process state. Closing requests active cancellation
 and suppresses prompt frames that have not crossed the writer start check; typed
 Agent stop retains services/heartbeat/lease until execution quiescence is proven.
 

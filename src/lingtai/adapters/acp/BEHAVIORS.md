@@ -1,6 +1,6 @@
 ---
 name: acp-local-stdio-behavior-tests
-behavior_version: 2
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -8,8 +8,10 @@ related_files:
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/MANUAL.md
+  - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
@@ -18,6 +20,7 @@ related_files:
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_acp_stdio.py
+  - tests/test_driver_authority_adapter.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
   - tests/test_turn_events.py
@@ -102,14 +105,21 @@ the evidence trail in the task report.
 
 1. Run `python -m pytest -q -x tests/test_puffo_v0_profile.py`.
 2. Inspect the registry cases: only an active, entry-digest-valid opaque id
-   with its original directory identity resolves; tampered, retargeted, or
-   revoked entries, including a missing required revocation log, fail before
-   composition. An active identity and workspace cannot be bound twice.
+  with its original directory identity resolves; tampered, retargeted, or
+  revoked entries, including a missing required revocation log, fail before
+  composition. An active identity and workspace cannot be bound twice.
 3. Inspect the profile session and turn-origin cases: another workspace and
    every non-empty `mcpServers` input fail; the operator-managed tool surface is
    retained, but legacy/inbox/internal events cannot queue or dispatch any
    provider/model turn. A direct ACP prompt carries the authenticated-adapter
    origin.
+4. Inspect Driver authority composition: the launcher supplies exactly one
+   inherited root AF_UNIX-stream descriptor in `LINGTAI_DRIVER_AUTHORITY_FD`.
+   The profile consumes and removes the locator before Agent construction,
+   passes the resulting Driver client to the root provider-call Port, and
+   projects that same client to the derived-launch Port. Missing, malformed,
+   unusable, or derived-role endpoints install the typed fail-closed pair;
+   they never select the generic runtime policy as a substitute.
 
 ### Expected evidence
 
@@ -117,6 +127,9 @@ the evidence trail in the task report.
   launch through the profile.
 - [ ] The profile denies unavailable identities and every non-ACP origin before
   provider dispatch, while preserving the configured local tool surface.
+- [ ] Root provider calls and derived-launch requests use the consumed Driver
+  endpoint, or both return `driver_authority_unavailable`; the environment
+  locator is absent before Agent construction and cannot reach descendants.
 - [ ] The host-boundary non-guarantee remains documented.
 
 ### Pass / Fail
@@ -124,7 +137,8 @@ the evidence trail in the task report.
 Pass when the focused tests prove every profile startup field comes from the
 local registry and constrained session policy. Fail on a remote-controlled
 workspace/MCP input, a non-ACP event that reaches provider dispatch, accepted
-revoked id, or any claim that this controlled entrypoint isolates a same-OS
-principal or contains full-tool runtime behavior.
+revoked id, a missing/invalid/non-root Driver endpoint that falls back to a
+generic admission policy, or any claim that this controlled entrypoint isolates
+a same-OS principal or contains full-tool runtime behavior.
 This behavior is a registry/session-policy foundation: its entry digest does
 not by itself prove a complete effective tool/action or launch-security policy.

@@ -132,6 +132,38 @@ class DriverDerivedLaunchAdmissionAdapter:
         )
 
 
+class UnavailableDriverAuthorityAdapter:
+    """Fail-closed Port pair used when constrained composition lacks authority.
+
+    This is deliberately a composition result, not a fallback policy.  A
+    ``puffo-v0`` process without a usable inherited Driver endpoint must retain
+    its provider and derived-launch gates rather than reverting to generic
+    LingTai behavior.
+    """
+
+    __slots__ = ()
+
+    def authorize_provider_call(
+        self,
+        _parent: ProviderAdmissionParent,
+        _call_class: ProviderCallClass,
+    ) -> ProviderCallDecision:
+        return ProviderCallDecision(
+            ProviderAdmissionState.INDETERMINATE,
+            "driver_authority_unavailable",
+        )
+
+    def authorize_derived_launch(
+        self,
+        _parent: RootProviderAdmission,
+        _capability: DerivedLaunchCapability,
+    ) -> DerivedLaunchDecision:
+        return DerivedLaunchDecision(
+            ProviderAdmissionState.INDETERMINATE,
+            "driver_authority_unavailable",
+        )
+
+
 class DriverAuthorityClient(ProviderCallAdmissionPort):
     """Authenticated request/response client; no lifecycle integration."""
 
@@ -164,9 +196,22 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
     def from_inherited_fd(cls, fd: int, *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -> "DriverAuthorityClient":
         if not isinstance(fd, int) or isinstance(fd, bool) or fd < 0:
             raise DriverAuthorityTransportError("authority fd is invalid")
+        endpoint: socket.socket | None = None
         try:
-            return cls(socket.socket(fileno=fd), timeout=timeout)
-        except OSError as exc:
+            endpoint = socket.socket(fileno=fd)
+            return cls(endpoint, timeout=timeout)
+        except (OSError, OverflowError) as exc:
+            # ``fileno=`` can reject a live non-socket descriptor before a
+            # socket object owns it.  This is still an inherited authority
+            # locator, so consume it on every rejected path rather than
+            # leaving it open (or inheritable) for a later child.
+            try:
+                if endpoint is None:
+                    os.close(fd)
+                else:
+                    endpoint.close()
+            except (OSError, OverflowError):
+                pass
             raise DriverAuthorityTransportError("authority fd is unavailable") from exc
 
     @property
@@ -372,6 +417,31 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
         return call_class is endpoint_call_class
 
 
+def authority_adapter_from_environment(
+    *, timeout: float = _DEFAULT_TIMEOUT_SECONDS
+) -> DriverAuthorityClient | UnavailableDriverAuthorityAdapter:
+    """Consume the one inherited Driver FD for constrained ACP composition.
+
+    The environment value is merely a one-time local descriptor locator.  It
+    is removed before Agent construction so a child process cannot rediscover
+    authority from inherited configuration.  Any absent, malformed, unusable,
+    or derived-role endpoint becomes a typed fail-closed Port pair.
+    """
+
+    raw_fd = os.environ.pop(DRIVER_AUTHORITY_FD_ENV, None)
+    if raw_fd is None:
+        return UnavailableDriverAuthorityAdapter()
+    try:
+        fd = int(raw_fd)
+        authority = DriverAuthorityClient.from_inherited_fd(fd, timeout=timeout)
+        if authority.identity.role != "root":
+            authority.close()
+            raise DriverAuthorityTransportError("ACP profile requires a root authority endpoint")
+        return authority
+    except (TypeError, ValueError, OverflowError, DriverAuthorityTransportError):
+        return UnavailableDriverAuthorityAdapter()
+
+
 __all__ = [
     "DRIVER_AUTHORITY_FD_ENV",
     "DriverAuthorityClient",
@@ -382,4 +452,6 @@ __all__ = [
     "consume_posix_child_endpoint_lease",
     "DriverDerivedLaunchAdmissionAdapter",
     "DriverDerivedLaunchGrant",
+    "UnavailableDriverAuthorityAdapter",
+    "authority_adapter_from_environment",
 ]
