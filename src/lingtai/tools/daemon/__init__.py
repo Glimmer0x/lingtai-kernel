@@ -9588,7 +9588,7 @@ class DaemonManager:
             if lease is not None:
                 try:
                     lease.close()
-                except Exception:
+                except OSError:
                     pass
 
     @staticmethod

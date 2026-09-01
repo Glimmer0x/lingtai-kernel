@@ -115,6 +115,7 @@ def _mission_looks_unsafe(mission: str) -> tuple[bool, str]:
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.provider_admission import DerivedLaunchEndpointLease
     from lingtai.kernel.tool_plugin import ToolPluginHost
 
 PROVIDERS = {"providers": [], "default": "builtin"}
@@ -912,7 +913,7 @@ class AvatarManager:
         self,
         working_dir: Path,
         *,
-        authority_lease: object | None = None,
+        authority_lease: "DerivedLaunchEndpointLease | None" = None,
         derived_child: bool = False,
     ) -> tuple[AvatarLaunchReceipt, Path]:
         """Launch `lingtai-agent run <dir>` as a fully detached process.
@@ -958,10 +959,10 @@ class AvatarManager:
     @staticmethod
     def _close_unconsumed_launch_lease(decision: "DerivedLaunchDecision") -> None:
         """Close a Driver endpoint unless ownership reached the launcher Port."""
-        close = getattr(decision.child_endpoint_lease, "close", None)
-        if callable(close):
+        lease = decision.child_endpoint_lease
+        if lease is not None:
             try:
-                close()
+                lease.close()
             except OSError:
                 pass
 

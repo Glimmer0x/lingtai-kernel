@@ -742,7 +742,14 @@ def test_derived_launch_port_preserves_a_structured_adapter_error_decision():
     assert raised.value.decision.child_endpoint_lease is lease
 
 
-def test_malformed_derived_launch_decision_releases_its_lease_before_replacement():
+@pytest.mark.parametrize("capability", list(DerivedLaunchCapability))
+@pytest.mark.parametrize(
+    ("reason_code", "audit_id"),
+    [("", None), ("allowed", "")],
+)
+def test_malformed_derived_launch_decision_releases_its_lease_before_replacement(
+    capability, reason_code, audit_id
+):
     """Core owns the opaque lease when it discards an untrusted Port result."""
 
     class _Lease:
@@ -758,7 +765,8 @@ def test_malformed_derived_launch_decision_releases_its_lease_before_replacement
         def authorize_derived_launch(self, _parent, _capability):
             return DerivedLaunchDecision(
                 ProviderAdmissionState.GRANTED,
-                "",
+                reason_code,
+                audit_id=audit_id,
                 child_endpoint_lease=lease,
             )
 
@@ -769,7 +777,7 @@ def test_malformed_derived_launch_decision_releases_its_lease_before_replacement
             DerivedLaunchAdmissionError,
             match="malformed_derived_launch_admission_decision",
         ) as raised:
-            require_derived_launch_admission(_Port(), DerivedLaunchCapability.AVATAR)
+            require_derived_launch_admission(_Port(), capability)
     finally:
         clear_provider_admission(token)
 
@@ -777,42 +785,8 @@ def test_malformed_derived_launch_decision_releases_its_lease_before_replacement
     assert raised.value.decision.reason_code == "malformed_derived_launch_admission_decision"
 
 
-def test_malformed_derived_launch_audit_id_releases_its_lease_before_replacement():
-    """Every malformed-decision variant uses the same discard ownership path."""
-
-    class _Lease:
-        def __init__(self):
-            self.closed = False
-
-        def close(self):
-            self.closed = True
-
-    lease = _Lease()
-
-    class _Port:
-        def authorize_derived_launch(self, _parent, _capability):
-            return DerivedLaunchDecision(
-                ProviderAdmissionState.GRANTED,
-                "allowed",
-                audit_id="",
-                child_endpoint_lease=lease,
-            )
-
-    root = RootProviderAdmission("turn-malformed-audit-lease", RUNTIME_POLICY.policy_version)
-    token = bind_provider_admission(root)
-    try:
-        with pytest.raises(
-            DerivedLaunchAdmissionError,
-            match="malformed_derived_launch_admission_decision",
-        ):
-            require_derived_launch_admission(_Port(), DerivedLaunchCapability.AVATAR)
-    finally:
-        clear_provider_admission(token)
-
-    assert lease.closed is True
-
-
-def test_malformed_derived_launch_decision_closes_a_real_driver_endpoint_lease():
+@pytest.mark.parametrize("capability", list(DerivedLaunchCapability))
+def test_malformed_derived_launch_decision_closes_a_real_driver_endpoint_lease(capability):
     """Discarding a malformed Driver grant closes the underlying socket peer."""
     from lingtai.adapters.acp.driver_authority import DriverChildEndpointLease
 
@@ -835,7 +809,7 @@ def test_malformed_derived_launch_decision_closes_a_real_driver_endpoint_lease()
             DerivedLaunchAdmissionError,
             match="malformed_derived_launch_admission_decision",
         ):
-            require_derived_launch_admission(_Port(), DerivedLaunchCapability.AVATAR)
+            require_derived_launch_admission(_Port(), capability)
     finally:
         clear_provider_admission(token)
 

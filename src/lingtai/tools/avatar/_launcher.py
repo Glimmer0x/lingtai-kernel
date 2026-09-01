@@ -6,6 +6,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Mapping, Protocol
 
+from lingtai.kernel.provider_admission import DerivedLaunchEndpointLease
+
 
 # This is deliberately a restrictive boot marker, never an authority bearer:
 # a child that forges it can only make its own nested derived launch fail closed.
@@ -81,7 +83,7 @@ class AvatarLaunchRequest:
     argv: tuple[str, ...]
     stderr_path: Path
     environment: Mapping[str, str] | None = None
-    authority_lease: object | None = None
+    authority_lease: DerivedLaunchEndpointLease | None = None
 
 
 @dataclass(frozen=True)

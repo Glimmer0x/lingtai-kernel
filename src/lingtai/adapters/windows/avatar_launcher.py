@@ -33,12 +33,10 @@ class WindowsAvatarLauncherAdapter:
             # The Driver child endpoint is an AF_UNIX descriptor handoff.
             # Windows has no corresponding avatar-launch boundary yet, so
             # never start a child that silently lost its approved endpoint.
-            close = getattr(request.authority_lease, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except OSError:
-                    pass
+            try:
+                request.authority_lease.close()
+            except OSError:
+                pass
             raise RuntimeError(
                 "Driver avatar child endpoint handoff is only supported on POSIX"
             )

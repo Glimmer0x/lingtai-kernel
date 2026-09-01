@@ -44,6 +44,12 @@ class ProviderAdmissionState(str, Enum):
     INDETERMINATE = "indeterminate"
 
 
+class DerivedLaunchEndpointLease(Protocol):
+    """Opaque one-use child handoff with exactly one required cleanup action."""
+
+    def close(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RootProviderAdmission:
     """Core-private context for one admitted root turn.
@@ -149,7 +155,7 @@ class DerivedLaunchDecision:
     # An adapter-owned, non-serializable, one-use child handoff.  Core neither
     # inspects nor reconstructs it; a consumer must either hand it to the
     # exact supported process boundary or release it before returning.
-    child_endpoint_lease: object | None = field(
+    child_endpoint_lease: DerivedLaunchEndpointLease | None = field(
         default=None, repr=False, compare=False
     )
 
@@ -224,10 +230,10 @@ def _discard_derived_launch_decision(
     """
 
     if isinstance(decision, DerivedLaunchDecision):
-        close = getattr(decision.child_endpoint_lease, "close", None)
-        if callable(close):
+        lease = decision.child_endpoint_lease
+        if lease is not None:
             try:
-                close()
+                lease.close()
             except OSError:
                 pass
     return DerivedLaunchDecision(ProviderAdmissionState.INDETERMINATE, reason_code)
@@ -471,6 +477,7 @@ __all__ = [
     "DerivedLaunchAdmissionPort",
     "DerivedLaunchCapability",
     "DerivedLaunchDecision",
+    "DerivedLaunchEndpointLease",
     "ProviderAdmissionError",
     "ProviderAdmissionParent",
     "ProviderAdmissionState",
