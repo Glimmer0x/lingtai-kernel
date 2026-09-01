@@ -16,45 +16,33 @@ subprocess entrypoint via ``python -m``. It performs no policy of its own.
 """
 from __future__ import annotations
 
-import json
-import os
 import sys
 
+from lingtai.adapters.posix.daemon_capsule import (
+    ReceivedDaemonCapsule,
+    receive_capsule_from_environment,
+)
 from lingtai.kernel.daemon_supervisor import decode_request
 from lingtai.tools.daemon.supervisor_runtime import run_supervisor
 
 
-_MAX_CAPSULE_BYTES = 4 * 1024 * 1024
+def _read_capsule_wire() -> ReceivedDaemonCapsule | None:
+    """Consume the inherited one-shot capsule socket and optional descriptor."""
+    try:
+        return receive_capsule_from_environment()
+    except (OSError, ValueError, TypeError, UnicodeDecodeError):
+        return None
 
 
 def _read_capsule() -> dict | None:
-    """Consume the bounded inherited one-shot capsule and close its descriptor."""
-    raw_fd = os.environ.pop("LINGTAI_DAEMON_CAPSULE_FD", None)
-    if raw_fd is None:
+    """Compatibility seam for tests that need only the JSON capsule."""
+    wire = _read_capsule_wire()
+    if wire is None:
         return None
     try:
-        fd = int(raw_fd)
-        chunks = []
-        total = 0
-        while True:
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > _MAX_CAPSULE_BYTES:
-                raise ValueError("daemon runtime capsule exceeds size limit")
-            chunks.append(chunk)
-        os.close(fd)
-        value = json.loads(b"".join(chunks).decode("utf-8"))
-        if not isinstance(value, dict):
-            raise ValueError("daemon capsule must be an object")
-        return value
-    except (OSError, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
-        try:
-            os.close(fd)  # type: ignore[possibly-undefined]
-        except (OSError, UnboundLocalError):
-            pass
-        return None
+        return wire.value
+    finally:
+        wire.close()
 
 
 def main(argv: list[str]) -> int:
@@ -72,7 +60,22 @@ def main(argv: list[str]) -> int:
             "<encoded-request>"
         )
     request = decode_request(argv[0])
-    run_supervisor(request, capsule=_read_capsule())
+    wire = _read_capsule_wire()
+    if wire is None:
+        run_supervisor(request)
+    else:
+        adopted_fd = wire.take_fd()
+        try:
+            if adopted_fd is None:
+                run_supervisor(request, capsule=wire.value)
+            else:
+                run_supervisor(
+                    request,
+                    capsule=wire.value,
+                    adopted_fd=adopted_fd,
+                )
+        finally:
+            wire.close()
     return 0
 
 

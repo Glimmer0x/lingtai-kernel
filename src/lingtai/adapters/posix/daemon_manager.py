@@ -21,6 +21,12 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from lingtai.adapters.posix.daemon_capsule import (
+    ReceivedDaemonCapsule,
+    close_fd,
+    receive_capsule,
+    send_capsule,
+)
 from lingtai.kernel._fsutil import atomic_write_json, read_json
 from lingtai.kernel.daemon_supervisor import (
     DaemonSupervisorRequest,
@@ -255,8 +261,29 @@ def enqueue_manager_run(
     request: DaemonSupervisorRequest,
     capsule: dict | None,
     pool_size: int,
+    adopted_fd: int | None = None,
 ) -> None:
-    """Durably enqueue one run and lazily start the resident manager."""
+    """Durably enqueue one run and adopt its optional child descriptor."""
+    try:
+        _enqueue_manager_run_owned(
+            agent_working_dir=agent_working_dir,
+            request=request,
+            capsule=capsule,
+            pool_size=pool_size,
+            adopted_fd=adopted_fd,
+        )
+    finally:
+        close_fd(adopted_fd)
+
+
+def _enqueue_manager_run_owned(
+    *,
+    agent_working_dir: Path,
+    request: DaemonSupervisorRequest,
+    capsule: dict | None,
+    pool_size: int,
+    adopted_fd: int | None,
+) -> None:
     if os.name != "posix":
         raise NotImplementedError("central daemon manager is POSIX-only")
     if pool_size <= 0:
@@ -277,7 +304,12 @@ def enqueue_manager_run(
     job_path = queue_dir / f"{request.run_id}.json"
     _write_private_json(job_path, payload)
     try:
-        _send_capsule(root, request.run_id, capsule or {})
+        _send_capsule(
+            root,
+            request.run_id,
+            capsule or {},
+            adopted_fd=adopted_fd,
+        )
     except Exception:
         try:
             job_path.unlink()
@@ -320,7 +352,7 @@ class _DaemonManagerProcess:
         self.journal_dir = journal_dir
         self.pool_size = pool_size
         self.active: dict[str, threading.Thread] = {}
-        self.capsules: dict[str, dict] = {}
+        self.capsules: dict[str, ReceivedDaemonCapsule] = {}
         self.lock = threading.Lock()
         self.last_activity = time.monotonic()
         self.started_at = time.time()
@@ -356,14 +388,26 @@ class _DaemonManagerProcess:
             except OSError:
                 return
             with conn:
+                wire = None
+                accepted: tuple[str, ReceivedDaemonCapsule] | None = None
                 try:
-                    data = self._read_capsule_message(conn)
+                    wire = self._read_capsule_message(conn)
+                    data = wire.value
                     run_id = data.get("run_id")
                     capsule = data.get("capsule")
                     if isinstance(run_id, str) and isinstance(capsule, dict):
+                        pending = ReceivedDaemonCapsule(
+                            value=capsule,
+                            adopted_fd=wire.take_fd(),
+                        )
                         with self.lock:
-                            self.capsules[run_id] = capsule
+                            previous = self.capsules.get(run_id)
+                            self.capsules[run_id] = pending
+                        accepted = (run_id, pending)
+                        if previous is not None:
+                            previous.close()
                         conn.sendall(b"OK")
+                        accepted = None
                     else:
                         conn.sendall(b"ERR")
                 except Exception:
@@ -371,20 +415,20 @@ class _DaemonManagerProcess:
                         conn.sendall(b"ERR")
                     except OSError:
                         pass
+                finally:
+                    if accepted is not None:
+                        run_id, pending = accepted
+                        with self.lock:
+                            if self.capsules.get(run_id) is pending:
+                                self.capsules.pop(run_id, None)
+                        pending.close()
+                    if wire is not None:
+                        wire.close()
 
-    def _read_capsule_message(self, conn: socket.socket) -> dict[str, Any]:
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = conn.recv(65536)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > _MAX_CAPSULE_BYTES:
-                raise ValueError("daemon manager capsule exceeds size limit")
-            chunks.append(chunk)
-        value = json.loads(b"".join(chunks).decode("utf-8"))
-        return value if isinstance(value, dict) else {}
+    def _read_capsule_message(
+        self, conn: socket.socket
+    ) -> ReceivedDaemonCapsule:
+        return receive_capsule(conn)
 
     def recover_interrupted_active_runs(self) -> None:
         """Mark manager-owned active runs from a prior crash failed."""
@@ -425,22 +469,29 @@ class _DaemonManagerProcess:
 
     def run(self, *, idle_exit_s: float | None = 2.0) -> None:
         idle_since: float | None = None
-        while True:
-            self._reap_finished_threads()
-            self._consume_queue_cancel_requests()
-            self._start_queued_jobs()
-            if self.active or list(self.queue_dir.glob("*.json")):
-                idle_since = None
-                self.last_activity = time.monotonic()
-            else:
-                if idle_exit_s is None:
-                    time.sleep(_POLL_INTERVAL_S)
-                    continue
-                if idle_since is None:
-                    idle_since = time.monotonic()
-                elif time.monotonic() - idle_since > idle_exit_s:
-                    return
-            time.sleep(_POLL_INTERVAL_S)
+        try:
+            while True:
+                self._reap_finished_threads()
+                self._consume_queue_cancel_requests()
+                self._start_queued_jobs()
+                if self.active or list(self.queue_dir.glob("*.json")):
+                    idle_since = None
+                    self.last_activity = time.monotonic()
+                else:
+                    if idle_exit_s is None:
+                        time.sleep(_POLL_INTERVAL_S)
+                        continue
+                    if idle_since is None:
+                        idle_since = time.monotonic()
+                    elif time.monotonic() - idle_since > idle_exit_s:
+                        return
+                time.sleep(_POLL_INTERVAL_S)
+        finally:
+            with self.lock:
+                pending_capsules = list(self.capsules.values())
+                self.capsules.clear()
+            for pending in pending_capsules:
+                pending.close()
 
     def _reap_finished_threads(self) -> None:
         with self.lock:
@@ -514,7 +565,9 @@ class _DaemonManagerProcess:
             except OSError:
                 continue  # the worker won the handoff; its watcher consumes this
             with self.lock:
-                self.capsules.pop(request.run_id, None)
+                pending = self.capsules.pop(request.run_id, None)
+            if pending is not None:
+                pending.close()
             run_dir.update_state(owner="manager", manager_pid=os.getpid())
             run_dir.mark_cancelled()
             _publish_terminal(run_dir, manifest)
@@ -549,8 +602,8 @@ class _DaemonManagerProcess:
                 self._quarantine_malformed_job(job_path, exc)
                 continue
             with self.lock:
-                capsule = self.capsules.pop(request.run_id, None)
-            if capsule is None:
+                pending = self.capsules.pop(request.run_id, None)
+            if pending is None:
                 if self._missing_capsule_is_terminal(job):
                     self._fail_unavailable_capsule_job(job_path, request)
                 continue
@@ -558,12 +611,12 @@ class _DaemonManagerProcess:
                 job_path.unlink()
             except OSError:
                 with self.lock:
-                    self.capsules[request.run_id] = capsule
+                    self.capsules[request.run_id] = pending
                 continue
-            self._journal(request.run_id, "active", request, capsule)
+            self._journal(request.run_id, "active", request, pending.value)
             thread = threading.Thread(
                 target=self._run_job,
-                args=(request, capsule),
+                args=(request, pending),
                 name=f"daemon-manager-{request.run_id}",
                 daemon=True,
             )
@@ -637,6 +690,10 @@ class _DaemonManagerProcess:
             pass
 
     def _quarantine_malformed_job(self, job_path: Path, exc: Exception) -> None:
+        with self.lock:
+            pending = self.capsules.pop(job_path.stem, None)
+        if pending is not None:
+            pending.close()
         self._journal_raw(job_path.stem, {
             "schema": "lingtai.daemon_manager_journal.v1",
             "run_id": job_path.stem,
@@ -654,7 +711,11 @@ class _DaemonManagerProcess:
         except OSError:
             pass
 
-    def _run_job(self, request: DaemonSupervisorRequest, capsule: dict) -> None:
+    def _run_job(
+        self,
+        request: DaemonSupervisorRequest,
+        pending: ReceivedDaemonCapsule,
+    ) -> None:
         try:
             manifest = _read_manifest_for_request(request)
             run_dir = _attach_run_dir(manifest)
@@ -670,7 +731,16 @@ class _DaemonManagerProcess:
                 supervisor_manifest_path=str(Path(request.manifest_path).resolve()),
                 manager_pid=os.getpid(),
             )
-            _run_one_emanation(run_dir, manifest, capsule)
+            adopted_fd = pending.take_fd()
+            if adopted_fd is None:
+                _run_one_emanation(run_dir, manifest, pending.value)
+            else:
+                _run_one_emanation(
+                    run_dir,
+                    manifest,
+                    pending.value,
+                    adopted_fd=adopted_fd,
+                )
         except Exception as exc:
             try:
                 manifest = _read_manifest_for_request(request)
@@ -686,7 +756,8 @@ class _DaemonManagerProcess:
                 _publish_terminal(run_dir, manifest)
             except Exception:
                 pass
-            self._journal(request.run_id, "terminal", request, capsule)
+            pending.close()
+            self._journal(request.run_id, "terminal", request, pending.value)
 
     def _journal(
         self,
@@ -739,7 +810,13 @@ def _mark_run_manager_owned(request: DaemonSupervisorRequest, root: Path) -> Non
     run_dir.update_state(**updates)
 
 
-def _send_capsule(root: Path, run_id: str, capsule: dict) -> None:
+def _send_capsule(
+    root: Path,
+    run_id: str,
+    capsule: dict,
+    *,
+    adopted_fd: int | None = None,
+) -> None:
     socket_path = _capsule_socket_path(root)
     payload = json.dumps(
         {"run_id": run_id, "capsule": capsule},
@@ -755,8 +832,7 @@ def _send_capsule(root: Path, run_id: str, capsule: dict) -> None:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(0.5)
                 sock.connect(str(socket_path))
-                sock.sendall(payload)
-                sock.shutdown(socket.SHUT_WR)
+                send_capsule(sock, payload, adopted_fd=adopted_fd)
                 if sock.recv(2) == b"OK":
                     return
                 raise RuntimeError("daemon manager rejected runtime capsule")
@@ -780,10 +856,25 @@ def _process_identity_matches(pid: int, saved_identity: object) -> bool:
     return process_identity_matches(pid, saved_identity)
 
 
-def _run_one_emanation(run_dir, manifest: dict, capsule: dict) -> None:
-    from lingtai.tools.daemon.supervisor_runtime import _run_one_emanation
+def _run_one_emanation(
+    run_dir,
+    manifest: dict,
+    capsule: dict,
+    *,
+    adopted_fd: int | None = None,
+) -> None:
+    try:
+        from lingtai.tools.daemon.supervisor_runtime import _run_one_emanation
+    except Exception:
+        close_fd(adopted_fd)
+        raise
 
-    _run_one_emanation(run_dir, manifest, capsule)
+    _run_one_emanation(
+        run_dir,
+        manifest,
+        capsule,
+        adopted_fd=adopted_fd,
+    )
 
 
 def _publish_terminal(run_dir, manifest: dict) -> None:

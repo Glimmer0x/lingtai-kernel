@@ -125,9 +125,21 @@ class WindowsDaemonSupervisorAdapter(DaemonSupervisorPort):
     """
 
     def spawn_detached(
-        self, request: DaemonSupervisorRequest, *, capsule: dict | None = None
+        self,
+        request: DaemonSupervisorRequest,
+        *,
+        capsule: dict | None = None,
+        adopted_fd: int | None = None,
     ) -> None:
         """Launch one owner and optionally hand it one-shot runtime values."""
+        if adopted_fd is not None:
+            try:
+                os.close(adopted_fd)
+            except OSError:
+                pass
+            raise NotImplementedError(
+                "daemon child descriptor handoff is POSIX-only"
+            )
         payload = encode_request(request)
         run_dir = Path(request.manifest_path).resolve().parent
         self._launch_with_capsule(
@@ -209,8 +221,17 @@ class WindowsDaemonSupervisorAdapter(DaemonSupervisorPort):
     def spawn_execution_child(self, *, python_executable: str,
                               manifest_path: str, run_id: str,
                               run_dir: Path, capsule: dict | None = None,
+                              adopted_fd: int | None = None,
                               mode: str = "emanation",
                               generation: str | None = None) -> subprocess.Popen:
+        if adopted_fd is not None:
+            try:
+                os.close(adopted_fd)
+            except OSError:
+                pass
+            raise NotImplementedError(
+                "daemon child descriptor handoff is POSIX-only"
+            )
         args = [str(manifest_path), run_id, mode]
         if generation:
             args.append(generation)

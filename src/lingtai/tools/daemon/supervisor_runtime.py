@@ -26,13 +26,14 @@ import threading
 import time
 from pathlib import Path
 
-from lingtai.kernel import daemon_supervisor as _port_mod
-from lingtai.kernel.daemon_supervisor import control
-from lingtai.kernel.daemon_supervisor.manifest import read_manifest
+from lingtai.adapters.posix.daemon_capsule import ReceivedDaemonCapsule
 from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
 )
+from lingtai.kernel import daemon_supervisor as _port_mod
+from lingtai.kernel.daemon_supervisor import control
+from lingtai.kernel.daemon_supervisor.manifest import read_manifest
 
 _STARTUP_HEARTBEAT_FIELD = "supervisor_pid"
 
@@ -105,7 +106,10 @@ def _maybe_register_test_fake_llm() -> None:
 
 
 def run_supervisor(
-    request: "_port_mod.DaemonSupervisorRequest", *, capsule: dict | None = None
+    request: "_port_mod.DaemonSupervisorRequest",
+    *,
+    capsule: dict | None = None,
+    adopted_fd: int | None = None,
 ) -> None:
     """Entry point called by the POSIX entrypoint module after decode.
 
@@ -116,6 +120,16 @@ def run_supervisor(
     manager's startup reconciliation can classify the run as failed/lost
     rather than leaving it stuck at ``running`` forever with no explanation.
     """
+    wire = ReceivedDaemonCapsule(value=capsule or {}, adopted_fd=adopted_fd)
+    try:
+        _run_supervisor_owned(request, wire)
+    finally:
+        wire.close()
+
+
+def _run_supervisor_owned(
+    request: "_port_mod.DaemonSupervisorRequest", wire
+) -> None:
     from lingtai.tools.daemon.run_dir import DaemonRunDir
 
     _maybe_register_test_fake_llm()
@@ -153,7 +167,16 @@ def run_supervisor(
     )
 
     try:
-        _run_one_emanation(run_dir, manifest, capsule or {})
+        adopted_fd = wire.take_fd()
+        if adopted_fd is None:
+            _run_one_emanation(run_dir, manifest, wire.value)
+        else:
+            _run_one_emanation(
+                run_dir,
+                manifest,
+                wire.value,
+                adopted_fd=adopted_fd,
+            )
     except Exception as e:
         # A bug in the supervisor itself (not a normal task-loop exception —
         # those are already caught and committed as `failed` inside
@@ -240,8 +263,20 @@ def run_resume_owner(manifest_path: str, run_id: str, generation: str,
 
 
 def _run_one_emanation(
-    run_dir, manifest: dict, capsule: dict | None = None
+    run_dir,
+    manifest: dict,
+    capsule: dict | None = None,
+    *,
+    adopted_fd: int | None = None,
 ) -> None:
+    wire = ReceivedDaemonCapsule(value=capsule or {}, adopted_fd=adopted_fd)
+    try:
+        _run_one_emanation_owned(run_dir, manifest, wire)
+    finally:
+        wire.close()
+
+
+def _run_one_emanation_owned(run_dir, manifest: dict, wire) -> None:
     backend = manifest["backend"]
     cancel_event = threading.Event()
     timeout_event = threading.Event()
@@ -251,13 +286,18 @@ def _run_one_emanation(
     # fresh interpreter child, which is the only process allowed to construct
     # the manager-shaped execution host and enter provider/CLI code.
     run_dir.update_state(execution_registration="spawned")
-    child = select_daemon_supervisor_adapter().spawn_execution_child(
+    adapter = select_daemon_supervisor_adapter()
+    spawn_kwargs = dict(
         python_executable=sys.executable,
         manifest_path=str(Path(manifest["run_dir"]) / "supervisor_manifest.json"),
         run_id=run_dir.run_id,
         run_dir=run_dir.path,
-        capsule=capsule or {},
+        capsule=wire.value,
     )
+    adopted_fd = wire.take_fd()
+    if adopted_fd is not None:
+        spawn_kwargs["adopted_fd"] = adopted_fd
+    child = adapter.spawn_execution_child(**spawn_kwargs)
     if run_dir.read_state_from_disk(run_dir.path).get("execution_registration") != "registered":
         run_dir.update_state(
             execution_registration="spawned",
