@@ -1563,6 +1563,7 @@ def test_detached_host_adopts_a_derived_driver_endpoint_from_the_fd_capsule(
             run_dir, manifest, threading.Event(), threading.Event(),
             capsule={"driver_authority_required": True}, adopted_fd=adopted_fd,
         )
+        host.adopt_derived_driver_authority()
         assert host._adopted_fd is None
         assert host._driver_authority.identity.role == "derived"
         assert host._provider_admission_parent.call_class is ProviderCallClass.DAEMON
@@ -1571,6 +1572,63 @@ def test_detached_host_adopts_a_derived_driver_endpoint_from_the_fd_capsule(
         assert not errors
     finally:
         driver.close()
+
+
+def test_execution_child_does_not_close_a_fd_reused_after_derived_authority_failure(
+    tmp_path, monkeypatch,
+):
+    """Authority adoption owns its FD before a failure can unwind the child."""
+    from lingtai.adapters.acp import driver_authority
+    from lingtai.adapters.posix.daemon_execution_child_entrypoint import (
+        _run_execution_child,
+    )
+
+    run_dir = _make_run_dir(tmp_path, task="derived authority ownership")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="derived authority ownership", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    write_manifest(run_dir.path, manifest)
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    reused_read_fd: int | None = None
+    reused_write_fd: int | None = None
+
+    def fail_after_reusing_fd(cls, fd, *, timeout=1.0):
+        nonlocal reused_read_fd, reused_write_fd
+        os.close(fd)
+        reused_read_fd, reused_write_fd = os.pipe()
+        assert reused_read_fd == fd
+        raise driver_authority.DriverAuthorityTransportError("injected authority failure")
+
+    monkeypatch.setattr(
+        driver_authority.DriverAuthorityClient,
+        "from_inherited_fd",
+        classmethod(fail_after_reusing_fd),
+    )
+    try:
+        assert _run_execution_child(
+            [str(manifest_path_for(run_dir.path)), run_dir.run_id, "emanation"],
+            capsule={"driver_authority_required": True}, adopted_fd=adopted_fd,
+        ) == 1
+        assert reused_read_fd is not None
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+        os.fstat(reused_read_fd)
+    finally:
+        if reused_read_fd is not None:
+            try:
+                os.close(reused_read_fd)
+            except OSError:
+                pass
+        if reused_write_fd is not None:
+            try:
+                os.close(reused_write_fd)
+            except OSError:
+                pass
+        peer.close()
 
 
 def test_detached_daemon_child_requires_derived_authority_before_nested_launch(tmp_path):

@@ -196,19 +196,20 @@ class DetachedDaemonExecutionHost:
         # parent-owned ask executor and perform parent-record reconciliation.
         self._manager_type = DaemonManager
         self._task_mcp_clients: list[object] = []
-        # Keep the incoming descriptor owned by the execution-child boundary
-        # until all ordinary host construction can no longer fail.  Once this
-        # consumes it, the client owns every later cleanup path.
-        self._adopt_derived_driver_authority()
 
-    def _adopt_derived_driver_authority(self) -> None:
-        """Bind an adopted daemon endpoint before any derived work exists.
+    def adopt_derived_driver_authority(self) -> None:
+        """Consume this host's adopted daemon endpoint before derived work.
 
         The endpoint is delivered only through B8's SCM_RIGHTS capsule.  This
         execution child must never call ``authority_adapter_from_environment``:
         that profile-only helper rejects and closes a derived endpoint by
         design.  The capsule marker is not authority; it makes a lost
         descriptor fail closed instead of running an unconstrained daemon.
+
+        The execution-child entrypoint calls this only after construction has
+        transferred descriptor ownership to this host.  On return or failure,
+        this method (or the Driver client it invokes) owns cleanup; callers
+        must not close the original descriptor number afterwards.
         """
         expected = self._capsule.get("driver_authority_required") is True
         if not expected:
