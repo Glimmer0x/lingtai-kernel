@@ -211,6 +211,28 @@ class DerivedLaunchAdmissionError(PermissionError):
         super().__init__(f"derived launch was not admitted: {decision.reason_code}")
 
 
+def _discard_derived_launch_decision(
+    decision: object,
+    *,
+    reason_code: str,
+) -> DerivedLaunchDecision:
+    """Replace an untrusted Port decision without stranding its lease.
+
+    Core does not inspect or reconstruct the opaque child endpoint.  It does,
+    however, own the last reference when it rejects an adapter decision before
+    a concrete launch consumer can receive it.
+    """
+
+    if isinstance(decision, DerivedLaunchDecision):
+        close = getattr(decision.child_endpoint_lease, "close", None)
+        if callable(close):
+            try:
+                close()
+            except OSError:
+                pass
+    return DerivedLaunchDecision(ProviderAdmissionState.INDETERMINATE, reason_code)
+
+
 _current_parent: ContextVar[ProviderAdmissionParent | None] = ContextVar(
     "lingtai_current_provider_admission", default=None
 )
@@ -315,9 +337,9 @@ def require_derived_launch_admission(
             and (not isinstance(decision.audit_id, str) or not decision.audit_id)
         )
     ):
-        decision = DerivedLaunchDecision(
-            ProviderAdmissionState.INDETERMINATE,
-            "malformed_derived_launch_admission_decision",
+        decision = _discard_derived_launch_decision(
+            decision,
+            reason_code="malformed_derived_launch_admission_decision",
         )
     if not decision.allowed:
         raise DerivedLaunchAdmissionError(decision)
