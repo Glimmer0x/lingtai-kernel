@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -150,6 +151,55 @@ def test_spawn_detached_guards_against_non_windows_use(tmp_path):
     request = _write_lingtai_manifest(run_dir)
     with pytest.raises(OSError, match="requires Windows"):
         WindowsDaemonSupervisorAdapter().spawn_detached(request)
+
+
+def test_windows_adapter_closes_the_descriptor_it_refuses_to_hand_off(tmp_path):
+    """The refusal must consume the descriptor, not merely decline the work.
+
+    ``adopted_fd`` is a live descriptor the caller has already given up, so a
+    bare ``raise`` would strand it in this process.  The peer's EOF is the
+    assertion rather than ``fstat`` because it proves the open file
+    description was released, which survives descriptor-number reuse.
+    """
+    if os.name == "nt":
+        pytest.skip("the POSIX handoff refusal is only observable off Windows")
+    run_dir = _make_run_dir(tmp_path)
+    request = _write_lingtai_manifest(run_dir)
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+    try:
+        with pytest.raises(NotImplementedError, match="POSIX-only"):
+            WindowsDaemonSupervisorAdapter().spawn_detached(
+                request, adopted_fd=adopted_fd
+            )
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_windows_execution_child_closes_the_descriptor_it_refuses_to_hand_off(
+    tmp_path,
+):
+    if os.name == "nt":
+        pytest.skip("the POSIX handoff refusal is only observable off Windows")
+    run_dir = _make_run_dir(tmp_path)
+    _write_lingtai_manifest(run_dir)
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+    try:
+        with pytest.raises(NotImplementedError, match="POSIX-only"):
+            WindowsDaemonSupervisorAdapter().spawn_execution_child(
+                python_executable=sys.executable,
+                manifest_path=str(manifest_path_for(run_dir.path)),
+                run_id=run_dir.run_id,
+                run_dir=run_dir.path,
+                adopted_fd=adopted_fd,
+            )
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
 
 
 def test_windows_spawn_detached_exact_handle_wire_shape(tmp_path, monkeypatch):
