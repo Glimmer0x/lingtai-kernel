@@ -3556,6 +3556,8 @@ class DaemonManager:
                 if adopted_fd is not None:
                     enqueue_kwargs["adopted_fd"] = adopted_fd
                 self._enqueue_central_daemon_manager_run(request, **enqueue_kwargs)
+                # This public boundary owns the descriptor from return onward.
+                adopted_fd = None
             else:
                 spawn_kwargs = {"capsule": capsule}
                 if adopted_fd is not None:
@@ -3563,11 +3565,13 @@ class DaemonManager:
                 select_daemon_supervisor_adapter().spawn_detached(
                     request, **spawn_kwargs,
                 )
+                # The public adapter boundary owns the descriptor as soon as
+                # ``spawn_detached`` returns, including its own failure paths.
+                # Clear this caller's stale number *before* the startup wait:
+                # a wait failure must never close a descriptor number the
+                # adapter has already closed and unrelated code has reused.
+                adopted_fd = None
                 self._await_supervisor_startup(run_dir)
-            # B8a's public adapter boundary owns the descriptor from the call
-            # onward, including every failure path. Do not close a possibly
-            # recycled fd number a second time here.
-            adopted_fd = None
         finally:
             if adopted_fd is not None:
                 try:

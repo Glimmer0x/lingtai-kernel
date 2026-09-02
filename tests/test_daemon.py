@@ -2009,6 +2009,68 @@ def test_profile_driver_grant_batch_hands_each_lease_to_the_supervisor(
         second_peer.close()
 
 
+def test_direct_supervisor_startup_failure_never_closes_reused_authority_fd(
+    tmp_path, monkeypatch
+):
+    """The caller drops ownership before the post-handoff startup wait."""
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id="em-reused-authority-fd")
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    replacement_fd = os.open(os.devnull, os.O_RDONLY)
+    reused_fd: int | None = None
+
+    def handoff_then_reuse(_self, _request, *, adopted_fd, **_kwargs):
+        nonlocal reused_fd
+        os.close(adopted_fd)
+        os.dup2(replacement_fd, adopted_fd)
+        reused_fd = adopted_fd
+
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter, "spawn_detached", handoff_then_reuse
+    )
+    monkeypatch.setattr(
+        daemon_tool.DaemonManager,
+        "_consume_driver_authority_lease_for_posix_handoff",
+        staticmethod(lambda _lease: adopted_fd),
+    )
+    monkeypatch.setattr(
+        mgr,
+        "_await_supervisor_startup",
+        lambda _run_dir: (_ for _ in ()).throw(RuntimeError("startup failed")),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="startup failed"):
+            mgr._spawn_detached_lingtai_run(
+                run_dir,
+                task="authority handoff",
+                tools=[],
+                max_turns=1,
+                timeout_s=30,
+                group_id=None,
+                effective_llm={"provider": "fake", "model": "fake"},
+                context_token_limit=None,
+                prompt="",
+                authority_lease=object(),
+            )
+        assert reused_fd is not None
+        os.fstat(reused_fd)
+    finally:
+        if reused_fd is not None:
+            os.close(reused_fd)
+        else:
+            try:
+                os.close(adopted_fd)
+            except OSError:
+                pass
+        os.close(replacement_fd)
+        peer.close()
+
+
 def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
     tmp_path, monkeypatch
 ):
