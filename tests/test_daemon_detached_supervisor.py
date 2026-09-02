@@ -1631,6 +1631,174 @@ def test_execution_child_does_not_close_a_fd_reused_after_derived_authority_fail
         peer.close()
 
 
+def test_detached_host_rejects_a_root_authority_endpoint_for_derived_work(
+    tmp_path, monkeypatch,
+):
+    """A root endpoint must never be composed into a derived daemon host."""
+    from types import SimpleNamespace
+
+    from lingtai.adapters.acp import driver_authority
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+
+    run_dir = _make_run_dir(tmp_path, task="reject root authority endpoint")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="reject root authority endpoint", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+
+    class RootAuthority:
+        identity = SimpleNamespace(role="root")
+
+        def __init__(self):
+            self.closed = False
+
+        def derived_provider_parent(self, _call_class):
+            return object()
+
+        def close(self):
+            self.closed = True
+
+    authority = RootAuthority()
+
+    def receive_root_authority(cls, fd, *, timeout=1.0):
+        os.close(fd)
+        return authority
+
+    monkeypatch.setattr(
+        driver_authority.DriverAuthorityClient,
+        "from_inherited_fd",
+        classmethod(receive_root_authority),
+    )
+    try:
+        host = DetachedDaemonExecutionHost(
+            run_dir, manifest, threading.Event(), threading.Event(),
+            capsule={"driver_authority_required": True}, adopted_fd=adopted_fd,
+        )
+        with pytest.raises(
+            driver_authority.DriverAuthorityEndpointBindingMismatch,
+            match="derived authority endpoint",
+        ):
+            host.adopt_derived_driver_authority()
+        assert authority.closed is True
+        assert host._driver_authority is None
+        assert host._adopted_fd is None
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_detached_host_closes_authority_when_derived_binding_fails(
+    tmp_path, monkeypatch,
+):
+    """A partially composed authority is closed when its binding is rejected."""
+    from types import SimpleNamespace
+
+    from lingtai.adapters.acp import driver_authority
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+
+    run_dir = _make_run_dir(tmp_path, task="close failed authority binding")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="close failed authority binding", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+
+    class FailingDerivedAuthority:
+        identity = SimpleNamespace(role="derived")
+
+        def __init__(self):
+            self.closed = False
+
+        def derived_provider_parent(self, _call_class):
+            raise driver_authority.DriverAuthorityEndpointBindingMismatch(
+                "injected derived binding mismatch",
+            )
+
+        def close(self):
+            self.closed = True
+
+    authority = FailingDerivedAuthority()
+
+    def receive_failing_authority(cls, fd, *, timeout=1.0):
+        os.close(fd)
+        return authority
+
+    monkeypatch.setattr(
+        driver_authority.DriverAuthorityClient,
+        "from_inherited_fd",
+        classmethod(receive_failing_authority),
+    )
+    try:
+        host = DetachedDaemonExecutionHost(
+            run_dir, manifest, threading.Event(), threading.Event(),
+            capsule={"driver_authority_required": True}, adopted_fd=adopted_fd,
+        )
+        with pytest.raises(
+            driver_authority.DriverAuthorityEndpointBindingMismatch,
+            match="injected derived binding mismatch",
+        ):
+            host.adopt_derived_driver_authority()
+        assert authority.closed is True
+        assert host._driver_authority is None
+        assert host._adopted_fd is None
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_detached_host_does_not_consume_an_unmarked_transferred_descriptor(
+    tmp_path, monkeypatch,
+):
+    """A B8a generic transferred descriptor is not a Driver authority bearer."""
+    from lingtai.adapters.acp import driver_authority
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+
+    run_dir = _make_run_dir(tmp_path, task="preserve generic transferred descriptor")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="preserve generic transferred descriptor", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    consumed = False
+
+    def authority_must_not_be_constructed(cls, fd, *, timeout=1.0):
+        nonlocal consumed
+        consumed = True
+        raise AssertionError("generic descriptor was consumed as Driver authority")
+
+    monkeypatch.setattr(
+        driver_authority.DriverAuthorityClient,
+        "from_inherited_fd",
+        classmethod(authority_must_not_be_constructed),
+    )
+    try:
+        host = DetachedDaemonExecutionHost(
+            run_dir, manifest, threading.Event(), threading.Event(),
+            capsule={}, adopted_fd=adopted_fd,
+        )
+        host.adopt_derived_driver_authority()
+        assert consumed is False
+        assert host._adopted_fd == adopted_fd
+        os.fstat(adopted_fd)
+        host.close_adopted_fd()
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
 def test_detached_daemon_child_requires_derived_authority_before_nested_launch(tmp_path):
     """A production detached child cannot fall back to legacy nested launch."""
     from lingtai.kernel.provider_admission import (
