@@ -23,6 +23,7 @@ related_files:
   - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
   - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
   - src/lingtai/adapters/posix/avatar_launcher.py
+  - src/lingtai/adapters/posix/daemon_capsule.py
   - src/lingtai/adapters/posix/daemon_manager.py
   - src/lingtai/adapters/posix/daemon_manager_entrypoint.py
   - src/lingtai/tools/avatar/ANATOMY.md
@@ -188,6 +189,12 @@ co-located owning ANATOMY.md files.
   opaque one-shot AF_UNIX child endpoint, passes exactly that descriptor with
   `close_fds=True`, then closes its parent copy
   (`src/lingtai/adapters/posix/avatar_launcher.py`).
+- `daemon_capsule.py` owns the bounded, one-shot daemon capsule wire. On POSIX
+  it can attach exactly one live descriptor with `SCM_RIGHTS`; the receiving
+  `ReceivedDaemonCapsule` owns that duplicate until it is transferred once or
+  closed. The central manager, detached supervisor, and execution child share
+  this mechanism without placing descriptor contents in argv, environment
+  values, or durable state.
 
 ## Connections
 
@@ -213,6 +220,11 @@ The refresh-watcher selector in `src/lingtai/adapters/refresh_watcher.py` is an
 outer composition module and imports this package only after confirming POSIX;
 Core never imports this package. The refresh entrypoint composes
 `PosixRefreshWatcherProcessAdapter` and passes it into the generated Core policy.
+The daemon manager and supervisor adapters use `daemon_capsule.py` only as a
+process-mechanism boundary: the manager holds any received descriptor in memory,
+then transfers it manager → supervisor → execution child. Each sending API
+adopts its input immediately and closes its copy after transfer or failure;
+discarded/replaced/cancelled capsules close their received copy before removal.
 
 ## Composition
 
@@ -247,6 +259,10 @@ and writes `.notification/<channel>.json` plus
 The migration-workspace adapter owns only its bound `(domain, root)` pair and
 writes the domain's `_kernel_meta.json` version file, `system/migrations/` archive
 artifacts, and best-effort `logs/events.jsonl` audit through PID-suffixed temp + replace; it holds no long-lived handle or lock.
+The daemon capsule transport owns no durable state. Its optional descriptor is
+process-local, paired with one in-memory capsule, and invalidated by manager
+process death; a manager restart can recover only the durable queue record and
+therefore follows the existing missing-capsule failure path.
 
 ## Notes
 

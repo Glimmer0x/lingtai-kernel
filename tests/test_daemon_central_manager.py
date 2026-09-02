@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import socket
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from lingtai.adapters.posix import daemon_manager
+from lingtai.adapters.posix.daemon_capsule import ReceivedDaemonCapsule
 from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
 from lingtai.adapters.posix.daemon_manager import _DaemonManagerProcess
 from lingtai.adapters.posix.process_identity import process_identity
@@ -204,8 +206,379 @@ def _manager_with_capsules(
     capsules: dict[str, dict] | None = None,
 ) -> _DaemonManagerProcess:
     manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size)
-    manager.capsules.update(capsules or {})
+    manager.capsules.update({
+        run_id: ReceivedDaemonCapsule(value=capsule)
+        for run_id, capsule in (capsules or {}).items()
+    })
     return manager
+
+
+def test_manager_submission_closes_adopted_fd_when_capsule_send_fails(
+    tmp_path, monkeypatch
+):
+    run_dir, request = _make_run(tmp_path, "em-send-failure")
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+    monkeypatch.setattr(daemon_manager, "_ensure_manager", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        daemon_manager,
+        "_send_capsule",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("send failed")),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="send failed"):
+            daemon_manager.enqueue_manager_run(
+                agent_working_dir=run_dir.path.parent.parent,
+                request=request,
+                capsule={"task": "test"},
+                pool_size=1,
+                adopted_fd=adopted_fd,
+            )
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_manager_pre_execution_failure_closes_pending_adopted_fd(tmp_path):
+    run_dir, request = _make_run(tmp_path, "em-owned-failure")
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    pending = ReceivedDaemonCapsule(
+        value={"task": "test"},
+        adopted_fd=child_endpoint.detach(),
+    )
+    mismatched = DaemonSupervisorRequest(
+        run_id="em-wrong-run",
+        manifest_path=request.manifest_path,
+        python_executable=request.python_executable,
+    )
+    manager = _DaemonManagerProcess(
+        tmp_path / "manager" / "queue",
+        tmp_path / "manager" / "journal",
+        pool_size=1,
+    )
+
+    try:
+        manager._run_job(mismatched, pending)
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+        assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "failed"
+    finally:
+        peer.close()
+
+
+def test_manager_socket_transfers_fd_into_pending_capsule(tmp_path):
+    root = tmp_path / "manager"
+    manager = _DaemonManagerProcess(
+        root / "queue",
+        root / "journal",
+        pool_size=1,
+    )
+    root.mkdir(parents=True)
+    manager.start_capsule_server(daemon_manager._capsule_socket_path(root))
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    source_fd: int | None = child_endpoint.detach()
+    pending = None
+
+    try:
+        daemon_manager._send_capsule(
+            root,
+            "em-manager-wire",
+            {"task": "test"},
+            adopted_fd=source_fd,
+        )
+        os.close(source_fd)
+        source_fd = None
+        pending = manager.capsules.pop("em-manager-wire")
+        received_fd = pending.take_fd()
+        assert received_fd is not None
+        assert not os.get_inheritable(received_fd)
+        os.write(received_fd, b"manager-owned")
+        os.close(received_fd)
+        peer.settimeout(1)
+        assert peer.recv(len(b"manager-owned")) == b"manager-owned"
+        assert peer.recv(1) == b""
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+        if pending is not None:
+            pending.close()
+        if manager._capsule_socket is not None:
+            manager._capsule_socket.close()
+        peer.close()
+
+
+def test_manager_sender_accepts_fragmented_ack(tmp_path, monkeypatch):
+    class FragmentedAckSocket:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.ack_chunks = iter((b"O", b"K"))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def connect(self, _path: str) -> None:
+            return None
+
+        def sendmsg(self, buffers, _ancillary) -> int:
+            return len(buffers[0])
+
+        def sendall(self, _payload: bytes) -> None:
+            return None
+
+        def shutdown(self, _how: int) -> None:
+            return None
+
+        def recv(self, _size: int) -> bytes:
+            return next(self.ack_chunks)
+
+    monkeypatch.setattr(daemon_manager.socket, "socket", FragmentedAckSocket)
+
+    daemon_manager._send_capsule(tmp_path, "em-fragmented-ack", {"task": "test"})
+
+
+def test_manager_transfer_does_not_close_reused_descriptor(tmp_path, monkeypatch):
+    run_dir, request = _make_run(tmp_path, "em-transfer-once")
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    _write_job(queue_dir, request)
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+    replacement_source = os.open(os.devnull, os.O_RDONLY)
+
+    def fake_run(rd, manifest, capsule, *, adopted_fd):
+        os.close(adopted_fd)
+        os.dup2(replacement_source, adopted_fd)
+        rd.mark_done("transferred")
+
+    monkeypatch.setattr(
+        "lingtai.adapters.posix.daemon_manager._run_one_emanation",
+        fake_run,
+    )
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.capsules[request.run_id] = ReceivedDaemonCapsule(
+        value={"task": "test"},
+        adopted_fd=adopted_fd,
+    )
+
+    try:
+        manager.run()
+        os.fstat(adopted_fd)
+        assert _wait_state(run_dir, "done")["state"] == "done"
+    finally:
+        os.close(adopted_fd)
+        os.close(replacement_source)
+        peer.close()
+
+
+class _CapsuleConnection:
+    def __init__(self, *, fail_reply: bool = False) -> None:
+        self.fail_reply = fail_reply
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def sendall(self, _payload: bytes) -> None:
+        if self.fail_reply:
+            raise OSError("reply failed")
+
+
+class _CapsuleListener:
+    def __init__(self, *connections: _CapsuleConnection) -> None:
+        self.connections = list(connections)
+
+    def accept(self):
+        if not self.connections:
+            raise OSError("listener stopped")
+        return self.connections.pop(0), None
+
+
+def _received_fd_capsule(run_id: str):
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    return ReceivedDaemonCapsule(
+        value={"run_id": run_id, "capsule": {"task": "test"}},
+        adopted_fd=child_endpoint.detach(),
+    ), peer
+
+
+def test_manager_failed_ack_discards_received_fd(tmp_path, monkeypatch):
+    manager = _DaemonManagerProcess(
+        tmp_path / "manager" / "queue",
+        tmp_path / "manager" / "journal",
+        pool_size=1,
+    )
+    wire, peer = _received_fd_capsule("em-ack-failure")
+    connection = _CapsuleConnection(fail_reply=True)
+    manager._capsule_socket = _CapsuleListener(connection)
+    monkeypatch.setattr(manager, "_read_capsule_message", lambda _conn: wire)
+
+    try:
+        manager._serve_capsules()
+        assert manager.capsules == {}
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_manager_replacement_discards_previous_fd(tmp_path, monkeypatch):
+    manager = _DaemonManagerProcess(
+        tmp_path / "manager" / "queue",
+        tmp_path / "manager" / "journal",
+        pool_size=1,
+    )
+    first_wire, first_peer = _received_fd_capsule("em-replaced")
+    second_wire, second_peer = _received_fd_capsule("em-replaced")
+    manager._capsule_socket = _CapsuleListener(
+        _CapsuleConnection(),
+        _CapsuleConnection(),
+    )
+    wires = iter((first_wire, second_wire))
+    monkeypatch.setattr(manager, "_read_capsule_message", lambda _conn: next(wires))
+
+    try:
+        manager._serve_capsules()
+        first_peer.settimeout(1)
+        assert first_peer.recv(1) == b""
+        second_peer.settimeout(0.05)
+        with pytest.raises(TimeoutError):
+            second_peer.recv(1)
+        manager.capsules.pop("em-replaced").close()
+        second_peer.settimeout(1)
+        assert second_peer.recv(1) == b""
+    finally:
+        first_peer.close()
+        second_peer.close()
+
+
+def test_manager_unlink_rollback_preserves_concurrent_replacement(
+    tmp_path, monkeypatch
+):
+    run_dir, request = _make_run(tmp_path, "em-unlink-replacement")
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    _write_job(queue_dir, request)
+    job_path = queue_dir / f"{request.run_id}.json"
+    old_wire, old_peer = _received_fd_capsule(request.run_id)
+    replacement_wire, replacement_peer = _received_fd_capsule(request.run_id)
+    old_pending = ReceivedDaemonCapsule(
+        value=old_wire.value["capsule"],
+        adopted_fd=old_wire.take_fd(),
+    )
+    replacement = ReceivedDaemonCapsule(
+        value=replacement_wire.value["capsule"],
+        adopted_fd=replacement_wire.take_fd(),
+    )
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.capsules[request.run_id] = old_pending
+
+    def replace_then_fail_unlink(path: Path) -> None:
+        assert path == job_path
+        with manager.lock:
+            manager.capsules[request.run_id] = replacement
+        raise OSError("simulated unlink failure")
+
+    monkeypatch.setattr(Path, "unlink", replace_then_fail_unlink)
+
+    try:
+        manager._start_queued_jobs()
+        assert manager.capsules[request.run_id] is replacement
+        old_peer.settimeout(1)
+        assert old_peer.recv(1) == b""
+        replacement_peer.settimeout(0.05)
+        with pytest.raises(TimeoutError):
+            replacement_peer.recv(1)
+        manager.capsules.pop(request.run_id).close()
+        replacement_peer.settimeout(1)
+        assert replacement_peer.recv(1) == b""
+        assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "running"
+    finally:
+        old_wire.close()
+        replacement_wire.close()
+        old_pending.close()
+        replacement.close()
+        old_peer.close()
+        replacement_peer.close()
+
+
+def test_manager_malformed_job_discards_pending_fd(tmp_path):
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    queue_dir.mkdir(parents=True)
+    (queue_dir / "em-malformed-fd.json").write_text("[1, 2, 3]", encoding="utf-8")
+    wire, peer = _received_fd_capsule("em-malformed-fd")
+    pending = ReceivedDaemonCapsule(
+        value=wire.value["capsule"],
+        adopted_fd=wire.take_fd(),
+    )
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.capsules["em-malformed-fd"] = pending
+
+    try:
+        manager._start_queued_jobs()
+        assert manager.capsules == {}
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        wire.close()
+        peer.close()
+
+
+def test_manager_queued_cancel_discards_pending_fd(tmp_path):
+    from lingtai.kernel.daemon_supervisor import control
+
+    run_dir, request = _make_run(tmp_path, "em-cancelled-fd")
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    _write_job(queue_dir, request)
+    control.submit_request(run_dir.path, "reclaim", {})
+    wire, peer = _received_fd_capsule(request.run_id)
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.capsules[request.run_id] = ReceivedDaemonCapsule(
+        value=wire.value["capsule"],
+        adopted_fd=wire.take_fd(),
+    )
+
+    try:
+        manager._consume_queue_cancel_requests()
+        assert manager.capsules == {}
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+        assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "cancelled"
+    finally:
+        wire.close()
+        peer.close()
+
+
+def test_manager_exit_discards_unclaimed_fd(tmp_path):
+    manager = _DaemonManagerProcess(
+        tmp_path / "manager" / "queue",
+        tmp_path / "manager" / "journal",
+        pool_size=1,
+    )
+    wire, peer = _received_fd_capsule("em-manager-exit")
+    manager.capsules["em-manager-exit"] = ReceivedDaemonCapsule(
+        value=wire.value["capsule"],
+        adopted_fd=wire.take_fd(),
+    )
+
+    try:
+        manager.run(idle_exit_s=0)
+        assert manager.capsules == {}
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        wire.close()
+        peer.close()
 
 
 def _wait_state(run_dir: DaemonRunDir, state: str, *, timeout: float = 5.0) -> dict:

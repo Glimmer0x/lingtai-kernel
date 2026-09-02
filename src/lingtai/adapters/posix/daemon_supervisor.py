@@ -20,13 +20,22 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 from pathlib import Path
+
+from lingtai.adapters.posix.daemon_capsule import (
+    CAPSULE_FD_ENV,
+    MAX_CAPSULE_BYTES,
+    close_fd,
+    encode_capsule,
+    send_capsule,
+)
 
 
 # A capsule is intentionally bounded before Popen.  It is a one-shot transport,
 # not an unbounded stream or a durable configuration channel.
-_MAX_CAPSULE_BYTES = 4 * 1024 * 1024
+_MAX_CAPSULE_BYTES = MAX_CAPSULE_BYTES
 _SECRET_ENV_NAME_RE = re.compile(
     r"(?:api[_-]?key|token|password|secret|authorization|cookie|private[_-]?key|credential|passphrase)",
     re.IGNORECASE,
@@ -105,35 +114,52 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
     """
 
     def spawn_detached(
-        self, request: DaemonSupervisorRequest, *, capsule: dict | None = None
+        self,
+        request: DaemonSupervisorRequest,
+        *,
+        capsule: dict | None = None,
+        adopted_fd: int | None = None,
+    ) -> None:
+        """Adopt a descriptor and launch one detached supervisor owner."""
+        try:
+            self._spawn_detached_owned(
+                request,
+                capsule=capsule,
+                adopted_fd=adopted_fd,
+            )
+        finally:
+            close_fd(adopted_fd)
+
+    def _spawn_detached_owned(
+        self,
+        request: DaemonSupervisorRequest,
+        *,
+        capsule: dict | None,
+        adopted_fd: int | None,
     ) -> None:
         """Launch one owner and optionally hand it one-shot runtime values.
 
-        The capsule is encoded only in memory.  A pipe is created before
+        The capsule is encoded only in memory.  A socketpair is created before
         ``Popen`` but written after the child exists, so a large registration or
         option payload cannot block the launching manager before the supervisor
-        has a reader.  ``pass_fds`` is deliberate: the numeric descriptor is
-        process metadata, while raw credentials cross only this inherited
-        descriptor and are consumed once by the supervisor entrypoint.
+        has a reader.  ``pass_fds`` carries only the capsule socket.  An optional
+        adopted descriptor crosses after spawn through ``SCM_RIGHTS``; this
+        class's public spawn boundary closes the caller's descriptor on every
+        return path.
         """
         payload = encode_request(request)
         run_dir = Path(request.manifest_path).resolve().parent
         stdout_path = run_dir / "supervisor.stdout.log"
         stderr_path = run_dir / "supervisor.stderr.log"
-        stdout = open(stdout_path, "ab", buffering=0)
-        stderr = open(stderr_path, "ab", buffering=0)
-        read_fd = write_fd = None
         capsule_bytes = None
-        if capsule:
-            capsule_bytes = json.dumps(
-                capsule, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8")
-            if len(capsule_bytes) > _MAX_CAPSULE_BYTES:
-                raise ValueError(
-                    f"daemon runtime capsule exceeds {_MAX_CAPSULE_BYTES} bytes"
-                )
-            read_fd, write_fd = os.pipe()
+        parent_socket = child_socket = None
+        stdout = stderr = None
         try:
+            if capsule or adopted_fd is not None:
+                capsule_bytes = encode_capsule(capsule)
+                parent_socket, child_socket = socket.socketpair()
+            stdout = open(stdout_path, "ab", buffering=0)
+            stderr = open(stderr_path, "ab", buffering=0)
             for path in (stdout_path, stderr_path):
                 try:
                     os.chmod(path, 0o600)
@@ -141,9 +167,9 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                     pass
             env = _supervisor_environment(request)
             pass_fds = ()
-            if read_fd is not None:
-                env["LINGTAI_DAEMON_CAPSULE_FD"] = str(read_fd)
-                pass_fds = (read_fd,)
+            if child_socket is not None:
+                env[CAPSULE_FD_ENV] = str(child_socket.fileno())
+                pass_fds = (child_socket.fileno(),)
             subprocess.Popen(
                 [request.python_executable, "-m", ENTRYPOINT_MODULE, payload],
                 stdin=subprocess.DEVNULL,
@@ -155,42 +181,50 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                 close_fds=True,
                 pass_fds=pass_fds,
             )
-            if read_fd is not None:
-                os.close(read_fd)
-                read_fd = None
-                view = memoryview(capsule_bytes or b"")
-                while view:
-                    written = os.write(write_fd, view)
-                    view = view[written:]
-                os.close(write_fd)
-                write_fd = None
+            if child_socket is not None:
+                child_socket.close()
+                child_socket = None
+                send_capsule(
+                    parent_socket,
+                    capsule_bytes or b"{}",
+                    adopted_fd=adopted_fd,
+                )
         finally:
-            for fd in (read_fd, write_fd):
-                if fd is not None:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
-            stdout.close()
-            stderr.close()
+            for capsule_socket in (parent_socket, child_socket):
+                if capsule_socket is not None:
+                    capsule_socket.close()
+            if stdout is not None:
+                stdout.close()
+            if stderr is not None:
+                stderr.close()
 
     @staticmethod
     def _spawn_capsule_process(
         module: str, python_executable: str, args: list[str],
         *, run_dir: Path, capsule: dict | None = None,
+        adopted_fd: int | None = None,
     ) -> subprocess.Popen:
-        """Spawn an exact owner/child with the same bounded one-shot wire."""
+        """Spawn an exact owner/child and adopt any live descriptor."""
+        try:
+            return PosixDaemonSupervisorAdapter._spawn_capsule_process_owned(
+                module,
+                python_executable,
+                args,
+                run_dir=run_dir,
+                capsule=capsule,
+                adopted_fd=adopted_fd,
+            )
+        finally:
+            close_fd(adopted_fd)
+
+    @staticmethod
+    def _spawn_capsule_process_owned(
+        module: str, python_executable: str, args: list[str],
+        *, run_dir: Path, capsule: dict | None,
+        adopted_fd: int | None,
+    ) -> subprocess.Popen:
         capsule_bytes = None
-        read_fd = write_fd = None
-        if capsule:
-            capsule_bytes = json.dumps(
-                capsule, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8")
-            if len(capsule_bytes) > _MAX_CAPSULE_BYTES:
-                raise ValueError(
-                    f"daemon runtime capsule exceeds {_MAX_CAPSULE_BYTES} bytes"
-                )
-            read_fd, write_fd = os.pipe()
+        parent_socket = child_socket = None
         env = {
             key: value for key, value in os.environ.items()
             if not _SECRET_ENV_NAME_RE.search(key)
@@ -199,13 +233,16 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
         parts = [str(source_root)]
         parts.extend(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)
         env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(parts))
-        if read_fd is not None:
-            env["LINGTAI_DAEMON_CAPSULE_FD"] = str(read_fd)
         stdout_path = run_dir / ("execution.stdout.log" if "execution_child" in module else "resume-owner.stdout.log")
         stderr_path = run_dir / ("execution.stderr.log" if "execution_child" in module else "resume-owner.stderr.log")
-        stdout = open(stdout_path, "ab", buffering=0)
-        stderr = open(stderr_path, "ab", buffering=0)
+        stdout = stderr = None
         try:
+            if capsule or adopted_fd is not None:
+                capsule_bytes = encode_capsule(capsule)
+                parent_socket, child_socket = socket.socketpair()
+                env[CAPSULE_FD_ENV] = str(child_socket.fileno())
+            stdout = open(stdout_path, "ab", buffering=0)
+            stderr = open(stderr_path, "ab", buffering=0)
             for path in (stdout_path, stderr_path):
                 try:
                     os.chmod(path, 0o600)
@@ -216,40 +253,42 @@ class PosixDaemonSupervisorAdapter(DaemonSupervisorPort):
                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                 env=env, cwd=str(run_dir.parent.parent),
                 start_new_session=True, close_fds=True,
-                pass_fds=(read_fd,) if read_fd is not None else (),
+                pass_fds=(child_socket.fileno(),) if child_socket is not None else (),
             )
-            if read_fd is not None:
-                os.close(read_fd)
-                read_fd = None
-                view = memoryview(capsule_bytes or b"")
-                while view:
-                    written = os.write(write_fd, view)
-                    view = view[written:]
-                os.close(write_fd)
-                write_fd = None
+            if child_socket is not None:
+                child_socket.close()
+                child_socket = None
+                send_capsule(
+                    parent_socket,
+                    capsule_bytes or b"{}",
+                    adopted_fd=adopted_fd,
+                )
             return proc
         finally:
-            for fd in (read_fd, write_fd):
-                if fd is not None:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
-            stdout.close()
-            stderr.close()
+            for capsule_socket in (parent_socket, child_socket):
+                if capsule_socket is not None:
+                    capsule_socket.close()
+            if stdout is not None:
+                stdout.close()
+            if stderr is not None:
+                stderr.close()
 
     def spawn_execution_child(self, *, python_executable: str,
                                manifest_path: str, run_id: str,
                                run_dir: Path, capsule: dict | None = None,
+                               adopted_fd: int | None = None,
                                mode: str = "emanation",
                                generation: str | None = None) -> subprocess.Popen:
-        args = [str(manifest_path), run_id, mode]
-        if generation:
-            args.append(generation)
-        return self._spawn_capsule_process(
-            EXECUTION_CHILD_MODULE, python_executable, args,
-            run_dir=Path(run_dir), capsule=capsule,
-        )
+        try:
+            args = [str(manifest_path), run_id, mode]
+            if generation:
+                args.append(generation)
+            return self._spawn_capsule_process_owned(
+                EXECUTION_CHILD_MODULE, python_executable, args,
+                run_dir=Path(run_dir), capsule=capsule, adopted_fd=adopted_fd,
+            )
+        finally:
+            close_fd(adopted_fd)
 
     def spawn_resume_owner(self, *, python_executable: str,
                            manifest_path: str, run_id: str,

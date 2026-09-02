@@ -42,6 +42,9 @@ related_files:
   - src/lingtai/tools/daemon/windows_process.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/tools/daemon/supervisor_runtime.py
+  - src/lingtai/adapters/posix/daemon_capsule.py
+  - src/lingtai/adapters/posix/daemon_supervisor.py
   - src/lingtai/kernel/provider_admission.py
   - src/lingtai/tools/daemon/shell_prompt_events.py
   - src/lingtai/tools/bash/CONTRACT.md
@@ -73,6 +76,7 @@ related_files:
   - tests/test_daemon_windows_lock.py
   - tests/test_daemon_windows_process_port.py
   - tests/test_daemon_windows_supervisor.py
+  - tests/test_daemon_detached_supervisor.py
   - tests/test_mcp_v2_adapter_metadata.py
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
@@ -87,6 +91,11 @@ review_triggers:
   - src/lingtai/services/mcp.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/run_dir.py
+  - src/lingtai/tools/daemon/execution_host.py
+  - src/lingtai/tools/daemon/supervisor_runtime.py
+  - src/lingtai/adapters/posix/daemon_capsule.py
+  - src/lingtai/adapters/posix/daemon_manager.py
+  - src/lingtai/adapters/posix/daemon_supervisor.py
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/manual/
   - src/lingtai/mcp_servers/daemon_common/
@@ -994,13 +1003,22 @@ This requirement flag is not a grant, parent identity, or bearer. A future
 Driver authority bridge must supply those separately before any legitimate
 derived launch can be allowed.
 
-Until the POSIX manager's child-endpoint transport is available, a root Driver
-batch that receives one or more child endpoint leases is also refused before
-task-file materialization, run-directory creation, durable enqueue, or spawn;
-every already-issued lease is closed. An external CLI backend is refused even
-earlier, before it asks Driver for a lease it cannot consume. These are
-deliberately fail-closed transition rules, not successful Driver daemon
-dispatch: the later supervisor/manager FD handoff owns that transition.
+The POSIX manager/supervisor child-endpoint lifecycle can now transfer one
+already-open descriptor through the private manager socket and both detached
+process boundaries without persisting it. Each accepting API adopts ownership
+immediately; successful transfer closes the sender copy, while failed ACK,
+replacement, queued cancellation, malformed work, pre-execution failure, and
+process exit close the current owner. Manager restart cannot reconstruct the
+descriptor and follows the existing missing-capsule terminal failure.
+
+That lifecycle is not yet production Driver wiring. A root Driver batch that
+receives one or more child endpoint leases remains refused before task-file
+materialization, run-directory creation, durable enqueue, or spawn, and every
+already-issued lease is closed. An external CLI backend is refused even
+earlier, before it asks Driver for a lease it cannot consume. The execution
+child holds no composed derived authority and closes any unconsumed descriptor.
+These remain deliberately fail-closed transition rules until authority adoption
+and dispatch wiring are added separately.
 
 ## Acceptance Gate
 

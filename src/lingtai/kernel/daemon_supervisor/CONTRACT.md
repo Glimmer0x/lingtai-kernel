@@ -7,6 +7,8 @@ related_files:
   - src/lingtai/kernel/daemon_supervisor/__init__.py
   - src/lingtai/kernel/daemon_supervisor/manifest.py
   - src/lingtai/kernel/daemon_supervisor/control.py
+  - src/lingtai/adapters/posix/daemon_capsule.py
+  - src/lingtai/adapters/posix/daemon_manager.py
   - src/lingtai/adapters/posix/daemon_supervisor.py
   - src/lingtai/adapters/posix/daemon_execution_child_entrypoint.py
   - src/lingtai/adapters/posix/daemon_resume_owner_entrypoint.py
@@ -21,6 +23,7 @@ related_files:
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/shell_prompt_events.py
   - tests/test_daemon_detached_supervisor.py
+  - tests/test_daemon_central_manager.py
 maintenance: |
   Keep this Contract paired with its ANATOMY.md and preserve the repository
   Anatomy/Contract maintenance convention. Update the promise and focused tests
@@ -51,6 +54,17 @@ supervisor/child stdout/stderr to restrictive run-owned logs. The supervisor
 starts an exact execution child before its watcher; terminal CLI resume uses a
 durable single-writer generation and a detached resume owner. No parent future
 or process handle is retained, and no broad process matching is performed.
+
+The POSIX runtime extension may carry one already-open child descriptor beside
+the bounded capsule. The private central-manager AF_UNIX socket and each
+parent/child socketpair use `SCM_RIGHTS`, so transfer duplicates the descriptor
+into the receiver. Every API that accepts `adopted_fd` owns it immediately:
+the sender closes its copy exactly once after successful transfer and closes it
+on every failure before transfer. The receiver owns its duplicate until it
+transfers it once or closes it. Replacing a capsule, rolling back a failed ACK,
+cancelling queued work, quarantining malformed work, failing before execution,
+or exiting the manager must release the descriptor before discarding the
+corresponding decision.
 
 The Windows adapter (`WindowsDaemonSupervisorAdapter`) is the `nt` production
 sibling behind the same Port: the same encoded request and secret-stripped
@@ -100,6 +114,19 @@ only — never capsule content — and ownership control uses the
 creation-filetime incarnation token with the same refuse-unknown-identity
 rule.
 
+An adopted child descriptor is equally ephemeral: only the live manager,
+supervisor, and execution-child processes may own it. It is never serialized to
+the manifest, queue, journal, argv, or an environment value; the environment
+contains only the inherited capsule-socket locator. Manager restart therefore
+invalidates the descriptor and the durable queued job follows the existing
+missing-capsule terminal failure path. Windows closes and rejects any attempted
+descriptor handoff until an equivalent transport exists.
+
+This transport is policy-inert. The execution host merely retains the received
+descriptor for a future runtime consumer and closes it if unconsumed; this
+slice does not compose Driver authority or remove the existing fail-closed
+dispatch gate for Driver-issued daemon leases.
+
 ## Conformance
 
 Focused tests must cover real detached process launch, parent shutdown survival,
@@ -107,6 +134,9 @@ parent interpreter exit, all backend-spec routing through the shared execution
 host, completion/MCP/preset/skills reconstruction, run-owned logs, identity
 mismatch, timeout/reclaim, control ack/race truth, terminal notification
 idempotency, and restrictive manifest mode.
+Descriptor tests additionally cover successful one-time transfer, prevention
+of double-close after descriptor-number reuse, and every discard/failure class
+listed above using the descriptor actually handed to the system.
 
 
 ## Selected Shell composition boundary

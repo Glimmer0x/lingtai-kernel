@@ -16,9 +16,11 @@ cannot cross a process boundary).
 """
 from __future__ import annotations
 
+import array
 import json
 import os
 import signal
+import socket
 import subprocess
 import textwrap
 import threading
@@ -971,6 +973,413 @@ def test_capsule_is_bounded_before_spawn_and_env_is_secret_scrubbed(tmp_path, mo
             request, capsule={"blob": "x" * (adapter_mod._MAX_CAPSULE_BYTES + 1)}
         )
     assert called == []
+
+
+def test_supervisor_spawn_failure_closes_adopted_fd(tmp_path, monkeypatch):
+    from lingtai.adapters.posix import daemon_supervisor as adapter_mod
+
+    run_dir = _make_run_dir(tmp_path, task="fd spawn failure", timeout_s=30)
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="fd spawn failure", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    write_manifest(run_dir.path, manifest)
+    request = DaemonSupervisorRequest(
+        run_id=run_dir.run_id,
+        manifest_path=str(manifest_path_for(run_dir.path)),
+        python_executable=sys.executable,
+    )
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+
+    def fail_spawn(*_args, **_kwargs):
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(adapter_mod.subprocess, "Popen", fail_spawn)
+    try:
+        with pytest.raises(OSError, match="spawn failed"):
+            PosixDaemonSupervisorAdapter().spawn_detached(
+                request,
+                capsule={"task": "test"},
+                adopted_fd=adopted_fd,
+            )
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_supervisor_selection_failure_closes_adopted_fd(tmp_path, monkeypatch):
+    from lingtai.tools.daemon import supervisor_runtime
+
+    run_dir = _make_run_dir(tmp_path, task="fd selection failure", timeout_s=30)
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="fd selection failure", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+    monkeypatch.setattr(
+        supervisor_runtime,
+        "select_daemon_supervisor_adapter",
+        lambda: (_ for _ in ()).throw(RuntimeError("adapter unavailable")),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="adapter unavailable"):
+            supervisor_runtime._run_one_emanation(
+                run_dir,
+                manifest,
+                adopted_fd=adopted_fd,
+            )
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_execution_child_spawn_argument_failure_closes_adopted_fd():
+    class InvalidRunDir:
+        def __fspath__(self):
+            raise ValueError("invalid run directory")
+
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+
+    try:
+        with pytest.raises(ValueError, match="invalid run directory"):
+            PosixDaemonSupervisorAdapter().spawn_execution_child(
+                python_executable=sys.executable,
+                manifest_path="manifest.json",
+                run_id="em-invalid-run-dir",
+                run_dir=InvalidRunDir(),
+                adopted_fd=adopted_fd,
+            )
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_execution_child_argument_failure_closes_adopted_fd():
+    from lingtai.adapters.posix.daemon_execution_child_entrypoint import (
+        _run_execution_child,
+    )
+
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+
+    try:
+        with pytest.raises(SystemExit, match="usage"):
+            _run_execution_child([], capsule={}, adopted_fd=adopted_fd)
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_derived_execution_child_adopts_fd_before_authority_composition(
+    tmp_path, monkeypatch
+):
+    from lingtai.adapters.acp import driver_authority
+    from lingtai.adapters.posix.daemon_execution_child_entrypoint import (
+        _run_execution_child,
+    )
+    from lingtai.tools.daemon import execution_host
+
+    run_dir = _make_run_dir(tmp_path, task="derived fd adoption", timeout_s=30)
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="derived fd adoption", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    write_manifest(run_dir.path, manifest)
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+    host_init_complete = False
+    authority_observations: list[bool] = []
+    authority_code = driver_authority.authority_adapter_from_environment.__code__
+    host_type = execution_host.DetachedDaemonExecutionHost
+    original_init = host_type.__init__
+
+    def observed_init(self, *args, **kwargs):
+        nonlocal host_init_complete
+        original_init(self, *args, **kwargs)
+        assert self._adopted_fd is not None
+        os.fstat(self._adopted_fd)
+        host_init_complete = True
+
+    def record_authority_order(frame, event, _arg):
+        if event != "call" or frame.f_code is not authority_code:
+            return
+        caller = frame.f_back
+        stack_has_valid_host_fd = False
+        while caller is not None:
+            candidate = caller.f_locals.get("self")
+            candidate_fd = getattr(candidate, "_adopted_fd", None)
+            if candidate_fd is not None:
+                try:
+                    os.fstat(candidate_fd)
+                except OSError:
+                    pass
+                else:
+                    stack_has_valid_host_fd = True
+                    break
+            caller = caller.f_back
+        authority_observations.append(
+            host_init_complete or stack_has_valid_host_fd
+        )
+
+    def run_with_events(self, *_args) -> None:
+        assert self._adopted_fd is not None
+        os.fstat(self._adopted_fd)
+        os.write(self._adopted_fd, b"adopted-before-composition")
+
+    monkeypatch.setattr(host_type, "__init__", observed_init)
+    monkeypatch.setattr(host_type, "run_with_events", run_with_events)
+    previous_profile = sys.getprofile()
+    sys.setprofile(record_authority_order)
+
+    try:
+        assert _run_execution_child(
+            [str(manifest_path_for(run_dir.path)), run_dir.run_id, "emanation"],
+            capsule={},
+            adopted_fd=adopted_fd,
+        ) == 0
+        peer.settimeout(1)
+        assert peer.recv(len(b"adopted-before-composition")) == (
+            b"adopted-before-composition"
+        )
+        assert peer.recv(1) == b""
+        assert all(authority_observations)
+    finally:
+        sys.setprofile(previous_profile)
+        peer.close()
+
+
+def test_capsule_rejects_and_closes_multiple_received_fds():
+    from lingtai.adapters.posix.daemon_capsule import receive_capsule
+
+    sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    first_source, first_peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    second_source, second_peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    first_fd: int | None = first_source.detach()
+    second_fd: int | None = second_source.detach()
+
+    try:
+        sender.sendmsg(
+            [b"{}"],
+            [(
+                socket.SOL_SOCKET,
+                socket.SCM_RIGHTS,
+                array.array("i", [first_fd, second_fd]),
+            )],
+        )
+        sender.shutdown(socket.SHUT_WR)
+        os.close(first_fd)
+        os.close(second_fd)
+        first_fd = None
+        second_fd = None
+        with pytest.raises(ValueError, match="multiple descriptors"):
+            receive_capsule(receiver)
+        first_peer.settimeout(1)
+        second_peer.settimeout(1)
+        assert first_peer.recv(1) == b""
+        assert second_peer.recv(1) == b""
+    finally:
+        for source_fd in (first_fd, second_fd):
+            if source_fd is not None:
+                os.close(source_fd)
+        sender.close()
+        receiver.close()
+        first_peer.close()
+        second_peer.close()
+
+
+@pytest.mark.skipif(
+    not hasattr(socket, "MSG_CTRUNC"), reason="MSG_CTRUNC is unavailable",
+)
+def test_capsule_rejects_and_closes_truncated_received_fds():
+    sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    source_fds: list[int] = []
+    peers: list[socket.socket] = []
+    for _index in range(5):
+        source, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        source_fds.append(source.detach())
+        peers.append(peer)
+
+    try:
+        env = dict(os.environ)
+        env["LINGTAI_TEST_CAPSULE_SOCKET_FD"] = str(receiver.fileno())
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                textwrap.dedent(
+                    """
+                    import os
+                    import socket
+
+                    from lingtai.adapters.posix.daemon_capsule import receive_capsule
+
+                    capsule_socket = socket.socket(
+                        fileno=int(os.environ["LINGTAI_TEST_CAPSULE_SOCKET_FD"])
+                    )
+                    try:
+                        try:
+                            receive_capsule(capsule_socket)
+                        except ValueError as exc:
+                            if "descriptor data was truncated" not in str(exc):
+                                raise
+                        else:
+                            raise AssertionError("truncated descriptor data was accepted")
+                    finally:
+                        capsule_socket.close()
+                    """
+                ),
+            ],
+            env=env,
+            pass_fds=(receiver.fileno(),),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        receiver.close()
+        sender.sendmsg(
+            [b"{}"],
+            [(
+                socket.SOL_SOCKET,
+                socket.SCM_RIGHTS,
+                array.array("i", source_fds),
+            )],
+        )
+        sender.shutdown(socket.SHUT_WR)
+        for source_fd in source_fds:
+            os.close(source_fd)
+        source_fds.clear()
+        stdout, stderr = child.communicate(timeout=10)
+        assert child.returncode == 0, (stdout, stderr)
+        for peer in peers:
+            peer.settimeout(1)
+            assert peer.recv(1) == b""
+    finally:
+        for source_fd in source_fds:
+            os.close(source_fd)
+        sender.close()
+        try:
+            receiver.close()
+        except OSError:
+            pass
+        for peer in peers:
+            peer.close()
+
+
+def test_execution_child_transfers_adopted_fd_to_host_once(tmp_path, monkeypatch):
+    from lingtai.adapters.posix.daemon_execution_child_entrypoint import (
+        _run_execution_child,
+    )
+    from lingtai.tools.daemon import execution_host
+
+    run_dir = _make_run_dir(tmp_path, task="fd ownership transfer", timeout_s=30)
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="fd ownership transfer", tools=[], max_turns=1, timeout_s=30,
+        group_id=None, llm={"provider": "fake", "model": "fake"},
+    )
+    write_manifest(run_dir.path, manifest)
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+    close_observations: list[int] = []
+
+    class VerifyingHost:
+        def __init__(self, *_args, adopted_fd, **_kwargs):
+            assert adopted_fd is not None
+            os.fstat(adopted_fd)
+            self.adopted_fd = adopted_fd
+
+        def run_with_events(self, *_args) -> None:
+            os.write(self.adopted_fd, b"host-owned")
+
+        def close_adopted_fd(self) -> None:
+            os.fstat(self.adopted_fd)
+            close_observations.append(self.adopted_fd)
+            os.close(self.adopted_fd)
+
+    monkeypatch.setattr(
+        execution_host,
+        "DetachedDaemonExecutionHost",
+        VerifyingHost,
+    )
+
+    try:
+        assert _run_execution_child(
+            [str(manifest_path_for(run_dir.path)), run_dir.run_id, "emanation"],
+            capsule={},
+            adopted_fd=adopted_fd,
+        ) == 0
+        assert close_observations == [adopted_fd]
+        peer.settimeout(1)
+        assert peer.recv(len(b"host-owned")) == b"host-owned"
+        assert peer.recv(1) == b""
+    finally:
+        peer.close()
+
+
+def test_capsule_process_transfers_fd_once(tmp_path, monkeypatch):
+    module_path = tmp_path / "capture_daemon_capsule.py"
+    result_path = tmp_path / "received.json"
+    module_path.write_text(
+        "\n".join([
+            "import json, os, sys",
+            "from pathlib import Path",
+            "from lingtai.adapters.posix.daemon_capsule import receive_capsule_from_environment",
+            "wire = receive_capsule_from_environment()",
+            "assert wire is not None",
+            "fd = wire.take_fd()",
+            "assert fd is not None",
+            "assert not os.get_inheritable(fd)",
+            "os.write(fd, b'child-owned')",
+            "os.close(fd)",
+            "Path(sys.argv[1]).write_text(json.dumps(wire.value), encoding='utf-8')",
+            "wire.close()",
+        ]),
+        encoding="utf-8",
+    )
+    existing = os.environ.get("PYTHONPATH", "")
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join([str(tmp_path), existing]) if existing else str(tmp_path),
+    )
+    run_dir = _make_run_dir(tmp_path, task="fd transfer", timeout_s=30)
+    child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child_endpoint.detach()
+
+    try:
+        process = PosixDaemonSupervisorAdapter._spawn_capsule_process(
+            "capture_daemon_capsule",
+            sys.executable,
+            [str(result_path)],
+            run_dir=run_dir.path,
+            capsule={"marker": "received"},
+            adopted_fd=adopted_fd,
+        )
+        assert process.wait(timeout=10) == 0
+        peer.settimeout(1)
+        assert peer.recv(len(b"child-owned")) == b"child-owned"
+        assert peer.recv(1) == b""
+        assert json.loads(result_path.read_text(encoding="utf-8")) == {
+            "marker": "received"
+        }
+        with pytest.raises(OSError):
+            os.fstat(adopted_fd)
+    finally:
+        peer.close()
 
 
 def test_real_manager_parent_interpreter_exit_keeps_supervisor_owner(tmp_path, monkeypatch):

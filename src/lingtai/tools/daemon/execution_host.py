@@ -70,7 +70,7 @@ class DetachedDaemonExecutionHost:
     def __init__(
         self, run_dir, manifest: dict, cancel_event, timeout_event,
         *, capsule: dict | None = None, process_port=None,
-        interactive_terminal_port=None,
+        interactive_terminal_port=None, adopted_fd: int | None = None,
     ) -> None:
         from lingtai.tools.daemon import DaemonManager
 
@@ -82,6 +82,7 @@ class DetachedDaemonExecutionHost:
         self._timeout_event = timeout_event
         self._manifest = manifest
         self._capsule = capsule if isinstance(capsule, dict) else {}
+        self._adopted_fd = adopted_fd
         self._agent = DaemonSupervisorAgentStub(
             Path(manifest["parent_working_dir"]),
             log_fn=lambda event, **fields: run_dir.append_event(event, **fields),
@@ -192,6 +193,23 @@ class DetachedDaemonExecutionHost:
         # parent-owned ask executor and perform parent-record reconciliation.
         self._manager_type = DaemonManager
         self._task_mcp_clients: list[object] = []
+
+    def _take_adopted_fd(self) -> int | None:
+        """Transfer the received child endpoint to its runtime consumer."""
+        adopted_fd = self._adopted_fd
+        self._adopted_fd = None
+        return adopted_fd
+
+    def close_adopted_fd(self) -> None:
+        """Close an endpoint that was not consumed by authority composition."""
+        adopted_fd = self._adopted_fd
+        self._adopted_fd = None
+        if adopted_fd is None:
+            return
+        try:
+            os.close(adopted_fd)
+        except OSError:
+            pass
 
     def __getattr__(self, name):
         """Forward unmodified parser/helper units to the production manager."""
