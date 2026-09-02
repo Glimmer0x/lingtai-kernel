@@ -3555,22 +3555,23 @@ class DaemonManager:
                 }
                 if adopted_fd is not None:
                     enqueue_kwargs["adopted_fd"] = adopted_fd
-                self._enqueue_central_daemon_manager_run(request, **enqueue_kwargs)
-                # This public boundary owns the descriptor from return onward.
+                # The public manager boundary owns the descriptor at call
+                # entry, including when it closes it and then raises. Drop
+                # this caller's stale integer before invoking it so the outer
+                # cleanup cannot close a number another resource reuses.
                 adopted_fd = None
+                self._enqueue_central_daemon_manager_run(request, **enqueue_kwargs)
             else:
                 spawn_kwargs = {"capsule": capsule}
                 if adopted_fd is not None:
                     spawn_kwargs["adopted_fd"] = adopted_fd
+                # The public adapter boundary owns the descriptor at call
+                # entry, including its failure paths. Drop this caller's
+                # stale integer before it can close and raise.
+                adopted_fd = None
                 select_daemon_supervisor_adapter().spawn_detached(
                     request, **spawn_kwargs,
                 )
-                # The public adapter boundary owns the descriptor as soon as
-                # ``spawn_detached`` returns, including its own failure paths.
-                # Clear this caller's stale number *before* the startup wait:
-                # a wait failure must never close a descriptor number the
-                # adapter has already closed and unrelated code has reused.
-                adopted_fd = None
                 self._await_supervisor_startup(run_dir)
         finally:
             if adopted_fd is not None:

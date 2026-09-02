@@ -2071,6 +2071,119 @@ def test_direct_supervisor_startup_failure_never_closes_reused_authority_fd(
         peer.close()
 
 
+def test_direct_supervisor_boundary_failure_never_closes_reused_authority_fd(
+    tmp_path, monkeypatch
+):
+    """The caller relinquishes ownership before the adapter can raise."""
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id="em-boundary-reused-authority-fd")
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    replacement_fd = os.open(os.devnull, os.O_RDONLY)
+    reused_fd: int | None = None
+
+    def close_reuse_then_raise(_self, _request, *, adopted_fd, **_kwargs):
+        nonlocal reused_fd
+        os.close(adopted_fd)
+        os.dup2(replacement_fd, adopted_fd)
+        reused_fd = adopted_fd
+        raise RuntimeError("adapter boundary failed")
+
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter, "spawn_detached", close_reuse_then_raise
+    )
+    monkeypatch.setattr(
+        daemon_tool.DaemonManager,
+        "_consume_driver_authority_lease_for_posix_handoff",
+        staticmethod(lambda _lease: adopted_fd),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="adapter boundary failed"):
+            mgr._spawn_detached_lingtai_run(
+                run_dir,
+                task="authority handoff",
+                tools=[],
+                max_turns=1,
+                timeout_s=30,
+                group_id=None,
+                effective_llm={"provider": "fake", "model": "fake"},
+                context_token_limit=None,
+                prompt="",
+                authority_lease=object(),
+            )
+        assert reused_fd is not None
+        os.fstat(reused_fd)
+    finally:
+        if reused_fd is not None:
+            os.close(reused_fd)
+        else:
+            try:
+                os.close(adopted_fd)
+            except OSError:
+                pass
+        os.close(replacement_fd)
+        peer.close()
+
+
+def test_central_manager_boundary_failure_never_closes_reused_authority_fd(
+    tmp_path, monkeypatch
+):
+    """The caller relinquishes ownership before the manager can raise."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id="em-manager-boundary-reused-authority-fd")
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    replacement_fd = os.open(os.devnull, os.O_RDONLY)
+    reused_fd: int | None = None
+
+    def close_reuse_then_raise(_request, *, adopted_fd, **_kwargs):
+        nonlocal reused_fd
+        os.close(adopted_fd)
+        os.dup2(replacement_fd, adopted_fd)
+        reused_fd = adopted_fd
+        raise RuntimeError("manager boundary failed")
+
+    monkeypatch.setattr(mgr, "_enqueue_central_daemon_manager_run", close_reuse_then_raise)
+    monkeypatch.setattr(
+        daemon_tool.DaemonManager,
+        "_consume_driver_authority_lease_for_posix_handoff",
+        staticmethod(lambda _lease: adopted_fd),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="manager boundary failed"):
+            mgr._spawn_detached_lingtai_run(
+                run_dir,
+                task="authority handoff",
+                tools=[],
+                max_turns=1,
+                timeout_s=30,
+                group_id=None,
+                effective_llm={"provider": "fake", "model": "fake"},
+                context_token_limit=None,
+                prompt="",
+                authority_lease=object(),
+                use_central_manager=True,
+            )
+        assert reused_fd is not None
+        os.fstat(reused_fd)
+    finally:
+        if reused_fd is not None:
+            os.close(reused_fd)
+        else:
+            try:
+                os.close(adopted_fd)
+            except OSError:
+                pass
+        os.close(replacement_fd)
+        peer.close()
+
+
 def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
     tmp_path, monkeypatch
 ):
