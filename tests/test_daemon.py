@@ -2184,6 +2184,121 @@ def test_central_manager_boundary_failure_never_closes_reused_authority_fd(
         peer.close()
 
 
+def test_central_manager_wrapper_failure_closes_untransferred_authority_fd(
+    tmp_path, monkeypatch
+):
+    """The wrapper owns the fd until it reaches the manager boundary."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+
+    class _FailingWorkdir:
+        @property
+        def path(self):
+            raise RuntimeError("workdir unavailable")
+
+    monkeypatch.setattr(mgr, "_workdir", _FailingWorkdir())
+    try:
+        with pytest.raises(RuntimeError, match="workdir unavailable"):
+            mgr._enqueue_central_daemon_manager_run(
+                object(),
+                capsule={},
+                pool_size=1,
+                run_dir=object(),
+                adopted_fd=adopted_fd,
+            )
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        try:
+            os.close(adopted_fd)
+        except OSError:
+            pass
+        peer.close()
+
+
+@pytest.mark.parametrize("handoff", ["manager", "supervisor"])
+def test_profile_driver_handoff_failure_closes_authority_fd(
+    tmp_path, monkeypatch, handoff
+):
+    """Every failed profile handoff leaves the authority endpoint closed."""
+    from lingtai.adapters.acp.driver_authority import (
+        DriverChildEndpointLease,
+        DriverDerivedLaunchAdmissionAdapter,
+        DriverDerivedLaunchGrant,
+    )
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+
+    class _GrantingAuthority:
+        def request_derived_launch(self, _parent, _capability):
+            return DriverDerivedLaunchGrant(
+                ProviderAdmissionState.GRANTED,
+                "driver_grant",
+                audit_id="audit-driver-grant",
+                child_endpoint_lease=lease,
+            )
+
+    child, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child.fileno()
+    lease = DriverChildEndpointLease(child)
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._requires_derived_launch_admission_port = True
+    agent._derived_launch_admission_port = DriverDerivedLaunchAdmissionAdapter(
+        _GrantingAuthority()
+    )
+    monkeypatch.setattr(
+        daemon_tool.DaemonManager,
+        "_should_use_central_daemon_manager",
+        lambda _self, _batch_count: handoff == "manager",
+    )
+
+    def fail_before_handoff(*_args, **_kwargs):
+        raise RuntimeError(f"{handoff} handoff failed")
+
+    if handoff == "manager":
+        def consume_then_fail(_self, _request, *, adopted_fd, **_kwargs):
+            os.close(adopted_fd)
+            raise RuntimeError(f"{handoff} handoff failed")
+
+        monkeypatch.setattr(
+            daemon_tool.DaemonManager,
+            "_enqueue_central_daemon_manager_run",
+            consume_then_fail,
+        )
+    else:
+        monkeypatch.setattr(
+            "lingtai.tools.daemon.supervisor_runtime.select_daemon_supervisor_adapter",
+            fail_before_handoff,
+        )
+
+    root = RootProviderAdmission(
+        f"root-driver-{handoff}-failure", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "tasks": [{"task": "test", "tools": []}],
+            }
+        )
+        assert result == {
+            "status": "error",
+            "message": f"{handoff} handoff failed",
+        }
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        clear_provider_admission(token)
+        lease.close()
+        try:
+            os.close(adopted_fd)
+        except OSError:
+            pass
+        peer.close()
+
+
 def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(
     tmp_path, monkeypatch
 ):

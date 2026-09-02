@@ -3562,6 +3562,7 @@ class DaemonManager:
                 adopted_fd = None
                 self._enqueue_central_daemon_manager_run(request, **enqueue_kwargs)
             else:
+                supervisor = select_daemon_supervisor_adapter()
                 spawn_kwargs = {"capsule": capsule}
                 if adopted_fd is not None:
                     spawn_kwargs["adopted_fd"] = adopted_fd
@@ -3569,9 +3570,7 @@ class DaemonManager:
                 # entry, including its failure paths. Drop this caller's
                 # stale integer before it can close and raise.
                 adopted_fd = None
-                select_daemon_supervisor_adapter().spawn_detached(
-                    request, **spawn_kwargs,
-                )
+                supervisor.spawn_detached(request, **spawn_kwargs)
                 self._await_supervisor_startup(run_dir)
         finally:
             if adopted_fd is not None:
@@ -3637,15 +3636,28 @@ class DaemonManager:
         queued runs have no manager assignment, and therefore no pid, until pool
         capacity frees up.
         """
-        from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
+        try:
+            from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
 
-        enqueue_manager_run(
-            agent_working_dir=self._workdir.path,
-            request=request,
-            capsule=capsule,
-            pool_size=pool_size,
-            adopted_fd=adopted_fd,
-        )
+            agent_working_dir = self._workdir.path
+            # The lower public boundary owns this descriptor from its call
+            # entry. Keep it here through all wrapper setup, then relinquish
+            # it immediately before that call.
+            transferred_fd = adopted_fd
+            adopted_fd = None
+            enqueue_manager_run(
+                agent_working_dir=agent_working_dir,
+                request=request,
+                capsule=capsule,
+                pool_size=pool_size,
+                adopted_fd=transferred_fd,
+            )
+        finally:
+            if adopted_fd is not None:
+                try:
+                    os.close(adopted_fd)
+                except OSError:
+                    pass
 
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
                        task: str,
